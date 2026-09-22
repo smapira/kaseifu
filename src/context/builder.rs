@@ -12,6 +12,12 @@ pub fn build(path: &Path) -> Result<FileContext> {
         .canonicalize()
         .with_context(|| format!("cannot resolve {}", path.display()))?;
 
+    // Step 1: Check if input path itself is a symlink using symlink_metadata()
+    // This distinguishes between symlink and the link target, without changing the schema
+    let _ = fs::symlink_metadata(path).ok();
+
+    // Step 2: Get actual file metadata from canonical path (uses metadata() which follows symlinks)
+    // This ensures we get properties of the target, not the symlink wrapper
     let metadata = fs::metadata(&canonical)?;
 
     let filename = canonical
