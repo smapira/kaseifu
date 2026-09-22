@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jev-decision-v1",
+  "title": "JevDecision",
+  "type": "object",
+  "required": [
+    "confidence",
+    "margin",
+    "action"
+  ]
+}

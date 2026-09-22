@@ -1,0 +1,25 @@
+[scanner]
+max_directory_entries = 100
+parent_depth = 1
+child_depth = 1
+
+[context]
+use_spotlight_metadata = true
+use_spotlight_search = true
+use_xattr = true
+extract_content = true
+
+[classifier]
+provider = "jev"
+
+[classifier.thresholds]
+auto_move_confidence = 0.85
+auto_move_margin = 0.40
+review_confidence = 0.60
+
+[operations]
+dry_run = true
+enable_undo = true
+
+[storage]
+database = "data/semantic-file-organizer.db"
