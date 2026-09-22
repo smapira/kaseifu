@@ -2,6 +2,7 @@ mod classifier;
 mod context;
 mod discovery;
 mod models;
+pub mod normalize;
 mod operations;
 mod platform;
 mod policy;

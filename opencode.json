@@ -1,0 +1,58 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "lsp": true,
+  "instructions": [
+    ".github/copilot-instructions.md",
+    ".github/agents/*.agent.md",
+    ".github/skills/*/SKILL.md"
+  ],
+  "permission": {
+    "*": "allow"
+  },
+  "compaction": {
+    "auto": false,
+    "prune": false
+  },
+  "provider": {
+    "qwen-local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Qwen Coder (Mac mini)",
+      "options": {
+        "baseURL": "http://100.82.6.111:8000/v1"
+      },
+      "models": {
+        "Qwen/Qwen2.5-Coder-7B-Instruct": {
+          "name": "Qwen2.5 Coder 7B"
+        }
+      }
+    }
+  },
+  "mcp": {
+    "context7": {
+      "type": "local",
+      "command": [
+        "/Users/bookair18/.anyenv/envs/nodenv/versions/24.13.1/bin/npx",
+        "-y",
+        "@upstash/context7-mcp@latest"
+      ],
+      "enabled": true
+    },
+    "serena": {
+      "type": "local",
+      "command": [
+        "/Users/bookair18/.local/bin/serena-agent",
+        "start-mcp-server",
+        "--project",
+        "/Users/bookair18/OS/home/Codes/github.com/smapira/kaseifu",
+        "--context",
+        "agent"
+      ],
+      "enabled": true
+    }
+  },
+  "skills": {
+    "paths": [
+      ".github/skills"
+    ]
+  }
+}
