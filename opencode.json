@@ -15,8 +15,12 @@
   },
   "provider": {
     "qwen-local": {
+      "package": "aisdk:@ai-sdk/openai-compatible",
       "npm": "@ai-sdk/openai-compatible",
       "name": "Qwen Coder (Mac mini)",
+      "settings": {
+        "baseURL": "http://100.82.6.111:8000/v1"
+      },
       "options": {
         "baseURL": "http://100.82.6.111:8000/v1"
       },

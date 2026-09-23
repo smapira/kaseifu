@@ -2,9 +2,10 @@ use serde_json::Value;
 
 pub fn normalize_metadata(evidence: &[crate::models::file_context::Evidence]) -> MetadataResult {
     let mut result = MetadataResult::default();
+
     for item in evidence {
-        let value = &item.value;
         let key = item.key.as_str();
+        let value = &item.value;
 
         if matches!(key, "kMDItemContentType") {
             if let Value::String(v) = value {
@@ -12,7 +13,7 @@ pub fn normalize_metadata(evidence: &[crate::models::file_context::Evidence]) ->
             }
         } else if let Some(_v) = key.strip_prefix("kMDItemTitle") {
             if let Value::String(title_value) = value {
-                for term in extract_terms(title_value) {
+                for term in extract_terms(&title_value) {
                     if !term.is_empty() {
                         result.semantic_signals.push(format!("M:{}", term));
                     }
@@ -20,7 +21,7 @@ pub fn normalize_metadata(evidence: &[crate::models::file_context::Evidence]) ->
             }
         } else if let Some(_v) = key.strip_prefix("kMDItemKind") {
             if let Value::String(kind_value) = value {
-                for term in extract_terms(kind_value) {
+                for term in extract_terms(&kind_value) {
                     if !term.is_empty() {
                         result.semantic_signals.push(format!("K:{}", term));
                     }
@@ -39,15 +40,13 @@ pub fn normalize_metadata(evidence: &[crate::models::file_context::Evidence]) ->
     result
 }
 
-fn remove_snapshot_noise(title: &str) -> &str {
-    // Strip "Screenshot YYYY-MM-DD at HH-MM-DD" prefix
-    if title.starts_with("Screenshot ") {
-        return &title[10..];
-    }
-    title
-}
-
 fn extract_terms(title: &str) -> Vec<String> {
+    // Filter out noise filenames entirely
+    let lower = title.to_lowercase();
+    if lower == ".ds_store" || lower == ".localized" || lower.starts_with("html") {
+        return Vec::new();
+    }
+
     // Strip Screenshot prefix and date/time before processing
     let after_screenshot = if title.starts_with("Screenshot ") {
         &title[10..]
@@ -55,7 +54,7 @@ fn extract_terms(title: &str) -> Vec<String> {
         title
     };
 
-    // Filter out known noise terms
+    // Filter out noise terms - these produce no semantic value
     let known = [
         "recents",
         "library",
@@ -63,11 +62,13 @@ fn extract_terms(title: &str) -> Vec<String> {
         "desktop",
         "documents",
         "screenshot",
+        "document",
+        "desktop file",
     ];
 
     after_screenshot
         .split_whitespace()
-        .filter(|s| s.is_empty() && !known.iter().any(|&n| s.to_lowercase().contains(n)))
+        .filter(|s| !s.is_empty() && !known.iter().any(|&n| s.to_lowercase().contains(n)))
         .map(|s| s.to_string())
         .collect()
 }

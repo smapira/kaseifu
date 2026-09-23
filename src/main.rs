@@ -1,16 +1,16 @@
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+
 mod classifier;
 mod context;
 mod discovery;
 mod models;
-pub mod normalize;
+mod normalize;
 mod operations;
 mod platform;
 mod policy;
 mod storage;
-
-use anyhow::Result;
-use clap::{Parser, Subcommand};
-use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "semantic-file-organizer")]
@@ -28,10 +28,9 @@ enum Commands {
     /// Scan a directory.
     Scan { path: PathBuf },
 
-    /// Discover and organize files.
+    /// Organize files automatically.
     Organize {
         path: PathBuf,
-
         #[arg(long, default_value_t = true)]
         dry_run: bool,
     },
@@ -41,6 +40,12 @@ enum Commands {
         #[arg(long, default_value_t = 1)]
         last: usize,
     },
+
+    /// Discover candidate destination directories
+    ///
+    /// Searches for similar files using Spotlight and aggregates
+    /// parent directories with scoring.
+    Discover { file: PathBuf },
 }
 
 #[tokio::main]
@@ -49,9 +54,8 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Inspect { path } => {
-            let context = context::builder::build(&path)?;
-
-            println!("{}", serde_json::to_string_pretty(&context)?);
+            let ctx = context::builder::build(&path)?;
+            println!("{}", serde_json::to_string_pretty(&ctx)?);
         }
 
         Commands::Scan { path } => {
@@ -64,6 +68,15 @@ async fn main() -> Result<()> {
 
         Commands::Undo { last } => {
             println!("Undo last {} operation(s)", last);
+        }
+
+        Commands::Discover { file } => {
+            let context = context::builder::build(&file)?;
+            let normalized = normalize::normalize(context)?;
+            let candidates = discovery::discover(normalized)?;
+
+            // Output as pretty JSON
+            println!("{}", serde_json::to_string_pretty(&candidates)?);
         }
     }
 
