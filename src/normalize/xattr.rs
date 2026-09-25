@@ -11,6 +11,10 @@ use serde_json::Value;
 ///
 /// Example:
 /// ```
+/// use semantic_file_organizer::models::file_context::{Evidence, EvidenceSource};
+/// use semantic_file_organizer::normalize::xattr::normalize_xattr;
+/// use serde_json::Value;
+///
 /// let evidence = vec![
 ///     Evidence {
 ///         source: EvidenceSource::Xattr,

@@ -1,16 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use semantic_file_organizer::{context, discovery, normalize};
 use std::path::PathBuf;
-
-pub mod classifier;
-pub mod context;
-pub mod discovery;
-mod models;
-mod normalize;
-mod operations;
-mod platform;
-mod policy;
-mod storage;
 
 #[derive(Parser)]
 #[command(name = "semantic-file-organizer")]
@@ -85,7 +76,7 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&candidates)?);
         }
 
-        Commands::Classify { file } => {
+        Commands::Classify { file: _ } => {
             // Placeholder for Phase 4
             println!("Phase 4 classify not yet implemented");
         }
