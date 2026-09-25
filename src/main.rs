@@ -5,6 +5,9 @@ use semantic_file_organizer::classifier::jev::{
 };
 use semantic_file_organizer::classifier::pipeline;
 use semantic_file_organizer::models::decision::DecisionContext;
+use semantic_file_organizer::operations::{mover, plan, undo};
+use semantic_file_organizer::policy;
+use semantic_file_organizer::storage::history::{DEFAULT_DATABASE_PATH, OperationHistory};
 use semantic_file_organizer::{context, discovery, normalize};
 use std::future::Future;
 use std::path::PathBuf;
@@ -26,10 +29,17 @@ enum Commands {
     /// Scan a directory.
     Scan { path: PathBuf },
 
-    /// Organize files automatically.
+    /// Organize a file: decision -> policy -> plan -> (dry-run or move).
+    ///
+    /// Dry run is the default; pass `--execute` to actually move the file.
+    /// Every executed move is journaled and undoable with `undo`.
     Organize {
-        path: PathBuf,
-        #[arg(long, default_value_t = true)]
+        file: PathBuf,
+        /// Actually perform the move (default is a dry run).
+        #[arg(long, conflicts_with = "dry_run")]
+        execute: bool,
+        /// Explicitly request a dry run (the default).
+        #[arg(long)]
         dry_run: bool,
     },
 
@@ -66,12 +76,93 @@ async fn main() -> Result<()> {
             println!("Scanning: {}", path.display());
         }
 
-        Commands::Organize { path, dry_run } => {
-            println!("Organize: {} dry_run={}", path.display(), dry_run);
+        Commands::Organize {
+            file,
+            execute,
+            dry_run,
+        } => {
+            let actually_move = execute && !dry_run;
+
+            let jev = build_jev_integration()?;
+            let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
+
+            // Phase 4: decision (Observe -> Normalize -> Discover -> Jev -> validate).
+            let (decision, candidates) = pipeline::classify_with_candidates(&file, &jev).await?;
+            println!("== Decision ==");
+            println!("  destination: {:?}", decision.destination_id);
+            println!("  confidence:  {:.3}", decision.confidence);
+            println!("  margin:      {:.3}", decision.margin);
+
+            // Phase 5: policy -> plan.
+            let action = policy::decision::evaluate(&decision);
+            println!("== Policy ==\n  {action:?}");
+
+            match plan::build_move_plan(&file, &decision, &candidates) {
+                Ok(plan) => {
+                    println!("== Plan ==");
+                    println!(
+                        "  {} -> {}",
+                        plan.source.display(),
+                        plan.destination_path.display()
+                    );
+                    println!("  candidate: {}", plan.candidate_id);
+
+                    if actually_move {
+                        match mover::execute_move(&plan, &history) {
+                            Ok(mover::MoveOutcome::Moved { operation_id }) => {
+                                println!("== Moved ==\n  operation: {operation_id}");
+                            }
+                            Ok(mover::MoveOutcome::WouldMove) => {
+                                println!("== Would move (no mutation) ==");
+                            }
+                            Err(error) => {
+                                println!("== Move failed ==\n  {error:?}");
+                            }
+                        }
+                    } else {
+                        match mover::dry_run(&plan) {
+                            Ok(_) => println!(
+                                "== Dry run ==\n  would move {} -> {}",
+                                plan.source.display(),
+                                plan.destination_path.display()
+                            ),
+                            Err(error) => println!("== Dry run rejected ==\n  {error:?}"),
+                        }
+                    }
+                }
+                Err(plan::PlanError::Collision(path)) => {
+                    // docs/design/05-execute.md: a collision goes to REVIEW.
+                    println!(
+                        "== REVIEW ==\n  destination already exists: {}",
+                        path.display()
+                    );
+                }
+                Err(error) => {
+                    println!("== No move ==\n  {error:?}");
+                }
+            }
         }
 
         Commands::Undo { last } => {
-            println!("Undo last {} operation(s)", last);
+            let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
+
+            for _ in 0..last {
+                match undo::undo_last_move(&history) {
+                    Ok(outcome) => println!(
+                        "restored: {}\n  (undid {})",
+                        outcome.restored_to.display(),
+                        outcome.undone_move_id
+                    ),
+                    Err(undo::UndoError::NothingToUndo) => {
+                        println!("nothing left to undo");
+                        break;
+                    }
+                    Err(error) => {
+                        println!("undo failed: {error:?}");
+                        break;
+                    }
+                }
+            }
         }
 
         Commands::Discover { file } => {

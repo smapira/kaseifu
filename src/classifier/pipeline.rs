@@ -37,7 +37,24 @@ pub async fn classify(file: &Path, jev: &dyn JevIntegration) -> Result<JevDecisi
         crate::platform::macos::spotlight::search(query, limit)
     })?;
 
-    decide_from_candidates(&normalized, candidates, jev).await
+    decide_from_candidates(&normalized, &candidates, jev).await
+}
+
+/// Run the full decision pipeline and also return the discovered candidates.
+///
+/// Execution (Phase 5) needs the candidate list to resolve the destination
+/// path; the decision only ever names a candidate ID.
+pub async fn classify_with_candidates(
+    file: &Path,
+    jev: &dyn JevIntegration,
+) -> Result<(JevDecision, Vec<CandidateDestination>)> {
+    let (normalized, candidates) = discover_candidates(file, |query, limit| {
+        crate::platform::macos::spotlight::search(query, limit)
+    })?;
+
+    let decision = decide_from_candidates(&normalized, &candidates, jev).await?;
+
+    Ok((decision, candidates))
 }
 
 /// Run the full decision pipeline with an injectable Spotlight search
@@ -52,7 +69,7 @@ where
 {
     let (normalized, candidates) = discover_candidates(file, search)?;
 
-    decide_from_candidates(&normalized, candidates, jev).await
+    decide_from_candidates(&normalized, &candidates, jev).await
 }
 
 /// Observe -> Normalize -> Discover.
@@ -77,7 +94,7 @@ where
 /// Ask Jev to select among the discovered candidates and validate the answer.
 async fn decide_from_candidates(
     normalized: &NormalizedFileContext,
-    candidates: Vec<CandidateDestination>,
+    candidates: &[CandidateDestination],
     jev: &dyn JevIntegration,
 ) -> Result<JevDecision> {
     if candidates.is_empty() {
@@ -85,7 +102,7 @@ async fn decide_from_candidates(
         return Ok(JevDecision::new_none());
     }
 
-    let decision_context = DecisionContext::from_normalized(normalized, &candidates);
+    let decision_context = DecisionContext::from_normalized(normalized, candidates);
 
     let response = jev
         .decide(&decision_context)
