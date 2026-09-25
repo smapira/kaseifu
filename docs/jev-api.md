@@ -1,89 +1,60 @@
-# Jev API Contract
+# Jev API Contract (verified)
 
-Status: adapter implemented (Phase 4D). No live API call is performed by any
-test.
+Status: **verified against the live API** on 2026-09-25 by `GET /openapi.json`
+and a live `POST /v1/systemone` (see the Phase 4E run). All tests remain
+offline; no test touches the live API.
 
-## Canonical sources
+## Official contract (api.typesafe.ai, OpenAPI 3.1, TypeSafe v0.2.0)
 
-The kaseifu design documents are the canonical contract:
+- **Endpoint:** `POST /v1/systemone` (also `GET /v1/models`)
+- **Auth:** `Authorization: Bearer <JEV_API_KEY>`
+- **Request** (`SystemOneRequest`):
+  - `state`: string | object | array — the content the questions refer to
+  - `model`: model name/alias (e.g. `jev-latest`)
+  - `questions`: named questions; a `choice` question carries
+    `instructions` and `criteria` (choice name → description)
+- **Response** (`SystemOneResponse`): `model`, `usage`, and
+  `answers.<question-name>`; a `ChoiceAnswer` contains
+  `type: "choice"`, `choice` (highest-probability choice name),
+  `confidence` 0–1, and `probabilities` (per-choice, keyed by choice name,
+  summing to ≈1).
 
-- `docs/design/04-jev.md` — request/response examples, choice set, local
-  margin calculation, `JEV_API_KEY`
-- `docs/JEV.md` — request/response examples, "local policy engine decides"
+**Gate answer:** the real API **does** return per-choice probabilities
+(`ChoiceAnswer.probabilities`), so the domain contract
+(`confidence = P1`, `margin = P1 − P2`) holds unchanged.
 
-Both documents describe the same shape: the request carries the target and
-the offered candidates, and the response carries the chosen option plus a
-**per-choice probability distribution**. That answers the Phase 4D gate
-question ("does Jev return per-choice probabilities?") with **yes**, per the
-canonical docs.
+## Adapter mapping (src/classifier/jev.rs)
 
-## Verified contract (as implemented)
+| kaseifu | TypeSafe `/v1/systemone` |
+|---|---|
+| `DecisionContext.target` | `state.target` |
+| `DecisionContext.semantic_signals` | `state.semantic_signals` (verbatim) |
+| candidate `id` + `path` + `evidence_count` + `reasons` | `questions.destination.criteria[id]` description |
+| — (always added) | `criteria["NONE"]` |
+| `answers.destination.choice` | `JevResponse.destination_id` (verbatim; domain validates) |
+| `answers.destination.probabilities` | `JevResponse.probabilities` |
+| `answers.destination.confidence` | **not copied**; domain computes confidence/margin itself |
 
-Request (POST, JSON):
+Configuration:
 
-```json
-{
-  "target": { "filename": "...", "extension": "png", "type": "..." },
-  "semantic_signals": ["CBX", "カンナビノイド"],
-  "candidates": [ { "id": "D1", "related_files": 2 } ]
-}
-```
+- `JEV_API_URL` (or legacy `JEV_API_BASE_URL`): the API base URL or the full
+  endpoint URL — both are accepted without duplicating `/v1/systemone`.
+- `JEV_API_KEY`: bearer token; never stored in source, tests, fixtures or git.
+- `JEV_MODEL` (optional): model alias; defaults to `jev-latest`.
+- Timeout: 15s. Errors: 401/403 → `Authentication`, other 4xx → `ApiError`,
+  5xx → `ServerError`, transport → `TransportError`, schema → `InvalidResponse`
+  (with a bounded body snippet). `NONE` is a decision; errors never become it.
 
-Response (JSON):
+## Verified live run (Phase 4E)
 
-```json
-{
-  "choice": "D1",
-  "probabilities": { "D1": 0.91, "D2": 0.06, "NONE": 0.03 },
-  "confidence": 0.88
-}
-```
+Real file → production Observe/Normalize/Discover → 9 discovered candidates →
+`POST /v1/systemone` → `choice: "D1"`, `probabilities {D1: 0.57, NONE: 0.43, …}`
+→ domain membership validation → `JevDecision { destination_id: D1,
+confidence: 0.57, margin: 0.14 }`. No filesystem operation was performed.
 
-- `choice` and `destination_id` are both accepted (the two design documents
-  spell it differently); a response without a selection is rejected as
-  `InvalidResponse`.
-- `confidence` from the API is **informational only**. kaseifu computes
-  `confidence = P1` and `margin = P1 - P2` in `models::decision`; the API
-  value is never copied into the domain decision.
-- `NONE` is a valid decision. Errors (HTTP failures, transport failures,
-  malformed responses) are never converted into `NONE`.
+## Known follow-ups (not Phase 4 blockers)
 
-## Adapter implementation
-
-`src/classifier/jev.rs`:
-
-- `RealJevIntegration::new(endpoint, api_key)` — endpoint is injected; tests
-  use a local mock HTTP server.
-- `RealJevIntegration::from_env()` — reads `JEV_API_BASE_URL` (full decision
-  endpoint URL) and `JEV_API_KEY` (optional). Credentials never appear in
-  source, fixtures, or git.
-- Request timeout: 15s.
-- Error mapping: 401/403 → `Authentication`, other 4xx → `ApiError`,
-  5xx → `ServerError`, connection/timeout → `TransportError`, malformed
-  body or missing selection → `InvalidResponse`.
-
-Authorization is sent as `Authorization: Bearer <JEV_API_KEY>` when the key
-is configured.
-
-## Not yet verified (Phase 4E gates)
-
-The following items are **not** confirmable from this repository and must be
-confirmed against the official API before a live call:
-
-1. The real endpoint URL and whether it is a single POST endpoint.
-2. The authentication header scheme (Bearer is provisional).
-3. Exact optional request fields (the docs show `description`/`path` for
-   candidates; the adapter sends `id` + `related_files`, which both
-   documents agree on).
-4. Real-world error body schema (only status-based mapping is implemented).
-
-Because the API schema is isolated in private DTOs inside the adapter,
-confirming these items requires changes in one file only; the domain and
-pipeline do not change.
-
-## Known limitation
-
-`DecisionContext::from_candidates` (and therefore the pipeline) currently
-leaves `target` and `semantic_signals` empty; the adapter sends what the
-domain provides. Populating them from `NormalizedFileContext` is a
-follow-up outside Phase 4D.
+- Normalized signals for screenshots are generic (`K:PNG`, `K:image`), which
+  makes Spotlight candidates noisy; signal quality belongs to Phase 2.
+- `aggregate_by_directory` emits `reasons` matched terms in `HashSet` order;
+  ordering varies between runs (recorded in Phase 4D.5, unfixed by design).

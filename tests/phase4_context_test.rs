@@ -225,6 +225,12 @@ async fn phase4_context_candidates_preserve_discovery_evidence() {
             "candidate identity must be preserved"
         );
         assert_eq!(
+            context_candidate.path,
+            discovered_candidate.path.display().to_string(),
+            "candidate destination path must be preserved for {}",
+            discovered_candidate.id
+        );
+        assert_eq!(
             context_candidate.evidence_count, discovered_candidate.evidence_count,
             "evidence_count must be preserved for {}",
             discovered_candidate.id

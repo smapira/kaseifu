@@ -36,6 +36,7 @@ impl DecisionContext {
             .iter()
             .map(|candidate| DecisionCandidate {
                 id: candidate.id.clone(),
+                path: candidate.path.display().to_string(),
                 evidence_count: candidate.evidence_count,
                 reasons: candidate.reasons.clone(),
             })
@@ -53,6 +54,7 @@ impl DecisionContext {
             .into_iter()
             .map(|id| DecisionCandidate {
                 id,
+                path: String::new(),
                 evidence_count: 0,
                 reasons: Vec::new(),
             })
@@ -144,6 +146,9 @@ pub struct DecisionTarget {
 pub struct DecisionCandidate {
     #[serde(default)]
     pub id: String,
+    /// The candidate destination directory the pipeline discovered.
+    #[serde(default)]
+    pub path: String,
     #[serde(default)]
     pub evidence_count: usize,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]

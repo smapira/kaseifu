@@ -1,12 +1,13 @@
-//! Phase 4D - RealJevIntegration adapter tests.
+//! Phase 4D/4E - RealJevIntegration adapter tests.
 //!
 //! These tests never touch a live API. They run against a local mock HTTP
 //! server (std-only, no extra dependencies) and protect the adapter
-//! boundary:
+//! boundary against the **real TypeSafe /v1/systemone contract**:
 //!
 //! ```text
-//! DecisionContext -> Jev API Request DTO -> HTTP
-//!                 -> Jev API Response DTO -> JevResponse
+//! DecisionContext -> SystemOne request DTO -> HTTP
+//!                 -> SystemOne response (answers.<name>.choice/probabilities)
+//!                 -> JevResponse
 //! ```
 //!
 //! Domain concerns (candidate membership, probability validation,
@@ -26,13 +27,15 @@ use semantic_file_organizer::models::candidate::CandidateDestination;
 use semantic_file_organizer::models::decision::DecisionContext;
 use semantic_file_organizer::models::file_context::{NormalizedFileContext, TargetFile};
 
+const SYSTEMONE_PATH: &str = "/v1/systemone";
+
 // ---------------------------------------------------------------------------
 // Minimal HTTP mock server
 // ---------------------------------------------------------------------------
 
 enum MockReply {
     /// Answer with the given status code and JSON body.
-    Status { code: u16, body: &'static str },
+    Status { code: u16, body: String },
     /// Accept the connection, then close it without a response.
     Abort,
 }
@@ -60,7 +63,7 @@ impl MockJevServer {
 
                 match reply {
                     MockReply::Status { code, body } => {
-                        write_http_response(&mut stream, code, body)
+                        write_http_response(&mut stream, code, &body)
                     }
                     MockReply::Abort => {
                         // Dropping the stream closes the connection without a response.
@@ -121,6 +124,7 @@ fn write_http_response(stream: &mut TcpStream, code: u16, body: &str) {
         200 => "OK",
         400 => "Bad Request",
         401 => "Unauthorized",
+        422 => "Unprocessable Entity",
         500 => "Internal Server Error",
         _ => "Status",
     };
@@ -141,7 +145,7 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Fixtures and helpers
 // ---------------------------------------------------------------------------
 
 fn context() -> DecisionContext {
@@ -152,15 +156,46 @@ fn adapter(server: &MockJevServer) -> RealJevIntegration {
     RealJevIntegration::new(server.endpoint.clone(), None)
 }
 
+/// A real TypeSafe `/v1/systemone` success envelope with one `choice` answer
+/// named `destination`.
+fn systemone_choice_response(choice: &str, probabilities: &str) -> String {
+    format!(
+        r#"{{"model":"jev-latest","answers":{{"destination":{{"type":"choice","choice":"{choice}","confidence":0.9,"probabilities":{probabilities}}}}},"usage":{{"input_tokens":120,"output_tokens":12}}}}"#
+    )
+}
+
+/// A populated, production-shaped decision context.
+fn populated_context() -> DecisionContext {
+    let normalized = NormalizedFileContext {
+        target: TargetFile {
+            filename: "CBX（カンナビノイド）とは？｜NATURECAN.png".to_string(),
+            extension: Some("png".to_string()),
+            ..TargetFile::default()
+        },
+        semantic_signals: vec!["X:CBX".to_string()],
+        file_type: Some("public.png".to_string()),
+        ..NormalizedFileContext::default()
+    };
+    let candidates = vec![CandidateDestination {
+        id: "D1".to_string(),
+        path: PathBuf::from("/tmp/candidate-dir"),
+        score: 15.0,
+        evidence_count: 2,
+        reasons: vec!["found 2 items".to_string()],
+    }];
+
+    DecisionContext::from_normalized(&normalized, &candidates)
+}
+
 // ---------------------------------------------------------------------------
-// Success path: API JSON -> API DTO -> JevResponse
+// Success path: real response envelope -> JevResponse
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn phase4_real_jev_adapter_valid_candidate_response_maps_to_jev_response() {
     let server = MockJevServer::start(vec![MockReply::Status {
         code: 200,
-        body: r#"{"choice":"D1","probabilities":{"D1":0.91,"D2":0.06,"NONE":0.03},"confidence":0.88}"#,
+        body: systemone_choice_response("D1", r#"{"D1":0.91,"D2":0.06,"NONE":0.03}"#),
     }]);
 
     let response = adapter(&server)
@@ -181,7 +216,7 @@ async fn phase4_real_jev_adapter_valid_candidate_response_maps_to_jev_response()
 async fn phase4_real_jev_adapter_none_response_is_a_decision_not_an_error() {
     let server = MockJevServer::start(vec![MockReply::Status {
         code: 200,
-        body: r#"{"choice":"NONE","probabilities":{"NONE":0.70,"D1":0.20,"D2":0.10}}"#,
+        body: systemone_choice_response("NONE", r#"{"NONE":0.70,"D1":0.20,"D2":0.10}"#),
     }]);
 
     let response = adapter(&server)
@@ -197,7 +232,7 @@ async fn phase4_real_jev_adapter_none_response_is_a_decision_not_an_error() {
 async fn phase4_real_jev_adapter_multiple_candidate_probabilities_are_preserved() {
     let server = MockJevServer::start(vec![MockReply::Status {
         code: 200,
-        body: r#"{"destination_id":"D2","probabilities":{"D1":0.11,"D2":0.82,"NONE":0.07}}"#,
+        body: systemone_choice_response("D2", r#"{"D1":0.11,"D2":0.82,"NONE":0.07}"#),
     }]);
 
     let response = adapter(&server)
@@ -218,7 +253,7 @@ async fn phase4_real_jev_adapter_multiple_candidate_probabilities_are_preserved(
 async fn phase4_real_jev_adapter_unknown_candidate_passes_through_for_domain_rejection() {
     let server = MockJevServer::start(vec![MockReply::Status {
         code: 200,
-        body: r#"{"choice":"D99","probabilities":{"D99":0.95}}"#,
+        body: systemone_choice_response("D99", r#"{"D99":0.95}"#),
     }]);
 
     let response = adapter(&server)
@@ -236,15 +271,15 @@ async fn phase4_real_jev_adapter_arbitrary_path_response_never_becomes_a_destina
     let server = MockJevServer::start(vec![
         MockReply::Status {
             code: 200,
-            body: r#"{"choice":"/Users/foo/Documents"}"#,
+            body: systemone_choice_response("/Users/foo/Documents", r#"{}"#),
         },
         MockReply::Status {
             code: 200,
-            body: r#"{"choice":"../../etc/passwd"}"#,
+            body: systemone_choice_response("../../etc/passwd", r#"{}"#),
         },
         MockReply::Status {
             code: 200,
-            body: r#"{"choice":"file:///etc/passwd"}"#,
+            body: systemone_choice_response("file:///etc/passwd", r#"{}"#),
         },
     ]);
 
@@ -272,11 +307,15 @@ async fn phase4_real_jev_adapter_arbitrary_path_response_never_becomes_a_destina
     }
 }
 
+// ---------------------------------------------------------------------------
+// Request shape: real /v1/systemone schema
+// ---------------------------------------------------------------------------
+
 #[tokio::test]
-async fn phase4_real_jev_adapter_request_carries_the_decision_context() {
+async fn phase4_real_jev_adapter_request_uses_systemone_schema() {
     let server = MockJevServer::start(vec![MockReply::Status {
         code: 200,
-        body: r#"{"choice":"D1"}"#,
+        body: systemone_choice_response("D1", r#"{"D1":0.9,"NONE":0.1}"#),
     }]);
 
     let _ = adapter(&server)
@@ -288,17 +327,53 @@ async fn phase4_real_jev_adapter_request_carries_the_decision_context() {
     assert_eq!(requests.len(), 1);
     let request = &requests[0];
 
-    assert!(request.starts_with("POST "), "request was: {request}");
+    assert!(
+        request.starts_with(&format!("POST {SYSTEMONE_PATH}")),
+        "request was: {request}"
+    );
     assert!(
         request
             .to_lowercase()
-            .contains("content-type: application/json")
+            .contains("content-type: application/json"),
+        "request was: {request}"
     );
-    assert!(request.contains("\"D1\""), "candidate ids must be sent");
-    assert!(request.contains("\"D2\""), "candidate ids must be sent");
+    // Real schema: questions.<name> is a choice question with criteria.
+    assert!(request.contains("\"questions\""), "request was: {request}");
     assert!(
-        request.contains("\"candidates\""),
-        "candidates field must be sent"
+        request.contains("\"destination\""),
+        "request was: {request}"
+    );
+    assert!(
+        request.contains("\"type\":\"choice\""),
+        "request was: {request}"
+    );
+    assert!(request.contains("\"criteria\""), "request was: {request}");
+    assert!(request.contains("\"model\""), "request was: {request}");
+    assert!(request.contains("\"state\""), "request was: {request}");
+    // Candidates become criteria names, and NONE is always offered.
+    assert!(request.contains("\"D1\""), "request was: {request}");
+    assert!(request.contains("\"D2\""), "request was: {request}");
+    assert!(request.contains("\"NONE\""), "request was: {request}");
+}
+
+#[tokio::test]
+async fn phase4_real_jev_adapter_accepts_a_full_endpoint_url() {
+    // JEV_API_URL may be configured as the full endpoint URL (as in .env):
+    // the adapter must not append the path a second time.
+    let server = MockJevServer::start(vec![MockReply::Status {
+        code: 200,
+        body: systemone_choice_response("D1", r#"{"D1":0.9,"NONE":0.1}"#),
+    }]);
+
+    let adapter = RealJevIntegration::new(format!("{}/v1/systemone", server.endpoint), None);
+    let _ = adapter.decide(&context()).await.expect("valid response");
+
+    let requests = server.captured_requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].starts_with(&format!("POST {SYSTEMONE_PATH} HTTP")),
+        "endpoint path must not be duplicated: {}",
+        requests[0]
     );
 }
 
@@ -306,7 +381,7 @@ async fn phase4_real_jev_adapter_request_carries_the_decision_context() {
 async fn phase4_real_jev_adapter_api_key_is_sent_as_bearer_header_when_configured() {
     let server = MockJevServer::start(vec![MockReply::Status {
         code: 200,
-        body: r#"{"choice":"D1"}"#,
+        body: systemone_choice_response("D1", r#"{"D1":0.9}"#),
     }]);
 
     let adapter = RealJevIntegration::new(server.endpoint.clone(), Some("test-key".to_string()));
@@ -321,6 +396,51 @@ async fn phase4_real_jev_adapter_api_key_is_sent_as_bearer_header_when_configure
     );
 }
 
+#[tokio::test]
+async fn phase4_real_jev_adapter_serializes_populated_context_fields() {
+    let server = MockJevServer::start(vec![MockReply::Status {
+        code: 200,
+        body: systemone_choice_response("D1", r#"{"D1":0.9,"NONE":0.1}"#),
+    }]);
+
+    let response = adapter(&server)
+        .decide(&populated_context())
+        .await
+        .expect("valid response");
+    assert_eq!(response.destination_id, Some("D1".to_string()));
+
+    let requests = server.captured_requests();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+
+    // The adapter serializes what the domain provides; it never re-derives it.
+    assert!(
+        request.contains("NATURECAN"),
+        "filename missing in request: {request}"
+    );
+    assert!(
+        request.contains("\"png\""),
+        "extension missing in request: {request}"
+    );
+    assert!(
+        request.contains("public.png"),
+        "file type missing in request: {request}"
+    );
+    assert!(
+        request.contains("X:CBX"),
+        "semantic signals missing in request: {request}"
+    );
+    // Criteria descriptions carry the real candidate destination.
+    assert!(
+        request.contains("/tmp/candidate-dir"),
+        "candidate path missing in request: {request}"
+    );
+    assert!(
+        request.contains("2 related file"),
+        "candidate evidence missing in request: {request}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Response schema failures
 // ---------------------------------------------------------------------------
@@ -329,7 +449,7 @@ async fn phase4_real_jev_adapter_api_key_is_sent_as_bearer_header_when_configure
 async fn phase4_real_jev_adapter_malformed_json_is_rejected() {
     let server = MockJevServer::start(vec![MockReply::Status {
         code: 200,
-        body: r#"{"choice": "D1", "#,
+        body: r#"{"answers": "#.to_string(),
     }]);
 
     let error = adapter(&server)
@@ -344,16 +464,55 @@ async fn phase4_real_jev_adapter_malformed_json_is_rejected() {
 }
 
 #[tokio::test]
-async fn phase4_real_jev_adapter_missing_choice_field_is_rejected() {
+async fn phase4_real_jev_adapter_missing_answer_is_rejected() {
     let server = MockJevServer::start(vec![MockReply::Status {
         code: 200,
-        body: r#"{"probabilities":{"D1":0.90}}"#,
+        body: r#"{"model":"jev-latest","answers":{},"usage":{"input_tokens":1,"output_tokens":1}}"#
+            .to_string(),
     }]);
 
     let error = adapter(&server)
         .decide(&context())
         .await
-        .expect_err("a response without a choice must be rejected");
+        .expect_err("a response without the destination answer must be rejected");
+
+    assert!(
+        matches!(error, JevError::InvalidResponse(_)),
+        "expected InvalidResponse, got {error:?}"
+    );
+}
+
+#[tokio::test]
+async fn phase4_real_jev_adapter_non_choice_answer_is_rejected() {
+    let server = MockJevServer::start(vec![MockReply::Status {
+        code: 200,
+        body: r#"{"model":"jev-latest","answers":{"destination":{"type":"noul","noul":0.5}},"usage":{"input_tokens":1,"output_tokens":1}}"#
+            .to_string(),
+    }]);
+
+    let error = adapter(&server)
+        .decide(&context())
+        .await
+        .expect_err("a non-choice answer must be rejected");
+
+    assert!(
+        matches!(error, JevError::InvalidResponse(_)),
+        "expected InvalidResponse, got {error:?}"
+    );
+}
+
+#[tokio::test]
+async fn phase4_real_jev_adapter_answer_without_choice_is_rejected() {
+    let server = MockJevServer::start(vec![MockReply::Status {
+        code: 200,
+        body: r#"{"model":"jev-latest","answers":{"destination":{"type":"choice","probabilities":{"D1":0.9}}},"usage":{"input_tokens":1,"output_tokens":1}}"#
+            .to_string(),
+    }]);
+
+    let error = adapter(&server)
+        .decide(&context())
+        .await
+        .expect_err("a choice answer without a selection must be rejected");
 
     assert!(
         matches!(error, JevError::InvalidResponse(_)),
@@ -369,7 +528,7 @@ async fn phase4_real_jev_adapter_missing_choice_field_is_rejected() {
 async fn phase4_real_jev_adapter_http_401_is_an_authentication_error() {
     let server = MockJevServer::start(vec![MockReply::Status {
         code: 401,
-        body: r#"{"error":"unauthorized"}"#,
+        body: r#"{"detail":"unauthorized"}"#.to_string(),
     }]);
 
     let error = adapter(&server)
@@ -384,16 +543,18 @@ async fn phase4_real_jev_adapter_http_401_is_an_authentication_error() {
 }
 
 #[tokio::test]
-async fn phase4_real_jev_adapter_http_400_is_an_api_error() {
+async fn phase4_real_jev_adapter_http_422_is_an_api_error() {
     let server = MockJevServer::start(vec![MockReply::Status {
-        code: 400,
-        body: r#"{"error":"bad request"}"#,
+        code: 422,
+        body:
+            r#"{"detail":[{"loc":["body","questions"],"msg":"Field required","type":"missing"}]}"#
+                .to_string(),
     }]);
 
     let error = adapter(&server)
         .decide(&context())
         .await
-        .expect_err("400 must fail");
+        .expect_err("422 must fail");
 
     assert!(
         matches!(error, JevError::ApiError(_)),
@@ -405,7 +566,7 @@ async fn phase4_real_jev_adapter_http_400_is_an_api_error() {
 async fn phase4_real_jev_adapter_http_500_is_a_server_error_and_never_none() {
     let server = MockJevServer::start(vec![MockReply::Status {
         code: 500,
-        body: r#"{"error":"boom"}"#,
+        body: r#"{"detail":"boom"}"#.to_string(),
     }]);
 
     let result = adapter(&server).decide(&context()).await;
@@ -434,68 +595,5 @@ async fn phase4_real_jev_adapter_transport_failure_is_a_transport_error() {
     assert!(
         matches!(error, JevError::TransportError(_)),
         "expected TransportError, got {error:?}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Phase 4D.5: a populated DecisionContext serializes into the API request
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn phase4_real_jev_adapter_serializes_populated_context_fields() {
-    let normalized = NormalizedFileContext {
-        target: TargetFile {
-            filename: "CBX（カンナビノイド）とは？｜NATURECAN.png".to_string(),
-            extension: Some("png".to_string()),
-            ..TargetFile::default()
-        },
-        semantic_signals: vec!["X:CBX".to_string()],
-        file_type: Some("public.png".to_string()),
-        ..NormalizedFileContext::default()
-    };
-    let candidates = vec![CandidateDestination {
-        id: "D1".to_string(),
-        path: PathBuf::from("/tmp/candidate-does-not-need-to-exist"),
-        score: 15.0,
-        evidence_count: 2,
-        reasons: vec!["found 2 items".to_string()],
-    }];
-    let context = DecisionContext::from_normalized(&normalized, &candidates);
-
-    let server = MockJevServer::start(vec![MockReply::Status {
-        code: 200,
-        body: r#"{"choice":"D1"}"#,
-    }]);
-
-    let response = adapter(&server)
-        .decide(&context)
-        .await
-        .expect("valid response");
-    assert_eq!(response.destination_id, Some("D1".to_string()));
-
-    let requests = server.captured_requests();
-    assert_eq!(requests.len(), 1);
-    let request = &requests[0];
-
-    // The adapter serializes what the domain provides; it never re-derives it.
-    assert!(
-        request.contains("NATURECAN"),
-        "filename missing in request: {request}"
-    );
-    assert!(
-        request.contains("\"png\""),
-        "extension missing in request: {request}"
-    );
-    assert!(
-        request.contains("public.png"),
-        "file type missing in request: {request}"
-    );
-    assert!(
-        request.contains("X:CBX"),
-        "semantic signals missing in request: {request}"
-    );
-    assert!(
-        request.contains("\"related_files\":2"),
-        "candidate evidence missing in request: {request}"
     );
 }
