@@ -2,9 +2,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-mod classifier;
-mod context;
-mod discovery;
+pub mod classifier;
+pub mod context;
+pub mod discovery;
 mod models;
 mod normalize;
 mod operations;
@@ -46,6 +46,12 @@ enum Commands {
     /// Searches for similar files using Spotlight and aggregates
     /// parent directories with scoring.
     Discover { file: PathBuf },
+
+    /// Classify file using Jev AI - Phase 4
+    ///
+    /// Discovers candidate destinations and gets AI decision.
+    /// Does NOT move the file (moves in Phase 5).
+    Classify { file: PathBuf },
 }
 
 #[tokio::main]
@@ -71,12 +77,17 @@ async fn main() -> Result<()> {
         }
 
         Commands::Discover { file } => {
-            let context = context::builder::build(&file)?;
-            let normalized = normalize::normalize(context)?;
+            let ctx = context::builder::build(&file)?;
+            let normalized = normalize::normalize(ctx)?;
             let candidates = discovery::discover(normalized)?;
 
             // Output as pretty JSON
             println!("{}", serde_json::to_string_pretty(&candidates)?);
+        }
+
+        Commands::Classify { file } => {
+            // Placeholder for Phase 4
+            println!("Phase 4 classify not yet implemented");
         }
     }
 
