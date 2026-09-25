@@ -5,9 +5,13 @@ use semantic_file_organizer::classifier::jev::{
 };
 use semantic_file_organizer::classifier::pipeline;
 use semantic_file_organizer::models::decision::DecisionContext;
-use semantic_file_organizer::operations::{mover, plan, undo};
-use semantic_file_organizer::policy;
+use semantic_file_organizer::operations::organize::{self, OrganizeOutcome};
+use semantic_file_organizer::operations::plan::PlanError;
+use semantic_file_organizer::operations::undo;
+use semantic_file_organizer::platform::macos::fsevents;
 use semantic_file_organizer::storage::history::{DEFAULT_DATABASE_PATH, OperationHistory};
+use semantic_file_organizer::watch::coordinator::WatchConfig;
+use semantic_file_organizer::watch::runner;
 use semantic_file_organizer::{context, discovery, normalize};
 use std::future::Future;
 use std::path::PathBuf;
@@ -60,6 +64,24 @@ enum Commands {
     /// Observe -> Normalize -> Discover -> Jev -> validated JevDecision.
     /// This command never moves the file (execution is a later phase).
     Classify { file: PathBuf },
+
+    /// Watch directories and organize changed files automatically (Phase 6).
+    ///
+    /// Events are filtered, debounced, deduplicated and stability-checked
+    /// before the existing pipeline runs. Dry run by default; pass
+    /// `--execute` to actually move files.
+    Watch {
+        /// Directory to watch (repeatable). Never implicit: home-wide
+        /// watching is not a default.
+        #[arg(long = "path", required = true)]
+        paths: Vec<PathBuf>,
+        /// Actually perform moves (default is a dry run).
+        #[arg(long, conflicts_with = "dry_run")]
+        execute: bool,
+        /// Explicitly request a dry run (the default).
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -86,61 +108,84 @@ async fn main() -> Result<()> {
             let jev = build_jev_integration()?;
             let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
 
-            // Phase 4: decision (Observe -> Normalize -> Discover -> Jev -> validate).
-            let (decision, candidates) = pipeline::classify_with_candidates(&file, &jev).await?;
+            let report = organize::organize_file(&file, &jev, &history, actually_move).await?;
+
             println!("== Decision ==");
-            println!("  destination: {:?}", decision.destination_id);
-            println!("  confidence:  {:.3}", decision.confidence);
-            println!("  margin:      {:.3}", decision.margin);
+            println!("  destination: {:?}", report.decision.destination_id);
+            println!("  confidence:  {:.3}", report.decision.confidence);
+            println!("  margin:      {:.3}", report.decision.margin);
+            println!("== Policy ==\n  {:?}", report.policy);
 
-            // Phase 5: policy -> plan.
-            let action = policy::decision::evaluate(&decision);
-            println!("== Policy ==\n  {action:?}");
-
-            match plan::build_move_plan(&file, &decision, &candidates) {
-                Ok(plan) => {
-                    println!("== Plan ==");
-                    println!(
-                        "  {} -> {}",
-                        plan.source.display(),
-                        plan.destination_path.display()
-                    );
-                    println!("  candidate: {}", plan.candidate_id);
-
-                    if actually_move {
-                        match mover::execute_move(&plan, &history) {
-                            Ok(mover::MoveOutcome::Moved { operation_id }) => {
-                                println!("== Moved ==\n  operation: {operation_id}");
-                            }
-                            Ok(mover::MoveOutcome::WouldMove) => {
-                                println!("== Would move (no mutation) ==");
-                            }
-                            Err(error) => {
-                                println!("== Move failed ==\n  {error:?}");
-                            }
-                        }
-                    } else {
-                        match mover::dry_run(&plan) {
-                            Ok(_) => println!(
-                                "== Dry run ==\n  would move {} -> {}",
-                                plan.source.display(),
-                                plan.destination_path.display()
-                            ),
-                            Err(error) => println!("== Dry run rejected ==\n  {error:?}"),
-                        }
-                    }
+            match report.outcome {
+                OrganizeOutcome::Moved {
+                    operation_id,
+                    destination,
+                } => {
+                    println!("== Moved ==");
+                    println!("  {}", destination.display());
+                    println!("  operation: {operation_id}");
                 }
-                Err(plan::PlanError::Collision(path)) => {
+                OrganizeOutcome::WouldMove { destination } => {
+                    println!("== Dry run ==");
+                    println!(
+                        "  would move {} -> {}",
+                        file.display(),
+                        destination.display()
+                    );
+                }
+                OrganizeOutcome::Refused => {
+                    println!("== No move ==\n  policy refused");
+                }
+                OrganizeOutcome::Unplanable(PlanError::Collision(path)) => {
                     // docs/design/05-execute.md: a collision goes to REVIEW.
                     println!(
                         "== REVIEW ==\n  destination already exists: {}",
                         path.display()
                     );
                 }
-                Err(error) => {
+                OrganizeOutcome::Unplanable(error) => {
                     println!("== No move ==\n  {error:?}");
                 }
+                OrganizeOutcome::MoveFailed(error) => {
+                    println!("== Move failed ==\n  {error}");
+                }
             }
+        }
+
+        Commands::Watch {
+            paths,
+            execute,
+            dry_run,
+        } => {
+            let actually_move = execute && !dry_run;
+
+            for path in &paths {
+                if !path.is_dir() {
+                    anyhow::bail!("watch path is not a directory: {}", path.display());
+                }
+            }
+
+            let jev = build_jev_integration()?;
+            let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
+
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let _watcher = fsevents::spawn(&paths, sender)?;
+
+            let roots = paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("watching {roots} (dry-run: {})", !actually_move);
+
+            runner::run_loop(
+                receiver,
+                &jev,
+                &history,
+                actually_move,
+                WatchConfig::default(),
+            )
+            .await?;
         }
 
         Commands::Undo { last } => {

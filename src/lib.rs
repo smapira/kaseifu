@@ -18,3 +18,4 @@ pub mod operations;
 pub mod platform;
 pub mod policy;
 pub mod storage;
+pub mod watch;
