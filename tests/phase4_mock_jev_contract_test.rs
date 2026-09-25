@@ -17,7 +17,8 @@
 //! no candidate validation, no confidence/margin calculation,
 //! no candidate selection, no HTTP.
 
-use semantic_file_organizer::classifier::mock_jev::{JevIntegration, MockJevIntegration};
+use semantic_file_organizer::classifier::jev::JevIntegration;
+use semantic_file_organizer::classifier::mock_jev::MockJevIntegration;
 use semantic_file_organizer::models::decision::DecisionContext;
 
 fn context_with(candidate_ids: &[&str]) -> DecisionContext {

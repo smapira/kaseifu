@@ -68,6 +68,21 @@ impl DecisionContext {
             candidate_id
         ))
     }
+
+    /// The target file description offered to Jev.
+    pub fn target(&self) -> &DecisionTarget {
+        &self.target
+    }
+
+    /// Semantic signals extracted for this target.
+    pub fn semantic_signals(&self) -> &[String] {
+        &self.semantic_signals
+    }
+
+    /// The offered candidates; Jev may select one of these or `NONE`.
+    pub fn candidates(&self) -> &[DecisionCandidate] {
+        &self.candidates
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -9,46 +9,11 @@
 //! - Jev cannot create new destination paths
 //! - The mock never validates, scores, or selects; it returns configured data
 
+use super::jev::{JevError, JevIntegration, JevResponse};
 use crate::models::decision::DecisionContext;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-
-/// Transport error from Jev service (real or mock)
-#[derive(Debug, Clone)]
-pub enum JevError {
-    TransportError(String),
-}
-
-impl std::fmt::Display for JevError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            JevError::TransportError(msg) => write!(f, "TransportError({})", msg),
-        }
-    }
-}
-
-/// Jev response structure - MATCHES the models::decision::JevDecision API
-#[derive(Debug, Clone)]
-pub struct JevResponse {
-    pub destination_id: Option<String>,
-    pub probabilities: HashMap<String, f64>,
-    #[allow(dead_code)]
-    pub confidence: f64,
-    #[allow(dead_code)]
-    pub margin: f64,
-}
-
-impl Default for JevResponse {
-    fn default() -> Self {
-        Self {
-            destination_id: Some("NONE".to_string()),
-            probabilities: HashMap::new(),
-            confidence: 0.0,
-            margin: 0.0,
-        }
-    }
-}
 
 /// MockJevIntegration - returns the configured response verbatim.
 #[derive(Debug, Clone, Default)]
@@ -155,15 +120,6 @@ impl MockJevIntegration {
     }
 }
 
-/// Trait for Jev integration - separates interface from implementation
-pub trait JevIntegration: Send + Sync {
-    /// Invoke the Jev decision service and return a decision
-    fn decide(
-        &self,
-        context: &DecisionContext,
-    ) -> Pin<Box<dyn Future<Output = Result<JevResponse, JevError>> + Send + '_>>;
-}
-
 impl JevIntegration for MockJevIntegration {
     fn decide(
         &self,
@@ -202,7 +158,7 @@ mod tests {
         let mock = MockJevIntegration::configured_error("Transport error");
         match mock.error {
             Some(JevError::TransportError(message)) => assert_eq!(message, "Transport error"),
-            None => panic!("error should be configured"),
+            other => panic!("expected a configured transport error, got {other:?}"),
         }
     }
 

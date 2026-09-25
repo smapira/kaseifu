@@ -25,7 +25,7 @@
 use anyhow::{Result, anyhow};
 use std::path::Path;
 
-use super::mock_jev::JevIntegration;
+use super::jev::JevIntegration;
 use crate::models::candidate::CandidateDestination;
 use crate::models::decision::{DecisionContext, JevDecision, validate_probabilities};
 use crate::{context, discovery, normalize};
