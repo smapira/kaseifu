@@ -25,9 +25,9 @@
 use anyhow::{Result, anyhow};
 use std::path::Path;
 
-use super::mock_jev::{JevIntegration, JevResponse};
+use super::mock_jev::JevIntegration;
 use crate::models::candidate::CandidateDestination;
-use crate::models::decision::{DecisionContext, JevDecision};
+use crate::models::decision::{DecisionContext, JevDecision, validate_probabilities};
 use crate::{context, discovery, normalize};
 
 /// Run the full decision pipeline using the real Spotlight (mdfind) search.
@@ -91,26 +91,14 @@ async fn decide_from_candidates(
         .validate_decision(&choice)
         .map_err(|error| anyhow!("rejected Jev decision: {error}"))?;
 
-    validate_probabilities(&response)?;
-
     let probabilities: Vec<(String, f64)> = response
         .probabilities
         .iter()
         .map(|(id, probability)| (id.clone(), *probability))
         .collect();
 
+    validate_probabilities(&probabilities)
+        .map_err(|error| anyhow!("malformed Jev response: {error}"))?;
+
     Ok(JevDecision::from_selection(&validated, &probabilities))
-}
-
-/// Jev responses are untrusted: probabilities must be finite and in range.
-fn validate_probabilities(response: &JevResponse) -> Result<()> {
-    for (id, probability) in &response.probabilities {
-        if !probability.is_finite() || *probability < 0.0 || *probability > 1.0 {
-            return Err(anyhow!(
-                "malformed Jev response: invalid probability {probability} for '{id}'"
-            ));
-        }
-    }
-
-    Ok(())
 }

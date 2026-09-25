@@ -1,102 +1,211 @@
-//! Phase 4 Jev Decision Mock Layer Tests
-//! TDD contracts for Phase 4: Jev Decision Layer
+//! Phase 4 - Jev Decision domain tests.
 //!
-//! Invariants:
-//! 1. Jev can only select from existing candidates (cannot create unknown IDs)
-//! 2. NONE is valid selection (no file moves)
-//! 3. confidence = top candidate probability
-//! 4. margin = P1 - P2 (top minus second)
+//! These tests exercise the production domain model directly
+//! (`models::decision`). There is no test-local copy of the logic.
+//!
+//! Invariants under test:
+//! 1. Candidate membership: selection must be an existing candidate ID or NONE
+//! 2. NONE is always a valid selection (no file moves)
+//! 3. confidence = highest probability (P1)
+//! 4. margin = P1 - P2
+//! 5. Invalid probabilities never become confidence/margin
 
-#[cfg(test)]
-mod decision_tests {
-    use std::path::PathBuf;
+use semantic_file_organizer::models::decision::{
+    DecisionAction, DecisionContext, JevDecision, confidence_and_margin, validate_probabilities,
+};
 
-    #[test]
-    fn test_jevcannot_create_unknown_candidate_inexistent() {
-        // INVARIANT: Jev cannot create unknown candidate IDs
-        // Given: existing candidates [D1, D2, D3, NONE]
-        // When: request D99 (doesn't exist)
-        // Then: should be rejected (ERROR returned)
-        // This tests: validate_decision() checks if candidate_id is in provided list
-    }
+fn probs(entries: &[(&str, f64)]) -> Vec<(String, f64)> {
+    entries
+        .iter()
+        .map(|(id, probability)| ((*id).to_string(), *probability))
+        .collect()
+}
 
-    #[test]
-    fn test_jev_cannot_create_unknown_candidate_inexistent_2() {
-        // INVARIANT: Cannot create paths
-        // Given: existing [D1, D2]
-        // When: request D100
-        // Then: rejected
-    }
+fn context_with(candidates: &[&str]) -> DecisionContext {
+    DecisionContext::from_candidates(candidates.iter().map(|c| c.to_string()).collect())
+}
 
-    #[test]
-    fn test_jev_can_select_none() {
-        // INVARIANT: NONE is valid selection (no file moves)
-        // Given: any candidates
-        // When: request NONE
-        // Then: should be accepted
-        // This tests: validate_decision("NONE") returns Ok("NONE")
-    }
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-9
+}
 
-    #[test]
-    fn test_boundary_confidence_calculated_as_top_probability() {
-        // Given: [D1: 0.82, D2: 0.11, NONE: 0.07]
-        // Then: confidence = 0.82 (the maximum)
-        // This tests: calculate_confidence() returns max(probabilities)
-    }
+// ---------------------------------------------------------------------------
+// Candidate membership
+// ---------------------------------------------------------------------------
 
-    #[test]
-    fn test_boundary_margin_calculated_as_top_minus_second() {
-        // Given: [D1: 0.82, D2: 0.11, NONE: 0.07]
-        // Then: margin = 0.82 - 0.11 = 0.71
-        // This tests: calculate_margin() returns confidence - second_highest
-    }
+#[test]
+fn candidate_d1_is_accepted() {
+    let context = context_with(&["D1"]);
+    assert_eq!(context.validate_decision("D1"), Ok("D1".to_string()));
+}
 
-    #[test]
-    fn test_boundary_tie_handling() {
-        // Given: [D1: 0.50, D2: 0.50]
-        // Then: should handle tie specially (not arbitrarily pick D1)
-        //       Expected: either NONE or some other tie-breaker
-        // This tests: ties don't get arbitrary selection
-    }
+#[test]
+fn candidate_d2_is_accepted() {
+    let context = context_with(&["D1", "D2"]);
+    assert_eq!(context.validate_decision("D2"), Ok("D2".to_string()));
+}
 
-    #[test]
-    fn test_bid_input_cannot_create_paths() {
-        // Given: user enters path /Users/foo/new/path
-        // Then: rejected (Jev must choose from provided candidates)
-        // This tests: validate_decision(typo) rejects
-    }
+#[test]
+fn candidate_d6_is_accepted() {
+    // Discovery may emit any D<n>; membership is not a fixed whitelist.
+    let context = context_with(&["D6"]);
+    assert_eq!(context.validate_decision("D6"), Ok("D6".to_string()));
+}
 
-    #[test]
-    fn test_duplicate_candidate_ids_rejected() {
-        // Given: [D1: 0.5, D1: 0.6] (duplicate IDs)
-        // Then: rejected (invalid input)
-        // Note: Discovery layer should prevent this, but Decision should reject if given
-    }
+#[test]
+fn unknown_candidate_d99_is_rejected() {
+    let context = context_with(&["D1", "D2"]);
+    assert!(context.validate_decision("D99").is_err());
+}
 
-    #[test]
-    fn test_empty_candidates_list_rejected() {
-        // Given: []
-        // Then: rejection (no valid options to choose)
-        // This tests: empty list is rejected
-    }
+#[test]
+fn arbitrary_filesystem_path_is_rejected() {
+    // Jev may select a candidate; it may never create a destination.
+    let context = context_with(&["D1", "D2"]);
+    assert!(
+        context.validate_decision("/Users/foo/Documents").is_err(),
+        "a filesystem path must never validate as a candidate"
+    );
+}
 
-    #[test]
-    fn test_valid_candidate_acceptance() {
-        // Given: [D1, D2, D3, NONE]
-        // When: request D1
-        // Then: accepted
-        // This tests: valid IDs pass validation
-    }
+#[test]
+fn none_is_accepted_with_and_without_candidates() {
+    assert_eq!(
+        context_with(&[]).validate_decision("NONE"),
+        Ok("NONE".to_string())
+    );
+    assert_eq!(
+        context_with(&["D1"]).validate_decision("NONE"),
+        Ok("NONE".to_string())
+    );
+}
 
-    #[test]
-    fn test_confidence_as_top_probability() {
-        let conf = 0.82_f64;
-        assert_eq!(conf, 0.82_f64); // Simple assertion to test confidence calculation
-    }
+#[test]
+fn empty_selection_is_rejected() {
+    let context = context_with(&["D1"]);
+    assert!(context.validate_decision("").is_err());
+}
 
-    #[test]
-    fn test_margin_as_difference() {
-        let margin = 0.0_f64;
-        assert_eq!(margin, 0.0_f64); // Simple assertion to test margin calculation
-    }
+// ---------------------------------------------------------------------------
+// Confidence / margin
+// ---------------------------------------------------------------------------
+
+#[test]
+fn confidence_and_margin_documented_example() {
+    let (confidence, margin) =
+        confidence_and_margin(&probs(&[("D1", 0.82), ("D2", 0.11), ("NONE", 0.07)]));
+    assert!(close(confidence, 0.82), "confidence was {confidence}");
+    assert!(close(margin, 0.71), "margin was {margin}");
+}
+
+#[test]
+fn single_probability_has_zero_margin() {
+    let (confidence, margin) = confidence_and_margin(&probs(&[("D1", 0.82)]));
+    assert!(close(confidence, 0.82));
+    assert!(close(margin, 0.0));
+}
+
+#[test]
+fn tie_has_zero_margin() {
+    let (confidence, margin) = confidence_and_margin(&probs(&[("D1", 0.50), ("D2", 0.50)]));
+    assert!(close(confidence, 0.50));
+    assert!(close(margin, 0.0), "a tie is not a confident decision");
+}
+
+#[test]
+fn all_zero_probabilities() {
+    let (confidence, margin) = confidence_and_margin(&probs(&[("D1", 0.0), ("D2", 0.0)]));
+    assert!(close(confidence, 0.0));
+    assert!(close(margin, 0.0));
+}
+
+#[test]
+fn certain_probability() {
+    let (confidence, margin) = confidence_and_margin(&probs(&[("D1", 1.0), ("NONE", 0.0)]));
+    assert!(close(confidence, 1.0));
+    assert!(close(margin, 1.0));
+}
+
+#[test]
+fn empty_probabilities_are_zero() {
+    let (confidence, margin) = confidence_and_margin(&[]);
+    assert!(close(confidence, 0.0));
+    assert!(close(margin, 0.0));
+}
+
+#[test]
+fn nan_probability_is_ignored() {
+    let (confidence, margin) = confidence_and_margin(&probs(&[("D1", f64::NAN), ("D2", 0.50)]));
+    assert!(close(confidence, 0.50), "NaN must not become confidence");
+    assert!(close(margin, 0.0));
+}
+
+#[test]
+fn infinite_probability_is_ignored() {
+    let (confidence, margin) =
+        confidence_and_margin(&probs(&[("D1", f64::INFINITY), ("D2", 0.40)]));
+    assert!(
+        close(confidence, 0.40),
+        "infinity must not become confidence"
+    );
+    assert!(close(margin, 0.0));
+}
+
+#[test]
+fn negative_probability_is_ignored() {
+    let (confidence, margin) = confidence_and_margin(&probs(&[("D1", -0.30), ("D2", 0.50)]));
+    assert!(close(confidence, 0.50));
+    assert!(close(margin, 0.0), "margin was {margin}");
+}
+
+#[test]
+fn probability_above_one_is_ignored() {
+    let (confidence, margin) = confidence_and_margin(&probs(&[("D1", 1.50), ("D2", 0.50)]));
+    assert!(close(confidence, 0.50), "confidence was {confidence}");
+    assert!(close(margin, 0.0), "margin was {margin}");
+}
+
+// ---------------------------------------------------------------------------
+// JevDecision construction (canonical path)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn from_selection_uses_the_validated_choice() {
+    let decision =
+        JevDecision::from_selection("D2", &probs(&[("D1", 0.10), ("D2", 0.80), ("NONE", 0.10)]));
+
+    assert_eq!(decision.destination_id, Some("D2".to_string()));
+    assert_eq!(decision.action, DecisionAction::MoveTo("D2".to_string()));
+    assert!(close(decision.confidence, 0.80));
+    assert!(close(decision.margin, 0.70));
+}
+
+#[test]
+fn from_selection_none_moves_nowhere() {
+    let decision = JevDecision::from_selection("NONE", &probs(&[("NONE", 0.70), ("D1", 0.20)]));
+
+    assert_eq!(decision.destination_id, Some("NONE".to_string()));
+    assert_eq!(decision.action, DecisionAction::None);
+}
+
+// ---------------------------------------------------------------------------
+// Probability validation (domain-owned; used by the pipeline)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn valid_probabilities_pass_validation() {
+    assert!(validate_probabilities(&probs(&[("D1", 0.82), ("NONE", 0.07)])).is_ok());
+    assert!(validate_probabilities(&[]).is_ok());
+}
+
+#[test]
+fn nan_probability_is_rejected_by_validation() {
+    assert!(validate_probabilities(&probs(&[("D1", f64::NAN)])).is_err());
+}
+
+#[test]
+fn non_finite_or_out_of_range_probability_is_rejected_by_validation() {
+    assert!(validate_probabilities(&probs(&[("D1", f64::INFINITY)])).is_err());
+    assert!(validate_probabilities(&probs(&[("D1", -0.10)])).is_err());
+    assert!(validate_probabilities(&probs(&[("D1", 1.10)])).is_err());
 }

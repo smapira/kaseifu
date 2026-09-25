@@ -156,6 +156,40 @@ async fn phase4_full_pipeline_happy_path_selects_discovered_candidate() {
 }
 
 #[tokio::test]
+async fn phase4_full_pipeline_honors_lower_ranked_candidate_id() {
+    // Candidate IDs are stable identities, not rankings: a higher score does
+    // not make an ID privileged. If Jev selects the lower-scored candidate,
+    // the decision must name exactly that candidate.
+    let fixture = make_fixture("rank-independence");
+    let search = stub_search(fixture.similar.clone());
+
+    let candidates = discovered_candidates(&fixture, search.clone());
+    assert_eq!(candidates.len(), 2);
+    let higher = &candidates[0];
+    let lower = &candidates[1];
+    assert!(higher.score >= lower.score);
+    assert_ne!(higher.id, lower.id);
+
+    let mock = mock_selecting(
+        &lower.id,
+        &[
+            (lower.id.as_str(), 0.75),
+            (higher.id.as_str(), 0.10),
+            ("NONE", 0.15),
+        ],
+    );
+
+    let decision = classify_with_search(&fixture.target, &mock, search)
+        .await
+        .expect("pipeline should succeed");
+
+    assert_eq!(decision.destination_id, Some(lower.id.clone()));
+    assert_eq!(decision.action, DecisionAction::MoveTo(lower.id.clone()));
+    assert_eq!(lower.path, fixture.root.join("Misc"));
+    assert!(lower.path.is_dir());
+}
+
+#[tokio::test]
 async fn phase4_full_pipeline_no_candidates_yields_safe_none() {
     let fixture = make_fixture("no-candidates");
     let search = stub_search(Vec::new()); // Spotlight finds nothing

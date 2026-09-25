@@ -68,43 +68,6 @@ impl DecisionContext {
             candidate_id
         ))
     }
-
-    pub fn decide(self, probabilities: Vec<(String, f64)>) -> JevDecision {
-        let mut scored: Vec<_> = probabilities;
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        if scored.is_empty() {
-            return JevDecision::new_none();
-        }
-
-        let top = scored[0].1;
-        if top.is_nan() || top.is_infinite() || top < 0.0 || top > 1.0 {
-            return JevDecision::new_none();
-        }
-
-        let top_id = scored[0].0.clone();
-
-        let second_highest: Option<f64> =
-            scored
-                .iter()
-                .enumerate()
-                .skip(1)
-                .find_map(|(_, (_, prob))| {
-                    if *prob != top && !prob.is_nan() && !prob.is_infinite() {
-                        Some(*prob)
-                    } else {
-                        None
-                    }
-                });
-
-        let margin = second_highest.map_or(0.0, |s2| top - s2);
-
-        if top_id == "NONE" {
-            return JevDecision::new(top, margin, DecisionAction::None);
-        }
-
-        JevDecision::new(top, margin, DecisionAction::MoveTo("D1".into()))
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -164,21 +127,40 @@ pub struct JevDecision {
 
 /// Local confidence/margin calculation.
 ///
-/// - `confidence` = highest finite probability (P1)
-/// - `margin` = P1 - P2 (top minus second), 0.0 when fewer than two finite
-///   probabilities exist
+/// Considers only valid probabilities (finite and within `0.0..=1.0`);
+/// anything else is ignored.
+///
+/// - `confidence` = highest valid probability (P1), 0.0 when none exist
+/// - `margin` = P1 - P2, or 0.0 when fewer than two valid probabilities
+///   exist (a lone or tied top is not a decisive margin)
 pub fn confidence_and_margin(probabilities: &[(String, f64)]) -> (f64, f64) {
     let mut values: Vec<f64> = probabilities
         .iter()
         .map(|(_, probability)| *probability)
-        .filter(|probability| probability.is_finite())
+        .filter(|probability| probability.is_finite() && (0.0..=1.0).contains(probability))
         .collect();
     values.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
 
     let top = values.first().copied().unwrap_or(0.0);
-    let second = values.get(1).copied().unwrap_or(0.0);
+    let margin = values
+        .get(1)
+        .map(|second| (top - second).max(0.0))
+        .unwrap_or(0.0);
 
-    (top, (top - second).max(0.0))
+    (top, margin)
+}
+
+/// Validate a probability distribution from an untrusted Jev response.
+///
+/// Every probability must be finite and within `0.0..=1.0`.
+pub fn validate_probabilities(probabilities: &[(String, f64)]) -> Result<(), String> {
+    for (id, probability) in probabilities {
+        if !probability.is_finite() || *probability < 0.0 || *probability > 1.0 {
+            return Err(format!("invalid probability {probability} for '{id}'"));
+        }
+    }
+
+    Ok(())
 }
 
 impl JevDecision {
@@ -200,30 +182,6 @@ impl JevDecision {
             destination_id: Some(choice.to_string()),
             confidence,
             margin,
-            action,
-        }
-    }
-
-    pub fn new(confidence: f64, margin: f64, action: DecisionAction) -> Self {
-        let value = if confidence.is_nan()
-            || confidence.is_infinite()
-            || confidence < 0.0
-            || confidence > 1.0
-        {
-            0.0
-        } else {
-            confidence
-        };
-        let margin_value =
-            if margin.is_nan() || margin.is_infinite() || margin < 0.0 || margin > 1.0 {
-                0.0
-            } else {
-                margin
-            };
-        Self {
-            destination_id: None,
-            confidence: value,
-            margin: margin_value,
             action,
         }
     }
@@ -261,15 +219,5 @@ mod tests {
         let dc = DecisionContext::from_candidates(vec!["D1".into(), "D2".into()]);
         let result = dc.validate_decision("D99");
         assert!(result.is_err(), "Unknown candidates should be rejected");
-    }
-
-    #[test]
-    fn test_decide_calculates_top_prob() {
-        assert_eq!(0.82_f64, 0.82_f64);
-    }
-
-    #[test]
-    fn test_margin_calculation() {
-        assert_eq!(0.71_f64, 0.71_f64);
     }
 }
