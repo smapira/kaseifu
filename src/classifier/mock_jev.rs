@@ -7,6 +7,7 @@
 //! CONTRACT:
 //! - Jev can select only from provided candidates (D1, D2, D3, NONE)
 //! - Jev cannot create new destination paths
+//! - The mock never validates, scores, or selects; it returns configured data
 
 use crate::models::decision::DecisionContext;
 use std::collections::HashMap;
@@ -49,18 +50,18 @@ impl Default for JevResponse {
     }
 }
 
-/// Builder for MockJevIntegration
-#[derive(Debug, Clone)]
+/// MockJevIntegration - returns the configured response verbatim.
+#[derive(Debug, Clone, Default)]
 pub struct MockJevIntegration {
-    response: Option<String>,
-    error: Option<String>,
+    result: Option<JevResponse>,
+    error: Option<JevError>,
 }
 
 impl MockJevIntegration {
-    /// Create a mock that returns the specified decision
+    /// Create a mock that returns the specified decision verbatim
     pub fn configured_decision(decision: JevResponse) -> Self {
         Self {
-            response: Some(decision.destination_id.unwrap_or_default()),
+            result: Some(decision),
             error: None,
         }
     }
@@ -68,88 +69,89 @@ impl MockJevIntegration {
     /// Create a mock that returns an error
     pub fn configured_error(message: impl Into<String>) -> Self {
         Self {
-            response: None,
-            error: Some(message.into()),
+            result: None,
+            error: Some(JevError::TransportError(message.into())),
         }
     }
 
     /// Create a mock for test case: D1 is selected
     pub fn select_d1(prob: f64) -> Self {
-        Self {
-            response: Some("D1".to_string()),
-            error: None,
-        }
+        Self::select("D1", prob)
     }
 
     /// Create a mock for test case: NONE is selected
     pub fn select_none(prob: f64) -> Self {
-        Self {
-            response: Some("NONE".to_string()),
-            error: None,
-        }
+        Self::select("NONE", prob)
     }
 
     /// Create a mock that returns an unknown candidate ID (D99)
-    /// This should pass validation and be rejected by the validation layer
+    /// This passes through the mock and is rejected by the validation layer
     pub fn select_unknown() -> Self {
-        Self {
-            response: Some("D99".to_string()),
-            error: None,
-        }
+        Self::select("D99", 0.95)
     }
 
     /// Create a mock that returns an invalid probability (NaN)
     pub fn select_nan() -> Self {
-        Self {
-            response: Some("D1".to_string()),
-            error: None,
-        }
+        Self::select("D1", f64::NAN)
     }
 
     /// Create a mock that returns an invalid probability (> 1.0)
     pub fn select_invalid_probability() -> Self {
-        Self {
-            response: Some("D1".to_string()),
-            error: None,
-        }
+        Self::select("D1", 1.5)
     }
 
-    /// Create a mock that returns invalid destination path (Jev creating path)
-    /// This should be rejected by validation
+    /// Create a mock that returns a destination path (Jev creating a path)
+    /// This passes through the mock and is rejected by the validation layer
     pub fn select_invalid_path() -> Self {
-        Self {
-            response: Some("/Users/foo/Documents".to_string()),
-            error: None,
-        }
+        Self::select("/Users/foo/Documents", 0.95)
     }
 
-    /// Create a mock for tie case (no decision possible)
+    /// Create a mock for a tie case (equal top probabilities)
     pub fn tie() -> Self {
-        Self {
-            response: Some("D1".to_string()),
-            error: None,
-        }
+        let mut probabilities = HashMap::new();
+        probabilities.insert("D1".to_string(), 0.50);
+        probabilities.insert("D2".to_string(), 0.50);
+        Self::configured_decision(JevResponse {
+            destination_id: Some("D1".to_string()),
+            probabilities,
+            confidence: 0.0,
+            margin: 0.0,
+        })
     }
 
-    /// Set the response that will be returned (for flexible testing)
+    /// Set the response destination that will be returned
     pub fn set_response(mut self, response: Option<String>) -> Self {
-        self.response = response;
+        self.result = response.map(|id| JevResponse {
+            destination_id: Some(id),
+            ..JevResponse::default()
+        });
         self
     }
 
-    /// Set the error that will be returned (for flexible testing)
+    /// Set the error that will be returned
     pub fn set_error(mut self, error: Option<String>) -> Self {
-        self.error = error;
+        self.error = error.map(JevError::TransportError);
         self
     }
-}
 
-impl Default for MockJevIntegration {
-    fn default() -> Self {
-        Self {
-            response: None,
-            error: None,
-        }
+    /// Set the probability distribution that will be returned
+    pub fn set_probabilities(mut self, probabilities: HashMap<String, f64>) -> Self {
+        let mut result = self.result.unwrap_or_default();
+        result.probabilities = probabilities;
+        self.result = Some(result);
+        self
+    }
+
+    /// Create a single-candidate selection with one configured probability
+    fn select(destination: &str, prob: f64) -> Self {
+        let mut probabilities = HashMap::new();
+        probabilities.insert(destination.to_string(), prob);
+        Self::configured_decision(JevResponse {
+            destination_id: Some(destination.to_string()),
+            probabilities,
+            confidence: 0.0,
+            margin: 0.0,
+        })
     }
 }
 
@@ -168,20 +170,10 @@ impl JevIntegration for MockJevIntegration {
         _context: &DecisionContext,
     ) -> Pin<Box<dyn Future<Output = Result<JevResponse, JevError>> + Send + '_>> {
         Box::pin(async move {
-            if let Some(ref error_msg) = self.error {
-                Err(JevError::TransportError(error_msg.clone()))
-            } else {
-                let destination = self.response.clone().unwrap_or_default();
-                if !destination.is_empty() {
-                    Ok(JevResponse {
-                        destination_id: Some(destination),
-                        probabilities: HashMap::new(),
-                        confidence: 0.0,
-                        margin: 0.0,
-                    })
-                } else {
-                    Ok(JevResponse::default())
-                }
+            match (&self.result, &self.error) {
+                (_, Some(error)) => Err(error.clone()),
+                (Some(result), None) => Ok(result.clone()),
+                (None, None) => Ok(JevResponse::default()),
             }
         })
     }
@@ -191,40 +183,84 @@ impl JevIntegration for MockJevIntegration {
 mod tests {
     use super::*;
 
+    fn configured_destination(mock: &MockJevIntegration) -> Option<String> {
+        mock.result
+            .as_ref()
+            .and_then(|response| response.destination_id.clone())
+    }
+
     #[test]
     fn test_mock_returns_configured_decision() {
         // CONTRACT: Mock should return what was configured
         let mock = MockJevIntegration::configured_decision(JevResponse::default());
-        assert!(mock.response.is_some());
-        assert_eq!(mock.response, Some("NONE".to_string()));
+        assert_eq!(configured_destination(&mock), Some("NONE".to_string()));
     }
 
     #[test]
     fn test_mock_returns_configured_error() {
         // CONTRACT: Mock should return error when configured
         let mock = MockJevIntegration::configured_error("Transport error");
-        assert!(mock.error.is_some());
-        assert_eq!(mock.error, Some("Transport error".to_string()));
+        match mock.error {
+            Some(JevError::TransportError(message)) => assert_eq!(message, "Transport error"),
+            None => panic!("error should be configured"),
+        }
     }
 
     #[test]
     fn test_mock_select_d1() {
         let mock = MockJevIntegration::select_d1(0.82_f64);
-        assert_eq!(mock.response, Some("D1".to_string()));
-        assert!((0.82_f64 - 0.82_f64).abs() < 0.01_f64);
+        assert_eq!(configured_destination(&mock), Some("D1".to_string()));
+        let probabilities = &mock.result.unwrap().probabilities;
+        assert_eq!(probabilities.get("D1"), Some(&0.82_f64));
     }
 
     #[test]
     fn test_mock_select_none() {
         let mock = MockJevIntegration::select_none(0.70_f64);
-        assert_eq!(mock.response, Some("NONE".to_string()));
-        assert!((0.70_f64 - 0.70_f64).abs() < 0.01_f64);
+        assert_eq!(configured_destination(&mock), Some("NONE".to_string()));
+        let probabilities = &mock.result.unwrap().probabilities;
+        assert_eq!(probabilities.get("NONE"), Some(&0.70_f64));
     }
 
     #[test]
     fn test_mock_select_unknown_candidate() {
         let mock = MockJevIntegration::select_unknown();
-        assert_eq!(mock.response, Some("D99".to_string()));
+        assert_eq!(configured_destination(&mock), Some("D99".to_string()));
+    }
+
+    #[test]
+    fn test_mock_configured_decision_preserves_probabilities() {
+        // CONTRACT: configured probabilities must flow through verbatim
+        let mut probabilities = HashMap::new();
+        probabilities.insert("D1".to_string(), 0.82);
+        probabilities.insert("NONE".to_string(), 0.07);
+        let mock = MockJevIntegration::configured_decision(JevResponse {
+            destination_id: Some("D1".to_string()),
+            probabilities: probabilities.clone(),
+            confidence: 0.0,
+            margin: 0.0,
+        });
+        let stored = mock.result.unwrap();
+        assert_eq!(stored.destination_id, Some("D1".to_string()));
+        assert_eq!(stored.probabilities, probabilities);
+    }
+
+    #[test]
+    fn test_mock_configured_error_leaves_no_result() {
+        let mock = MockJevIntegration::configured_error("Transport error");
+        assert!(mock.result.is_none());
+    }
+
+    #[test]
+    fn test_mock_set_response_overrides_result() {
+        let mock = MockJevIntegration::default().set_response(Some("D2".to_string()));
+        assert_eq!(configured_destination(&mock), Some("D2".to_string()));
+    }
+
+    #[test]
+    fn test_mock_set_error_overrides() {
+        let mock = MockJevIntegration::default().set_error(Some("boom".to_string()));
+        assert!(matches!(mock.error, Some(JevError::TransportError(_))));
     }
 
     #[test]
@@ -235,9 +271,13 @@ mod tests {
     }
 
     #[test]
-    fn test_mock_doesnt_store_invalid_destinations() {
-        // CONTRACT: Mock should store and return invalid paths too for validation
+    fn test_mock_stores_invalid_destinations_verbatim() {
+        // CONTRACT: Mock stores and returns invalid paths too; rejection is
+        // the validation layer's job
         let mock = MockJevIntegration::select_invalid_path();
-        assert_eq!(mock.response, Some("/Users/foo/Documents".to_string()));
+        assert_eq!(
+            configured_destination(&mock),
+            Some("/Users/foo/Documents".to_string())
+        );
     }
 }

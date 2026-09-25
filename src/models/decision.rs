@@ -13,19 +13,30 @@ pub struct DecisionContext {
 }
 
 impl DecisionContext {
+    /// Build a decision context from discovered candidate IDs.
+    ///
+    /// The given IDs are kept verbatim (deduplicated, order preserved);
+    /// discovery owns ID generation. `NONE` is always a valid choice and
+    /// does not need to be listed.
     pub fn from_candidates(candidates: Vec<String>) -> Self {
-        let decision_candidates: Vec<_> = candidates
-            .iter()
-            .filter(|id| matches!(id.as_str(), "D1" | "D2" | "D3" | "D4" | "D5" | "NONE"))
-            .map(|id| {
-                let evidence_count = if id == "NONE" { 0 } else { 0 };
-                DecisionCandidate {
-                    id: id.clone(),
-                    evidence_count,
-                    reasons: Vec::new(),
-                }
-            })
-            .collect();
+        let mut decision_candidates: Vec<DecisionCandidate> = Vec::new();
+
+        for id in candidates {
+            if id.is_empty() || id == "NONE" {
+                continue;
+            }
+            if decision_candidates
+                .iter()
+                .any(|candidate| candidate.id == id)
+            {
+                continue;
+            }
+            decision_candidates.push(DecisionCandidate {
+                id,
+                evidence_count: 0,
+                reasons: Vec::new(),
+            });
+        }
 
         Self {
             target: DecisionTarget::default(),
@@ -34,11 +45,28 @@ impl DecisionContext {
         }
     }
 
+    /// Validate that a selected ID refers to an existing candidate.
+    ///
+    /// Jev may select one of the offered candidates (`D1`, `D2`, ...) or
+    /// `NONE`. Jev may never select something that was not offered, such as
+    /// an unknown ID or a filesystem path.
     pub fn validate_decision(&self, candidate_id: &str) -> Result<String, String> {
-        match candidate_id {
-            "NONE" | "D1" | "D2" => Ok(candidate_id.to_string()),
-            _ => Err(format!("Invalid: {} not in [NONE, D1, D2]", candidate_id)),
+        if candidate_id == "NONE" {
+            return Ok(candidate_id.to_string());
         }
+
+        if self
+            .candidates
+            .iter()
+            .any(|candidate| candidate.id == candidate_id)
+        {
+            return Ok(candidate_id.to_string());
+        }
+
+        Err(format!(
+            "Invalid: {} is not an existing candidate",
+            candidate_id
+        ))
     }
 
     pub fn decide(self, probabilities: Vec<(String, f64)>) -> JevDecision {
@@ -134,7 +162,48 @@ pub struct JevDecision {
     pub action: DecisionAction,
 }
 
+/// Local confidence/margin calculation.
+///
+/// - `confidence` = highest finite probability (P1)
+/// - `margin` = P1 - P2 (top minus second), 0.0 when fewer than two finite
+///   probabilities exist
+pub fn confidence_and_margin(probabilities: &[(String, f64)]) -> (f64, f64) {
+    let mut values: Vec<f64> = probabilities
+        .iter()
+        .map(|(_, probability)| *probability)
+        .filter(|probability| probability.is_finite())
+        .collect();
+    values.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+
+    let top = values.first().copied().unwrap_or(0.0);
+    let second = values.get(1).copied().unwrap_or(0.0);
+
+    (top, (top - second).max(0.0))
+}
+
 impl JevDecision {
+    /// Build a decision from a **validated** Jev selection plus the
+    /// probability distribution that accompanied it.
+    ///
+    /// The caller must have validated `choice` against the offered
+    /// candidates first (see [`DecisionContext::validate_decision`]).
+    pub fn from_selection(choice: &str, probabilities: &[(String, f64)]) -> Self {
+        let (confidence, margin) = confidence_and_margin(probabilities);
+
+        let action = if choice == "NONE" {
+            DecisionAction::None
+        } else {
+            DecisionAction::MoveTo(choice.to_string())
+        };
+
+        Self {
+            destination_id: Some(choice.to_string()),
+            confidence,
+            margin,
+            action,
+        }
+    }
+
     pub fn new(confidence: f64, margin: f64, action: DecisionAction) -> Self {
         let value = if confidence.is_nan()
             || confidence.is_infinite()

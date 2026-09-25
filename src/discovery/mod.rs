@@ -22,11 +22,25 @@ pub use similarity::find_similar_files;
 pub fn discover(
     normalized: NormalizedFileContext,
 ) -> anyhow::Result<Vec<crate::models::candidate::CandidateDestination>> {
+    discover_with(normalized, |query, limit| {
+        crate::platform::macos::spotlight::search(query, limit)
+    })
+}
+
+/// Same as [`discover`] but with an injectable Spotlight search boundary.
+/// `search` receives the mdfind query and the result limit.
+pub fn discover_with<F>(
+    normalized: NormalizedFileContext,
+    search: F,
+) -> anyhow::Result<Vec<crate::models::candidate::CandidateDestination>>
+where
+    F: Fn(&str, usize) -> anyhow::Result<Vec<String>>,
+{
     // Step 1: Extract search terms from normalized context
     let terms = extract_terms(&normalized);
 
-    // Step 2: Search using Spotlight (mdfind)
-    let similar_files = similarity::find_similar_files(&terms)?;
+    // Step 2: Search using Spotlight (mdfind) or the provided search boundary
+    let similar_files = similarity::find_similar_files_with(&terms, search)?;
 
     // Step 3: Aggregate similar files by parent directory
     let candidates = candidates::aggregate_by_directory(similar_files)?;

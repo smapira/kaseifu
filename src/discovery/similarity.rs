@@ -12,6 +12,15 @@ use crate::platform::macos::spotlight;
 /// - `Ok(Vec<SimilarFile>)`: List of similar files found
 /// - `Err(anyhow::Error)`: If Spotlight search fails
 pub fn find_similar_files(terms: &[String]) -> anyhow::Result<Vec<SimilarFile>> {
+    find_similar_files_with(terms, |query, limit| spotlight::search(query, limit))
+}
+
+/// Same as [`find_similar_files`] but with an injectable Spotlight search
+/// boundary. `search` receives the mdfind query and the result limit.
+pub fn find_similar_files_with<F>(terms: &[String], search: F) -> anyhow::Result<Vec<SimilarFile>>
+where
+    F: Fn(&str, usize) -> anyhow::Result<Vec<String>>,
+{
     if terms.is_empty() {
         return Ok(Vec::new());
     }
@@ -23,7 +32,7 @@ pub fn find_similar_files(terms: &[String]) -> anyhow::Result<Vec<SimilarFile>> 
     let search_query = terms.join(" ");
 
     // Search using Spotlight
-    let found_paths = spotlight::search(&search_query, 50)?;
+    let found_paths = search(&search_query, 50)?;
 
     // Deduplicate and process results
     for path_str in found_paths {
