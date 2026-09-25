@@ -16,12 +16,15 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use semantic_file_organizer::classifier::jev::{JevError, JevIntegration, RealJevIntegration};
+use semantic_file_organizer::models::candidate::CandidateDestination;
 use semantic_file_organizer::models::decision::DecisionContext;
+use semantic_file_organizer::models::file_context::{NormalizedFileContext, TargetFile};
 
 // ---------------------------------------------------------------------------
 // Minimal HTTP mock server
@@ -431,5 +434,68 @@ async fn phase4_real_jev_adapter_transport_failure_is_a_transport_error() {
     assert!(
         matches!(error, JevError::TransportError(_)),
         "expected TransportError, got {error:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4D.5: a populated DecisionContext serializes into the API request
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn phase4_real_jev_adapter_serializes_populated_context_fields() {
+    let normalized = NormalizedFileContext {
+        target: TargetFile {
+            filename: "CBX（カンナビノイド）とは？｜NATURECAN.png".to_string(),
+            extension: Some("png".to_string()),
+            ..TargetFile::default()
+        },
+        semantic_signals: vec!["X:CBX".to_string()],
+        file_type: Some("public.png".to_string()),
+        ..NormalizedFileContext::default()
+    };
+    let candidates = vec![CandidateDestination {
+        id: "D1".to_string(),
+        path: PathBuf::from("/tmp/candidate-does-not-need-to-exist"),
+        score: 15.0,
+        evidence_count: 2,
+        reasons: vec!["found 2 items".to_string()],
+    }];
+    let context = DecisionContext::from_normalized(&normalized, &candidates);
+
+    let server = MockJevServer::start(vec![MockReply::Status {
+        code: 200,
+        body: r#"{"choice":"D1"}"#,
+    }]);
+
+    let response = adapter(&server)
+        .decide(&context)
+        .await
+        .expect("valid response");
+    assert_eq!(response.destination_id, Some("D1".to_string()));
+
+    let requests = server.captured_requests();
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+
+    // The adapter serializes what the domain provides; it never re-derives it.
+    assert!(
+        request.contains("NATURECAN"),
+        "filename missing in request: {request}"
+    );
+    assert!(
+        request.contains("\"png\""),
+        "extension missing in request: {request}"
+    );
+    assert!(
+        request.contains("public.png"),
+        "file type missing in request: {request}"
+    );
+    assert!(
+        request.contains("X:CBX"),
+        "semantic signals missing in request: {request}"
+    );
+    assert!(
+        request.contains("\"related_files\":2"),
+        "candidate evidence missing in request: {request}"
     );
 }

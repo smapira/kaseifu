@@ -1,5 +1,7 @@
-//! Phase 4 Decision Context - Minimal mock implementation for TDD
+//! Phase 4 Decision Context - the semantic question offered to Jev.
 
+use crate::models::candidate::CandidateDestination;
+use crate::models::file_context::NormalizedFileContext;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,34 +15,77 @@ pub struct DecisionContext {
 }
 
 impl DecisionContext {
-    /// Build a decision context from discovered candidate IDs.
+    /// Build the decision context from the production pipeline output.
     ///
-    /// The given IDs are kept verbatim (deduplicated, order preserved);
-    /// discovery owns ID generation. `NONE` is always a valid choice and
-    /// does not need to be listed.
+    /// Pure information mapping; no scoring, no selection, no policy:
+    ///
+    /// - normalized target       -> decision target (filename/extension/type)
+    /// - normalized signals      -> `semantic_signals` (verbatim; never re-derived)
+    /// - discovered candidates   -> decision candidates (id/evidence/reasons)
+    pub fn from_normalized(
+        normalized: &NormalizedFileContext,
+        candidates: &[CandidateDestination],
+    ) -> Self {
+        let target = DecisionTarget {
+            filename: normalized.target.filename.clone(),
+            extension: normalized.target.extension.clone(),
+            file_type: normalized.file_type.clone(),
+        };
+
+        let candidates = candidates
+            .iter()
+            .map(|candidate| DecisionCandidate {
+                id: candidate.id.clone(),
+                evidence_count: candidate.evidence_count,
+                reasons: candidate.reasons.clone(),
+            })
+            .collect();
+
+        Self::from_parts(target, normalized.semantic_signals.clone(), candidates)
+    }
+
+    /// Build a decision context from discovered candidate IDs alone.
+    ///
+    /// Used where only membership matters (e.g. ID-level tests); production
+    /// wiring uses [`DecisionContext::from_normalized`].
     pub fn from_candidates(candidates: Vec<String>) -> Self {
+        let candidates = candidates
+            .into_iter()
+            .map(|id| DecisionCandidate {
+                id,
+                evidence_count: 0,
+                reasons: Vec::new(),
+            })
+            .collect();
+
+        Self::from_parts(DecisionTarget::default(), Vec::new(), candidates)
+    }
+
+    /// Single construction path: ids are kept verbatim (deduplicated, order
+    /// preserved). `NONE` is always a valid choice and is never a candidate.
+    fn from_parts(
+        target: DecisionTarget,
+        semantic_signals: Vec<String>,
+        candidates: Vec<DecisionCandidate>,
+    ) -> Self {
         let mut decision_candidates: Vec<DecisionCandidate> = Vec::new();
 
-        for id in candidates {
-            if id.is_empty() || id == "NONE" {
+        for candidate in candidates {
+            if candidate.id.is_empty() || candidate.id == "NONE" {
                 continue;
             }
             if decision_candidates
                 .iter()
-                .any(|candidate| candidate.id == id)
+                .any(|existing| existing.id == candidate.id)
             {
                 continue;
             }
-            decision_candidates.push(DecisionCandidate {
-                id,
-                evidence_count: 0,
-                reasons: Vec::new(),
-            });
+            decision_candidates.push(candidate);
         }
 
         Self {
-            target: DecisionTarget::default(),
-            semantic_signals: vec![],
+            target,
+            semantic_signals,
             candidates: decision_candidates,
         }
     }

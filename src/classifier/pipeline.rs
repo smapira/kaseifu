@@ -28,15 +28,16 @@ use std::path::Path;
 use super::jev::JevIntegration;
 use crate::models::candidate::CandidateDestination;
 use crate::models::decision::{DecisionContext, JevDecision, validate_probabilities};
+use crate::models::file_context::NormalizedFileContext;
 use crate::{context, discovery, normalize};
 
 /// Run the full decision pipeline using the real Spotlight (mdfind) search.
 pub async fn classify(file: &Path, jev: &dyn JevIntegration) -> Result<JevDecision> {
-    let candidates = discover_candidates(file, |query, limit| {
+    let (normalized, candidates) = discover_candidates(file, |query, limit| {
         crate::platform::macos::spotlight::search(query, limit)
     })?;
 
-    decide_from_candidates(candidates, jev).await
+    decide_from_candidates(&normalized, candidates, jev).await
 }
 
 /// Run the full decision pipeline with an injectable Spotlight search
@@ -49,23 +50,33 @@ pub async fn classify_with_search<F>(
 where
     F: Fn(&str, usize) -> Result<Vec<String>>,
 {
-    let candidates = discover_candidates(file, search)?;
+    let (normalized, candidates) = discover_candidates(file, search)?;
 
-    decide_from_candidates(candidates, jev).await
+    decide_from_candidates(&normalized, candidates, jev).await
 }
 
 /// Observe -> Normalize -> Discover.
-fn discover_candidates<F>(file: &Path, search: F) -> Result<Vec<CandidateDestination>>
+///
+/// Returns the normalized context together with the discovered candidates:
+/// both are needed to build the `DecisionContext` without losing
+/// information or re-deriving it.
+fn discover_candidates<F>(
+    file: &Path,
+    search: F,
+) -> Result<(NormalizedFileContext, Vec<CandidateDestination>)>
 where
     F: Fn(&str, usize) -> Result<Vec<String>>,
 {
     let raw = context::builder::build(file)?; // Observe
     let normalized = normalize::normalize(raw)?; // Normalize
-    discovery::discover_with(normalized, search) // Discover
+    let candidates = discovery::discover_with(normalized.clone(), search)?; // Discover
+
+    Ok((normalized, candidates))
 }
 
 /// Ask Jev to select among the discovered candidates and validate the answer.
 async fn decide_from_candidates(
+    normalized: &NormalizedFileContext,
     candidates: Vec<CandidateDestination>,
     jev: &dyn JevIntegration,
 ) -> Result<JevDecision> {
@@ -74,8 +85,7 @@ async fn decide_from_candidates(
         return Ok(JevDecision::new_none());
     }
 
-    let decision_context =
-        DecisionContext::from_candidates(candidates.iter().map(|c| c.id.clone()).collect());
+    let decision_context = DecisionContext::from_normalized(normalized, &candidates);
 
     let response = jev
         .decide(&decision_context)
