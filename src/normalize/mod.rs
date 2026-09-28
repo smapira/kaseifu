@@ -32,6 +32,25 @@ pub fn normalize(context: FileContext) -> anyhow::Result<NormalizedFileContext> 
         }
     }
 
+    // Extract filename-based signals (F: prefix)
+    // This ensures the filename itself is used as a search term,
+    // even when Spotlight metadata lacks a title (kMDItemTitle).
+    let stem = context
+        .target
+        .path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    if !stem.is_empty() {
+        // Split camelCase and PascalCase: "AGENTS" -> ["AGENTS"], "CamelCase" -> ["Camel", "Case"]
+        for term in split_case(&stem) {
+            if !term.is_empty() {
+                semantic_signals.push(format!("F:{}", term));
+            }
+        }
+    }
+
     // Extract parent_directory from target path
     let parent_directory = context
         .target
@@ -96,6 +115,40 @@ fn parse_agent(input: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Split a string on PascalCase/camelCase boundaries.
+/// "CamelCase" -> ["Camel", "Case"], "AGENTS" -> ["AGENTS"], "hello_world" -> ["hello", "world"]
+fn split_case(input: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    let mut current = String::new();
+
+    for ch in input.chars() {
+        if ch == '_' || ch == '-' || ch == ' ' {
+            if !current.is_empty() {
+                terms.push(current.clone());
+                current.clear();
+            }
+            continue;
+        }
+
+        if ch.is_uppercase() {
+            // Check if this starts a new word
+            if !current.is_empty() && current.chars().last().map_or(false, |c| c.is_lowercase()) {
+                terms.push(current.clone());
+                current.clear();
+            }
+            current.push(ch);
+        } else {
+            current.push(ch);
+        }
+    }
+
+    if !current.is_empty() {
+        terms.push(current);
+    }
+
+    terms
 }
 
 #[cfg(test)]

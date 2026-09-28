@@ -22,10 +22,10 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use semantic_file_organizer::classifier::jev::{JevError, JevIntegration, RealJevIntegration};
-use semantic_file_organizer::models::candidate::CandidateDestination;
-use semantic_file_organizer::models::decision::DecisionContext;
-use semantic_file_organizer::models::file_context::{NormalizedFileContext, TargetFile};
+use kaseifu::classifier::jev::{JevError, JevIntegration, RealJevIntegration};
+use kaseifu::models::candidate::CandidateDestination;
+use kaseifu::models::decision::DecisionContext;
+use kaseifu::models::file_context::{NormalizedFileContext, TargetFile};
 
 const SYSTEMONE_PATH: &str = "/v1/systemone";
 

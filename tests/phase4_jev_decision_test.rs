@@ -10,7 +10,7 @@
 //! 4. margin = P1 - P2
 //! 5. Invalid probabilities never become confidence/margin
 
-use semantic_file_organizer::models::decision::{
+use kaseifu::models::decision::{
     DecisionAction, DecisionContext, JevDecision, confidence_and_margin, validate_probabilities,
 };
 

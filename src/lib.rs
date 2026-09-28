@@ -1,4 +1,4 @@
-//! Semantic file organizer library.
+//! kaseifu — Semantic file organizer for macOS.
 //!
 //! The pipeline is:
 //!
@@ -8,6 +8,16 @@
 //!   -> Discover (discovery)
 //!   -> Decide (classifier)
 //! ```
+
+/// Debug macro — only prints when `KASEIFU_DEBUG=1` is set.
+#[macro_export]
+macro_rules! debug {
+    ($($arg:tt)*) => {
+        if std::env::var("KASEIFU_DEBUG").unwrap_or_default() == "1" {
+            eprintln!("[debug] {}", format!($($arg)*));
+        }
+    };
+}
 
 pub mod classifier;
 pub mod context;

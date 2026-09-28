@@ -1,24 +1,24 @@
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
-use semantic_file_organizer::classifier::jev::{
+use kaseifu::classifier::jev::{
     JEV_API_KEY_ENV, JEV_API_URL_ENV, JevError, JevIntegration, JevResponse, RealJevIntegration,
 };
-use semantic_file_organizer::classifier::pipeline;
-use semantic_file_organizer::models::decision::DecisionContext;
-use semantic_file_organizer::operations::organize::{self, OrganizeOutcome};
-use semantic_file_organizer::operations::plan::PlanError;
-use semantic_file_organizer::operations::undo;
-use semantic_file_organizer::platform::macos::fsevents;
-use semantic_file_organizer::storage::history::{DEFAULT_DATABASE_PATH, OperationHistory};
-use semantic_file_organizer::watch::coordinator::WatchConfig;
-use semantic_file_organizer::watch::runner;
-use semantic_file_organizer::{context, discovery, normalize};
+use kaseifu::classifier::pipeline;
+use kaseifu::models::decision::DecisionContext;
+use kaseifu::operations::organize::{self, OrganizeOutcome};
+use kaseifu::operations::plan::PlanError;
+use kaseifu::operations::undo;
+use kaseifu::platform::macos::fsevents;
+use kaseifu::storage::history::{DEFAULT_DATABASE_PATH, OperationHistory};
+use kaseifu::watch::coordinator::WatchConfig;
+use kaseifu::watch::runner;
+use kaseifu::{context, discovery, normalize};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
 #[derive(Parser)]
-#[command(name = "semantic-file-organizer")]
+#[command(name = "kaseifu")]
 #[command(version, about = "Semantic file organization for macOS")]
 struct Cli {
     #[command(subcommand)]

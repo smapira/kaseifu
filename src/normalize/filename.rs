@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub fn normalize_filename(input: &str) -> Vec<String> {
     let base = input
         .rsplit('.')
@@ -24,6 +25,7 @@ pub fn normalize_filename(input: &str) -> Vec<String> {
     cleans
 }
 
+#[allow(dead_code)]
 fn remove_noise(filename: &str) -> &str {
     // Handle special files BEFORE extension stripping (e.g., .DS_Store)
     if filename == ".DS_Store" || filename == ".localized" {

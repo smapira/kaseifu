@@ -1,9 +1,18 @@
 [package]
-name = "semantic-file-organizer"
+name = "kaseifu"
 version = "0.1.0"
 edition = "2024"
-description = "Semantic file organizer for macOS using filesystem context, Spotlight metadata, and Jev."
+description = "Semantic file organizer for macOS — uses Spotlight, filesystem context, and Jev to decide where files belong."
 license = "MIT"
+repository = "https://github.com/smapira/kaseifu"
+homepage = "https://github.com/smapira/kaseifu"
+keywords = ["file-organization", "spotlight", "macos", "semantic", "cli"]
+categories = ["command-line-utilities", "filesystem"]
+readme = "README.md"
+
+[[bin]]
+name = "kaseifu"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"

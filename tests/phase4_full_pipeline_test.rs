@@ -25,12 +25,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::process;
 
-use semantic_file_organizer::classifier::jev::JevResponse;
-use semantic_file_organizer::classifier::mock_jev::MockJevIntegration;
-use semantic_file_organizer::classifier::pipeline::classify_with_search;
-use semantic_file_organizer::models::CandidateDestination;
-use semantic_file_organizer::models::decision::DecisionAction;
-use semantic_file_organizer::{context, discovery, normalize};
+use kaseifu::classifier::jev::JevResponse;
+use kaseifu::classifier::mock_jev::MockJevIntegration;
+use kaseifu::classifier::pipeline::classify_with_search;
+use kaseifu::models::CandidateDestination;
+use kaseifu::models::decision::DecisionAction;
+use kaseifu::{context, discovery, normalize};
 
 /// Temporary fixture inside the crate's own `target/` directory.
 ///

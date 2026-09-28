@@ -21,12 +21,12 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use semantic_file_organizer::classifier::jev::{JevError, JevIntegration, JevResponse};
-use semantic_file_organizer::classifier::pipeline::classify_with_search;
-use semantic_file_organizer::models::CandidateDestination;
-use semantic_file_organizer::models::decision::DecisionContext;
-use semantic_file_organizer::models::file_context::NormalizedFileContext;
-use semantic_file_organizer::{context, discovery, normalize};
+use kaseifu::classifier::jev::{JevError, JevIntegration, JevResponse};
+use kaseifu::classifier::pipeline::classify_with_search;
+use kaseifu::models::CandidateDestination;
+use kaseifu::models::decision::DecisionContext;
+use kaseifu::models::file_context::NormalizedFileContext;
+use kaseifu::{context, discovery, normalize};
 
 // ---------------------------------------------------------------------------
 // Spy JevIntegration: records the DecisionContext, decides nothing

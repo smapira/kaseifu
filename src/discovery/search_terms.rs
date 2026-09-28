@@ -12,6 +12,8 @@ use crate::models::file_context::NormalizedFileContext;
 pub fn extract_terms(normalized: &NormalizedFileContext) -> Vec<String> {
     let mut terms: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    crate::debug!("semantic_signals: {:?}", normalized.semantic_signals);
+
     for signal in &normalized.semantic_signals {
         if signal.is_empty() {
             continue;
@@ -39,7 +41,9 @@ pub fn extract_terms(normalized: &NormalizedFileContext) -> Vec<String> {
         }
     }
 
-    terms.into_iter().collect()
+    let result: Vec<String> = terms.into_iter().collect();
+    crate::debug!("extracted search terms: {:?}", result);
+    result
 }
 
 /// Keywords to filter out from search terms (system words, common prefixes, etc.)
@@ -89,7 +93,7 @@ const KEYWORD_FILTERS: [&str; 34] = [
 ///
 /// Removes empty terms and system boilerplate
 pub fn normalize_terms(terms: &[String]) -> Vec<String> {
-    terms
+    let result: Vec<String> = terms
         .iter()
         .filter(|t| !t.is_empty())
         // Convert to lowercase for case-insensitive filtering
@@ -98,7 +102,9 @@ pub fn normalize_terms(terms: &[String]) -> Vec<String> {
             !KEYWORD_FILTERS.iter().any(|f| lower.contains(f))
         })
         .map(ToOwned::to_owned)
-        .collect()
+        .collect();
+    crate::debug!("normalized terms (after filter): {:?}", result);
+    result
 }
 
 #[cfg(test)]

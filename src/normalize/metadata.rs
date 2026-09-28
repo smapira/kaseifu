@@ -76,6 +76,7 @@ fn extract_terms(title: &str) -> Vec<String> {
 #[derive(Debug, Clone, Default)]
 pub struct MetadataResult {
     pub semantic_signals: Vec<String>,
+    #[allow(dead_code)]
     pub kind: String,
     pub file_type: Option<String>,
     pub created_date: Option<String>,

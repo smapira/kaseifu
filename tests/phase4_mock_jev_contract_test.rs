@@ -17,9 +17,9 @@
 //! no candidate validation, no confidence/margin calculation,
 //! no candidate selection, no HTTP.
 
-use semantic_file_organizer::classifier::jev::JevIntegration;
-use semantic_file_organizer::classifier::mock_jev::MockJevIntegration;
-use semantic_file_organizer::models::decision::DecisionContext;
+use kaseifu::classifier::jev::JevIntegration;
+use kaseifu::classifier::mock_jev::MockJevIntegration;
+use kaseifu::models::decision::DecisionContext;
 
 fn context_with(candidate_ids: &[&str]) -> DecisionContext {
     DecisionContext::from_candidates(candidate_ids.iter().map(|s| s.to_string()).collect())

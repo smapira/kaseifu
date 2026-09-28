@@ -31,24 +31,28 @@ where
     // Combine terms into a single query
     let search_query = terms.join(" ");
 
+    crate::debug!("mdfind query: '{}'" , search_query);
+
     // Search using Spotlight
     let found_paths = search(&search_query, 50)?;
 
+    crate::debug!("Spotlight raw results: {}", found_paths.len());
+
     // Deduplicate and process results
-    for path_str in found_paths {
-        if seen_paths.contains(&path_str) {
+    for path_str in &found_paths {
+        if seen_paths.contains(path_str) {
             continue;
         }
 
         // Check if path is safe (not system directory)
-        let is_system = is_system_directory(&path_str);
+        let is_system = is_system_directory(path_str);
         if is_system {
             seen_paths.insert(path_str.clone());
             continue;
         }
 
         // Validate path exists and get parent directory
-        let path_obj = Path::new(&path_str);
+        let path_obj = Path::new(path_str.as_str());
         if path_obj.exists() {
             let parent = if let Some(p) = path_obj.parent() {
                 p.to_string_lossy().to_string()
@@ -63,9 +67,11 @@ where
                 similarity_score: 1.0,
             });
 
-            seen_paths.insert(path_str);
+            seen_paths.insert(path_str.clone());
         }
     }
+
+    crate::debug!("SimilarFile candidates (after dedup + filter): {}", results.len());
 
     Ok(results)
 }

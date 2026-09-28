@@ -37,13 +37,23 @@ where
     F: Fn(&str, usize) -> anyhow::Result<Vec<String>>,
 {
     // Step 1: Extract search terms from normalized context
-    let terms = extract_terms(&normalized);
+    let raw_terms = extract_terms(&normalized);
+    let terms = normalize_terms(&raw_terms);
+
+    crate::debug!("raw terms: {:?} -> after normalize: {:?}", raw_terms, terms);
 
     // Step 2: Search using Spotlight (mdfind) or the provided search boundary
     let similar_files = similarity::find_similar_files_with(&terms, search)?;
 
+    crate::debug!("SimilarFile count: {}", similar_files.len());
+
     // Step 3: Aggregate similar files by parent directory
     let candidates = candidates::aggregate_by_directory(similar_files)?;
+
+    crate::debug!("Candidate destinations: {}", candidates.len());
+    for c in &candidates {
+        crate::debug!("  {} path={} score={:.1} evidence={}", c.id, c.path.display(), c.score, c.evidence_count);
+    }
 
     Ok(candidates)
 }

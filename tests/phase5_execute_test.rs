@@ -3,13 +3,13 @@
 //! All filesystem tests use temporary fixtures under the crate's own
 //! `target/` directory; no user file is ever touched.
 
-use semantic_file_organizer::models::candidate::CandidateDestination;
-use semantic_file_organizer::models::decision::{DecisionAction, JevDecision};
-use semantic_file_organizer::operations::mover::{MoveError, MoveOutcome, dry_run, execute_move};
-use semantic_file_organizer::operations::plan::{PlanError, build_move_plan};
-use semantic_file_organizer::operations::undo::{UndoError, undo_last_move};
-use semantic_file_organizer::policy;
-use semantic_file_organizer::storage::history::OperationHistory;
+use kaseifu::models::candidate::CandidateDestination;
+use kaseifu::models::decision::{DecisionAction, JevDecision};
+use kaseifu::operations::mover::{MoveError, MoveOutcome, dry_run, execute_move};
+use kaseifu::operations::plan::{PlanError, build_move_plan};
+use kaseifu::operations::undo::{UndoError, undo_last_move};
+use kaseifu::policy;
+use kaseifu::storage::history::OperationHistory;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -382,7 +382,7 @@ fn valid_plan(
     Fixture,
     std::path::PathBuf,
     std::path::PathBuf,
-    semantic_file_organizer::operations::plan::MovePlan,
+    kaseifu::operations::plan::MovePlan,
 ) {
     let (fixture, source, destination_directory) = plan_fixture(tag);
     let candidates = vec![candidate("D1", &destination_directory)];

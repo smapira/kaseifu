@@ -3,12 +3,12 @@
 //! Offline only: fake events, temp fixtures, injected timestamps. No real
 //! FSEvents, no Jev API, no user directories.
 
-use semantic_file_organizer::classifier::mock_jev::MockJevIntegration;
-use semantic_file_organizer::storage::history::OperationHistory;
-use semantic_file_organizer::watch::coordinator::{
+use kaseifu::classifier::mock_jev::MockJevIntegration;
+use kaseifu::storage::history::OperationHistory;
+use kaseifu::watch::coordinator::{
     Disposition, EventCoordinator, ProcessingRequest, RawEvent, SuppressReason, WatchConfig,
 };
-use semantic_file_organizer::watch::runner::{ProcessOutcome, process_request};
+use kaseifu::watch::runner::{ProcessOutcome, process_request};
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -154,7 +154,7 @@ fn phase6_managed_data_is_ignored() {
     let fixture = make_fixture("managed");
     let data_dir = fixture.root.join("data");
     fs::create_dir_all(&data_dir).unwrap();
-    let journal = data_dir.join("semantic-file-organizer.db");
+    let journal = data_dir.join("kaseifu.db");
     write_file(&journal, "sqlite");
 
     let mut coordinator = EventCoordinator::new(config(vec![journal.clone()]));

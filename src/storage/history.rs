@@ -13,7 +13,7 @@ use rusqlite::Connection;
 use std::path::Path;
 
 /// Default journal location (see config/default.toml; git-ignored).
-pub const DEFAULT_DATABASE_PATH: &str = "data/semantic-file-organizer.db";
+pub const DEFAULT_DATABASE_PATH: &str = "data/kaseifu.db";
 
 /// One journal row.
 #[derive(Debug, Clone, PartialEq)]
