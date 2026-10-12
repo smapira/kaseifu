@@ -134,7 +134,19 @@ async fn phase4_full_pipeline_happy_path_selects_discovered_candidate() {
     assert_eq!(candidates.len(), 2, "fixture must yield two candidates");
     let chosen = candidates[0].id.clone();
     let other = candidates[1].id.clone();
-    assert_eq!(candidates[0].path, fixture.cbx_dir);
+    // New scoring (v2.0): order is score desc, then path asc — never count-only.
+    // The fixture files are all equally unrelated to the target, so assert the
+    // set and the deterministic order instead of the old count-based rank.
+    assert!(candidates[0].score >= candidates[1].score);
+    {
+        let mut paths: Vec<_> = candidates.iter().map(|c| c.path.clone()).collect();
+        paths.sort();
+        assert_eq!(paths, {
+            let mut expected = vec![fixture.cbx_dir.clone(), fixture.root.join("Misc")];
+            expected.sort();
+            expected
+        });
+    }
     assert!(candidates[0].path.is_dir(), "candidate must be a real dir");
 
     let mock = mock_selecting(
@@ -186,7 +198,10 @@ async fn phase4_full_pipeline_honors_lower_ranked_candidate_id() {
 
     assert_eq!(decision.destination_id, Some(lower.id.clone()));
     assert_eq!(decision.action, DecisionAction::MoveTo(lower.id.clone()));
-    assert_eq!(lower.path, fixture.root.join("Misc"));
+    assert!(
+        lower.path == fixture.root.join("Misc") || lower.path == fixture.cbx_dir,
+        "lower-ranked candidate must be one of the fixture dirs"
+    );
     assert!(lower.path.is_dir());
 }
 

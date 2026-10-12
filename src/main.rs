@@ -9,6 +9,8 @@ use kaseifu::operations::organize::{self, OrganizeOutcome};
 use kaseifu::operations::plan::PlanError;
 use kaseifu::operations::undo;
 use kaseifu::platform::macos::fsevents;
+use kaseifu::presentation::renderers::{discover as discover_view, generic};
+use kaseifu::presentation::{OutputFormat, resolve_mode};
 use kaseifu::storage::history::{DEFAULT_DATABASE_PATH, OperationHistory};
 use kaseifu::watch::coordinator::WatchConfig;
 use kaseifu::watch::runner;
@@ -21,6 +23,8 @@ use std::pin::Pin;
 #[command(name = "kaseifu")]
 #[command(version, about = "Semantic file organization for macOS")]
 struct Cli {
+    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Auto)]
+    format: OutputFormat,
     #[command(subcommand)]
     command: Commands,
 }
@@ -57,7 +61,13 @@ enum Commands {
     ///
     /// Searches for similar files using Spotlight and aggregates
     /// parent directories with scoring.
-    Discover { file: PathBuf },
+    Discover {
+        file: PathBuf,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        verbose: bool,
+    },
 
     /// Run the full decision pipeline for one file (Phase 4).
     ///
@@ -90,12 +100,31 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Inspect { path } => {
+            let mode = resolve_mode(cli.format);
             let ctx = context::builder::build(&path)?;
-            println!("{}", serde_json::to_string_pretty(&ctx)?);
+            if mode.rich {
+                let body = serde_json::to_string_pretty(&ctx)?;
+                if mode.color {
+                    generic::print_panel("KASEIFU / INSPECT", &body);
+                } else {
+                    println!("{}\n{}", generic::header("KASEIFU / INSPECT", false), body);
+                }
+            } else {
+                println!("{}", serde_json::to_string_pretty(&ctx)?);
+            }
         }
 
         Commands::Scan { path } => {
-            println!("Scanning: {}", path.display());
+            let mode = resolve_mode(cli.format);
+            if mode.rich {
+                println!(
+                    "{} {}",
+                    generic::header("KASEIFU / SCAN", mode.color),
+                    generic::status_line("target", &path.display().to_string(), mode.color)
+                );
+            } else {
+                println!("Scanning: {}", path.display());
+            }
         }
 
         Commands::Organize {
@@ -114,6 +143,14 @@ async fn main() -> Result<()> {
             println!("  destination: {:?}", report.decision.destination_id);
             println!("  confidence:  {:.3}", report.decision.confidence);
             println!("  margin:      {:.3}", report.decision.margin);
+            let mode = resolve_mode(cli.format);
+            if mode.rich {
+                println!(
+                    "{} {}",
+                    generic::header("KASEIFU / ORGANIZE", mode.color),
+                    generic::dry_run_banner(actually_move, mode.color)
+                );
+            }
             println!("== Policy ==\n  {:?}", report.policy);
 
             match report.outcome {
@@ -176,7 +213,15 @@ async fn main() -> Result<()> {
                 .map(|path| path.display().to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            println!("watching {roots} (dry-run: {})", !actually_move);
+            let mode = resolve_mode(cli.format);
+            if mode.rich {
+                println!(
+                    "{}",
+                    generic::watch_line("start", &roots, !actually_move, mode.color)
+                );
+            } else {
+                println!("watching {roots} (dry-run: {})", !actually_move);
+            }
 
             runner::run_loop(
                 receiver,
@@ -189,6 +234,10 @@ async fn main() -> Result<()> {
         }
 
         Commands::Undo { last } => {
+            let mode = resolve_mode(cli.format);
+            if mode.rich {
+                println!("{}", generic::header("KASEIFU / UNDO", mode.color));
+            }
             let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
 
             for _ in 0..last {
@@ -210,13 +259,25 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Discover { file } => {
+        Commands::Discover { file, all, verbose } => {
+            let mode = resolve_mode(cli.format);
             let ctx = context::builder::build(&file)?;
+            let target_name = ctx.target.filename.clone();
             let normalized = normalize::normalize(ctx)?;
             let candidates = discovery::discover(normalized)?;
 
-            // Output as pretty JSON
-            println!("{}", serde_json::to_string_pretty(&candidates)?);
+            if mode.rich {
+                if mode.color {
+                    discover_view::print_rich(&target_name, &candidates, all, verbose);
+                } else {
+                    println!(
+                        "{}",
+                        discover_view::render_text(&target_name, &candidates, all, verbose, false)
+                    );
+                }
+            } else {
+                println!("{}", serde_json::to_string_pretty(&candidates)?);
+            }
         }
 
         Commands::Classify { file } => {
@@ -224,6 +285,10 @@ async fn main() -> Result<()> {
             let observer = ObservingJevIntegration { inner: &jev };
 
             let decision = pipeline::classify(&file, &observer).await?;
+            let mode = resolve_mode(cli.format);
+            if mode.rich {
+                println!("{}", generic::header("KASEIFU / CLASSIFY", mode.color));
+            }
 
             println!();
             println!("== JevDecision ==");

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-12
+
+### Changed
+
+- **Discover scoring (breaking scale change)** — candidate `score` is now 0..=1 (was 10..16). File score = `0.60 x filename_similarity + 0.25 x token_similarity + 0.15 x extension_match`; directory score = `0.85 x max + 0.15 x mean(top 3)`. Count alone no longer ranks first
+- **Candidate IDs** — assigned after score sorting, so D1 is always the top candidate
+- **`matched_terms`** — now contains only actually-matched search terms (was the full file path)
+- **`similarity_score`** — now a computed value (was a fixed 1.0)
+- **Target parent exclusion** — the file's own parent directory is never offered as a move destination
+
+### Added
+
+- **Rich CLI Cyber Dashboard** — `rich-rs` based panels, candidate list with relative score bars, `--format auto|rich|json` (global flag), `discover --all` / `--verbose`, `NO_COLOR` / `TERM=dumb` and non-TTY fallbacks
+- **Score breakdown** — per-file filename/token/extension similarity via `KASEIFU_DEBUG=1` and `breakdown_line()`
+
 ## [0.1.0] - 2026-09-29
 
 ### Added
@@ -44,5 +59,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dead code warnings (`normalize_filename`, `remove_noise`, `MetadataResult::kind`)
 - `normalize_terms()` was not called in discover pipeline (noise filtering was skipped)
 
-[Unreleased]: https://github.com/smapira/kaseifu/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/smapira/kaseifu/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/smapira/kaseifu/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/smapira/kaseifu/releases/tag/v0.1.0

@@ -1,23 +1,34 @@
 use std::path::{Path, PathBuf};
 
 use crate::discovery::SimilarFile;
+use crate::discovery::scoring;
 use crate::platform::macos::spotlight;
 
-/// Find files similar to the given search terms using Spotlight
-///
-/// # Parameters
-/// - `terms`: Search terms to query Spotlight
-///
-/// # Returns
-/// - `Ok(Vec<SimilarFile>)`: List of similar files found
-/// - `Err(anyhow::Error)`: If Spotlight search fails
-pub fn find_similar_files(terms: &[String]) -> anyhow::Result<Vec<SimilarFile>> {
-    find_similar_files_with(terms, |query, limit| spotlight::search(query, limit))
+pub fn find_similar_files(
+    terms: &[String],
+    target_file_name: &str,
+    target_ext: Option<&str>,
+    target_path: &Path,
+    target_parent: &str,
+) -> anyhow::Result<Vec<SimilarFile>> {
+    find_similar_files_with(
+        terms,
+        target_file_name,
+        target_ext,
+        target_path,
+        target_parent,
+        spotlight::search,
+    )
 }
 
-/// Same as [`find_similar_files`] but with an injectable Spotlight search
-/// boundary. `search` receives the mdfind query and the result limit.
-pub fn find_similar_files_with<F>(terms: &[String], search: F) -> anyhow::Result<Vec<SimilarFile>>
+pub fn find_similar_files_with<F>(
+    terms: &[String],
+    target_file_name: &str,
+    target_ext: Option<&str>,
+    target_path: &Path,
+    _target_parent: &str,
+    search: F,
+) -> anyhow::Result<Vec<SimilarFile>>
 where
     F: Fn(&str, usize) -> anyhow::Result<Vec<String>>,
 {
@@ -28,52 +39,66 @@ where
     let mut results = Vec::new();
     let mut seen_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // Combine terms into a single query
     let search_query = terms.join(" ");
 
-    crate::debug!("mdfind query: '{}'" , search_query);
+    crate::debug!("mdfind query: '{}'", search_query);
 
-    // Search using Spotlight
     let found_paths = search(&search_query, 50)?;
 
     crate::debug!("Spotlight raw results: {}", found_paths.len());
 
-    // Deduplicate and process results
+    let target_canonical = canonical_key(target_path);
+
     for path_str in &found_paths {
         if seen_paths.contains(path_str) {
             continue;
         }
+        seen_paths.insert(path_str.clone());
 
-        // Check if path is safe (not system directory)
-        let is_system = is_system_directory(path_str);
-        if is_system {
-            seen_paths.insert(path_str.clone());
+        if is_system_directory(path_str) {
             continue;
         }
 
-        // Validate path exists and get parent directory
         let path_obj = Path::new(path_str.as_str());
-        if path_obj.exists() {
-            let parent = if let Some(p) = path_obj.parent() {
-                p.to_string_lossy().to_string()
-            } else {
-                path_str.clone()
-            };
-
-            results.push(SimilarFile {
-                path: PathBuf::from(path_str.clone()),
-                parent_directory: parent,
-                matched_terms: vec![path_str.clone()],
-                similarity_score: 1.0,
-            });
-
-            seen_paths.insert(path_str.clone());
+        if !path_obj.exists() {
+            continue;
         }
+        if canonical_key(path_obj) == target_canonical {
+            continue;
+        }
+
+        let parent = if let Some(p) = path_obj.parent() {
+            p.to_string_lossy().to_string()
+        } else {
+            path_str.clone()
+        };
+
+        let scored = scoring::score_file(target_file_name, target_ext, path_str, terms);
+
+        results.push(SimilarFile {
+            path: PathBuf::from(path_str.clone()),
+            parent_directory: parent,
+            matched_terms: scored.matched_terms,
+            similarity_score: scored.score,
+            filename_similarity: scored.filename_similarity,
+            token_similarity: scored.token_similarity,
+            extension_match: scored.extension_match,
+        });
     }
 
-    crate::debug!("SimilarFile candidates (after dedup + filter): {}", results.len());
+    crate::debug!(
+        "SimilarFile candidates (after dedup + filter): {}",
+        results.len()
+    );
 
     Ok(results)
+}
+
+fn canonical_key(p: &Path) -> String {
+    if let Ok(c) = std::fs::canonicalize(p) {
+        return c.to_string_lossy().to_string();
+    }
+    p.to_string_lossy().to_string()
 }
 
 /// Check if path is a system directory that should be excluded
