@@ -7,23 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- **Directory age adjustment** — evidence mtimes feed a capped bonus (`+0.10`, linear over 365 days, 1-day floor) and ties now break older-first; `established: ~N days` reasons, `SimilarFile.modified_at` (optional, JSON-compatible)
-- **Classify Rich dashboard** — Jev ranking (descending raw probabilities, top 5 + `--all`, `NONE` support, out-of-top-5 selection always shown), separate JEV DECISION and Rust POLICY verdict sections; `classify --all` / `--verbose`; decision diagnostics moved to stderr behind `--verbose`
-- **Inspect Rich dashboard** — three layers (FILE summary, SEMANTIC SIGNALS, DIRECTORY CONTEXT + `--verbose` DETAILS), nearby entries capped at 5 + `--all`, `ls -p` style markers, KiB sizes, short datetimes; JSON output unchanged
-- **Panel section dividers** (`|-- SECTION --|`) with ANSI-aware width alignment
-
-### Changed
-
-- **ASCII-only dashboard chrome** — CJK-font terminals render box-drawing (`─`) and block (`█`) glyphs double-width, scattering right borders (measured pixel-exact on-device). Frame, dividers, bars (`#`/`.`), truncation (`...`), and markers are now pure ASCII; colors and layout unchanged
-- **Smarter path shortening** — a leading `~`/`.`/root is dropped instead of kept (`.../parent/last`), so shortened paths stay distinguishable
-- **Ranked footer** — notes `(incl. NONE)` when the Jev distribution contains `NONE`
-
-### Removed
-
-- **`rich-rs` dependency** — last usage (`generic::print_panel`) replaced by the self-drawn ANSI-aware panel; one less third-party dependency
-
 ## [0.2.0] - 2026-10-12
 
 ### Changed
@@ -33,11 +16,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`matched_terms`** — now contains only actually-matched search terms (was the full file path)
 - **`similarity_score`** — now a computed value (was a fixed 1.0)
 - **Target parent exclusion** — the file's own parent directory is never offered as a move destination
+- **ASCII-only dashboard chrome** — CJK-font terminals render box-drawing (`─`) and block (`█`) glyphs double-width, scattering right borders (measured pixel-exact on-device). Frame, dividers (`|-- SECTION --|`), bars (`#`/`.`), truncation (`...`), and markers are now pure ASCII; colors and layout unchanged
+- **Smarter path shortening** — a leading `~`/`.`/root is dropped instead of kept (`.../parent/last`), so shortened paths stay distinguishable
+- **Ranked footer** — notes `(incl. NONE)` when the Jev distribution contains `NONE`
 
 ### Added
 
-- **Rich CLI Cyber Dashboard** — `rich-rs` based panels, candidate list with relative score bars, `--format auto|rich|json` (global flag), `discover --all` / `--verbose`, `NO_COLOR` / `TERM=dumb` and non-TTY fallbacks
+- **Rich CLI Cyber Dashboard** — self-drawn ANSI-aware panels, candidate list with relative score bars, `--format auto|rich|json` (global flag), `discover --all` / `--verbose`, `NO_COLOR` / `TERM=dumb` and non-TTY fallbacks
 - **Score breakdown** — per-file filename/token/extension similarity via `KASEIFU_DEBUG=1` and `breakdown_line()`
+- **Directory age adjustment** — evidence mtimes feed a capped bonus (`+0.10`, linear over 365 days, 1-day floor) and ties now break older-first; `established: ~N days` reasons, `SimilarFile.modified_at` (optional, JSON-compatible)
+- **Classify Rich dashboard** — Jev ranking (descending raw probabilities, top 5 + `--all`, `NONE` support, out-of-top-5 selection always shown), separate JEV DECISION and Rust POLICY verdict sections; `classify --all` / `--verbose`; decision diagnostics moved to stderr behind `--verbose`
+- **Inspect Rich dashboard** — three layers (FILE summary, SEMANTIC SIGNALS, DIRECTORY CONTEXT + `--verbose` DETAILS), nearby entries capped at 5 + `--all`, `ls -p` style markers, KiB sizes, short datetimes; JSON output unchanged
+- **Panel section dividers** (`|-- SECTION --|`) with ANSI-aware width alignment
+
+### Removed
+
+- **`rich-rs` dependency** — evaluated during selection, then removed after its last usage was replaced by the self-drawn panel; one less third-party dependency
 
 ## [0.1.0] - 2026-09-29
 
