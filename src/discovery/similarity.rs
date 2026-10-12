@@ -83,6 +83,7 @@ where
             filename_similarity: scored.filename_similarity,
             token_similarity: scored.token_similarity,
             extension_match: scored.extension_match,
+            modified_at: modified_rfc3339(path_obj),
         });
     }
 
@@ -92,6 +93,12 @@ where
     );
 
     Ok(results)
+}
+
+fn modified_rfc3339(p: &Path) -> Option<String> {
+    let mtime = std::fs::metadata(p).ok()?.modified().ok()?;
+    let dt: chrono::DateTime<chrono::Utc> = mtime.into();
+    Some(dt.to_rfc3339())
 }
 
 fn canonical_key(p: &Path) -> String {

@@ -22,7 +22,14 @@ fn similar(dir: &str, file: &str) -> SimilarFile {
         filename_similarity: s.filename_similarity,
         token_similarity: s.token_similarity,
         extension_match: s.extension_match,
+        modified_at: None,
     }
+}
+
+fn similar_aged(dir: &str, file: &str, modified_at: Option<&str>) -> SimilarFile {
+    let mut f = similar(dir, file);
+    f.modified_at = modified_at.map(|s| s.to_string());
+    f
 }
 
 #[test]

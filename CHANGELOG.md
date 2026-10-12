@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Directory age adjustment** — evidence mtimes feed a capped bonus (`+0.10`, linear over 365 days, 1-day floor) and ties now break older-first; `established: ~N days` reasons, `SimilarFile.modified_at` (optional, JSON-compatible)
+
 ## [0.2.0] - 2026-10-12
 
 ### Changed

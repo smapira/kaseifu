@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::discovery::SimilarFile;
-use crate::discovery::scoring::aggregate_directory_score;
+use crate::discovery::scoring::{adjust_for_age, aggregate_directory_score, median_timestamp};
 use crate::models::candidate::CandidateDestination;
 
 pub fn aggregate_by_directory(
@@ -32,42 +32,101 @@ pub fn aggregate_by_directory_with_exclusions(
     let mut dirs: Vec<_> = dir_files.keys().cloned().collect();
     dirs.sort();
 
-    let mut scored: Vec<(String, f64, usize, Vec<String>)> = Vec::new();
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let mut scored: Vec<ScoredDir> = Vec::new();
     for dir in dirs {
         let files = dir_files.get(&dir).unwrap();
         let evidence_count = files.len();
         let scores: Vec<f64> = files.iter().map(|f| f.similarity_score).collect();
-        let score = aggregate_directory_score(scores);
-        let reasons = build_reasons(files, evidence_count);
-        scored.push((dir, score, evidence_count, reasons));
+        let base = aggregate_directory_score(scores);
+        let timestamps: Vec<i64> = files.iter().filter_map(parse_mtime).collect();
+        let median_ts = median_timestamp(timestamps);
+        // Sub-day ages are ignored: avoids "~0 days" noise and keeps
+        // fresh fixtures reason-identical. The raw timestamps still
+        // order ties older-first.
+        let age_days = median_ts
+            .map(|ts| (now_unix - ts).max(0) as f64 / 86_400.0)
+            .filter(|d| *d >= 1.0);
+        let (score, bonus) = adjust_for_age(base, age_days);
+        let reasons = build_reasons(files, evidence_count, age_days, bonus);
+        crate::debug!(
+            "  dir={} base={:.2} age_days={:?} bonus={:.2} score={:.2}",
+            dir,
+            base,
+            age_days.map(|d| d.round() as i64),
+            bonus,
+            score
+        );
+        scored.push(ScoredDir {
+            dir,
+            score,
+            evidence_count,
+            median_ts,
+            reasons,
+        });
     }
 
+    // Score desc, then older evidence first, then path asc (deterministic).
+    // Directories without dates sort as newest (last among ties).
     scored.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
+        b.score
+            .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.0.cmp(&b.0))
+            .then_with(|| {
+                let ae = a.median_ts.unwrap_or(i64::MAX);
+                let be = b.median_ts.unwrap_or(i64::MAX);
+                ae.cmp(&be)
+            })
+            .then_with(|| a.dir.cmp(&b.dir))
     });
 
     let candidates: Vec<CandidateDestination> = scored
         .into_iter()
         .enumerate()
-        .map(
-            |(idx, (dir, score, evidence_count, reasons))| CandidateDestination {
-                id: format!("D{}", idx + 1),
-                path: PathBuf::from(dir),
-                score,
-                evidence_count,
-                reasons,
-            },
-        )
+        .map(|(idx, s)| CandidateDestination {
+            id: format!("D{}", idx + 1),
+            path: PathBuf::from(s.dir),
+            score: s.score,
+            evidence_count: s.evidence_count,
+            reasons: s.reasons,
+        })
         .collect();
 
     Ok(candidates)
 }
 
-fn build_reasons(files: &[SimilarFile], evidence_count: usize) -> Vec<String> {
+struct ScoredDir {
+    dir: String,
+    score: f64,
+    evidence_count: usize,
+    median_ts: Option<i64>,
+    reasons: Vec<String>,
+}
+
+fn parse_mtime(f: &SimilarFile) -> Option<i64> {
+    let s = f.modified_at.as_ref()?;
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.timestamp())
+}
+
+fn build_reasons(
+    files: &[SimilarFile],
+    evidence_count: usize,
+    age_days: Option<f64>,
+    bonus: f64,
+) -> Vec<String> {
     let mut reasons = Vec::new();
     reasons.push(format!("found {} items", evidence_count));
+    if bonus > 0.0
+        && let Some(days) = age_days
+    {
+        reasons.push(format!("established: ~{} days", days.round() as i64));
+    }
     let best_filename = files
         .iter()
         .map(|f| f.filename_similarity)
@@ -140,6 +199,7 @@ mod tests {
                 filename_similarity: 0.9,
                 token_similarity: 0.9,
                 extension_match: 1.0,
+                modified_at: None,
             },
             SimilarFile {
                 path: PathBuf::from("/Users/test/file2.pdf"),
@@ -149,6 +209,7 @@ mod tests {
                 filename_similarity: 0.8,
                 token_similarity: 0.8,
                 extension_match: 1.0,
+                modified_at: None,
             },
             SimilarFile {
                 path: PathBuf::from("/Users/docs/doc1.txt"),
@@ -158,6 +219,7 @@ mod tests {
                 filename_similarity: 0.1,
                 token_similarity: 0.1,
                 extension_match: 0.0,
+                modified_at: None,
             },
         ];
 
@@ -189,6 +251,7 @@ mod tests {
                 filename_similarity: 0.9,
                 token_similarity: 0.9,
                 extension_match: 1.0,
+                modified_at: None,
             },
             SimilarFile {
                 path: PathBuf::from("/Users/test1/f2.pdf"),
@@ -198,6 +261,7 @@ mod tests {
                 filename_similarity: 0.7,
                 token_similarity: 0.7,
                 extension_match: 1.0,
+                modified_at: None,
             },
             // D2: 1 file with 0 matched terms
             SimilarFile {
@@ -208,6 +272,7 @@ mod tests {
                 filename_similarity: 0.1,
                 token_similarity: 0.1,
                 extension_match: 0.0,
+                modified_at: None,
             },
         ];
 

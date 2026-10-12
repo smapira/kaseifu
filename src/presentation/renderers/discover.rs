@@ -34,7 +34,7 @@ pub fn build_rows(
         let reason = c
             .reasons
             .iter()
-            .take(2)
+            .take(3)
             .cloned()
             .collect::<Vec<_>>()
             .join(" \u{00b7} ");

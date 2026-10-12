@@ -218,6 +218,40 @@ fn matched_search_terms(terms: &[String], cand: &NormalizedName) -> Vec<String> 
     out
 }
 
+/// Weight of the age adjustment on directory scores (design hypothesis,
+/// validated against fixtures; filename similarity still dominates).
+pub const AGE_WEIGHT: f64 = 0.10;
+/// Median evidence age (days) at which the age bonus saturates.
+pub const AGE_REF_DAYS: f64 = 365.0;
+
+/// Median of unix timestamps, if any.
+pub fn median_timestamp(mut ts: Vec<i64>) -> Option<i64> {
+    if ts.is_empty() {
+        return None;
+    }
+    ts.sort_unstable();
+    let mid = ts.len() / 2;
+    if ts.len() % 2 == 1 {
+        Some(ts[mid])
+    } else {
+        Some((ts[mid - 1] + ts[mid]) / 2)
+    }
+}
+
+/// Age bonus in 0..=1 from a median evidence age in days: linear up to
+/// [`AGE_REF_DAYS`], clamped on both ends (future dates yield 0).
+pub fn age_bonus(median_age_days: f64) -> f64 {
+    (median_age_days / AGE_REF_DAYS).clamp(0.0, 1.0)
+}
+
+/// Apply the age adjustment to a base directory score.
+///
+/// Returns `(adjusted_score, bonus)`. Missing dates yield no adjustment.
+pub fn adjust_for_age(base: f64, median_age_days: Option<f64>) -> (f64, f64) {
+    let bonus = median_age_days.map(age_bonus).unwrap_or(0.0);
+    ((base + AGE_WEIGHT * bonus).clamp(0.0, 1.0), bonus)
+}
+
 pub fn aggregate_directory_score(mut scores: Vec<f64>) -> f64 {
     if scores.is_empty() {
         return 0.0;
@@ -227,4 +261,37 @@ pub fn aggregate_directory_score(mut scores: Vec<f64>) -> f64 {
     let top3: Vec<f64> = scores.into_iter().take(3).collect();
     let mean = top3.iter().sum::<f64>() / top3.len() as f64;
     (DIR_W_MAX * max + DIR_W_MEAN_TOP3 * mean).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn age_bonus_curve() {
+        assert_eq!(age_bonus(0.0), 0.0);
+        assert_eq!(age_bonus(-5.0), 0.0);
+        assert!((age_bonus(182.5) - 0.5).abs() < 1e-9);
+        assert_eq!(age_bonus(365.0), 1.0);
+        assert_eq!(age_bonus(10_000.0), 1.0);
+    }
+
+    #[test]
+    fn adjust_for_age_adds_bounded_bonus() {
+        let (score, bonus) = adjust_for_age(0.8, Some(365.0));
+        assert!((bonus - 1.0).abs() < 1e-9);
+        assert!((score - 0.9).abs() < 1e-9);
+        // Capped at 1.0.
+        assert_eq!(adjust_for_age(1.0, Some(365.0)).0, 1.0);
+        // Missing dates: neutral.
+        assert_eq!(adjust_for_age(0.8, None), (0.8, 0.0));
+    }
+
+    #[test]
+    fn median_timestamp_middle() {
+        assert_eq!(median_timestamp(vec![]), None);
+        assert_eq!(median_timestamp(vec![7]), Some(7));
+        assert_eq!(median_timestamp(vec![9, 1, 5]), Some(5));
+        assert_eq!(median_timestamp(vec![1, 2, 3, 100]), Some(2));
+    }
 }

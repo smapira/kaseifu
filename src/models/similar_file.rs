@@ -21,4 +21,8 @@ pub struct SimilarFile {
     /// Extension match (1.0 or 0.0). Default 0 for old JSON.
     #[serde(default)]
     pub extension_match: f64,
+    /// Evidence mtime as RFC3339 (None when unavailable). Default None
+    /// for old JSON. Used only for the directory age adjustment.
+    #[serde(default)]
+    pub modified_at: Option<String>,
 }
