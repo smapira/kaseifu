@@ -267,14 +267,7 @@ async fn main() -> Result<()> {
             let candidates = discovery::discover(normalized)?;
 
             if mode.rich {
-                if mode.color {
-                    discover_view::print_rich(&target_name, &candidates, all, verbose);
-                } else {
-                    println!(
-                        "{}",
-                        discover_view::render_text(&target_name, &candidates, all, verbose, false)
-                    );
-                }
+                discover_view::print_rich(&target_name, &candidates, all, verbose, mode.color);
             } else {
                 println!("{}", serde_json::to_string_pretty(&candidates)?);
             }

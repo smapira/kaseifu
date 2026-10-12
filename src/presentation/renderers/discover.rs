@@ -1,7 +1,13 @@
 use crate::models::candidate::CandidateDestination;
-use crate::presentation::components::path::short_path;
+use crate::presentation::components::panel;
+use crate::presentation::components::path::paint_path;
 use crate::presentation::components::score_bar::render_bar_auto;
 use crate::presentation::theme;
+
+/// Path display budget: wide enough that the differing middle of long
+/// Spotlight paths survives; overflow is shortened head-first so the
+/// last (most identifying) segment is never cut in the middle.
+pub const PATH_WIDTH: usize = 64;
 
 pub struct DiscoverRow {
     pub id: String,
@@ -49,7 +55,7 @@ pub fn build_rows(
         };
         rows.push(DiscoverRow {
             id: c.id.clone(),
-            short: short_path(&c.path.to_string_lossy(), 42),
+            short: paint_path(&c.path.to_string_lossy(), PATH_WIDTH, color),
             score: c.score,
             bar: render_bar_auto(c.score, max, color),
             reason,
@@ -59,6 +65,49 @@ pub fn build_rows(
     (rows, max)
 }
 
+fn body_lines(
+    target_name: &str,
+    candidates: &[CandidateDestination],
+    show_all: bool,
+    verbose: bool,
+    color: bool,
+) -> Vec<String> {
+    let (rows, _) = build_rows(candidates, show_all, verbose, color);
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "Target  {}",
+        theme::paint(target_name, theme::ANSI_DIM, color)
+    ));
+    if rows.is_empty() {
+        lines.push("No candidates found.".to_string());
+        return lines;
+    }
+    lines.push(String::new());
+    for r in &rows {
+        let id = theme::paint(&r.id, theme::ANSI_VIOLET, color);
+        lines.push(format!("{}  {}  {:.2}", id, r.short, r.score));
+        lines.push(format!("    {}", r.bar));
+        if !r.reason.is_empty() {
+            lines.push(format!(
+                "    {}",
+                theme::paint(&r.reason, theme::ANSI_TEAL, color)
+            ));
+        }
+        if let Some(b) = &r.breakdown {
+            lines.push(format!("    {}", theme::paint(b, theme::ANSI_DIM, color)));
+        }
+    }
+    if !show_all && candidates.len() > rows.len() {
+        lines.push(format!(
+            "Showing {} of {} (use --all)",
+            rows.len(),
+            candidates.len()
+        ));
+    }
+    lines.push("Bars show relative score within these candidates (not confidence).".to_string());
+    lines
+}
+
 pub fn render_text(
     target_name: &str,
     candidates: &[CandidateDestination],
@@ -66,40 +115,34 @@ pub fn render_text(
     verbose: bool,
     color: bool,
 ) -> String {
-    let (rows, _) = build_rows(candidates, show_all, verbose, color);
-    let mut out = String::new();
     let title = theme::paint("KASEIFU / DISCOVER", theme::ANSI_CYAN, color);
-    out.push_str(&format!("{} \u{2500} {}\n", title, target_name));
-    if rows.is_empty() {
-        out.push_str("No candidates found.\n");
-        return out;
+    let mut out = format!("{} \u{2500} {}\n", title, target_name);
+    for line in body_lines(target_name, candidates, show_all, verbose, color)
+        .iter()
+        .skip(1)
+    {
+        out.push_str(line);
+        out.push('\n');
     }
-    for r in &rows {
-        let id = theme::paint(&r.id, theme::ANSI_VIOLET, color);
-        out.push_str(&format!("{}  {}  {:.2}\n", id, r.short, r.score));
-        out.push_str(&format!("    {}\n", r.bar));
-        if !r.reason.is_empty() {
-            out.push_str(&format!(
-                "    {}\n",
-                theme::paint(&r.reason, theme::ANSI_TEAL, color)
-            ));
-        }
-        if let Some(b) = &r.breakdown {
-            out.push_str(&format!(
-                "    {}\n",
-                theme::paint(b, theme::ANSI_DIM, color)
-            ));
-        }
-    }
-    if !show_all && candidates.len() > rows.len() {
-        out.push_str(&format!(
-            "Showing {} of {} (use --all)\n",
-            rows.len(),
-            candidates.len()
-        ));
-    }
-    out.push_str("Bars show relative score within these candidates (not confidence).\n");
     out
+}
+
+/// Rich dashboard: the same rows inside a self-drawn box.
+///
+/// The box is drawn with ANSI-aware widths, so borders stay aligned
+/// whether colors are on or off.
+pub fn render_panel(
+    target_name: &str,
+    candidates: &[CandidateDestination],
+    show_all: bool,
+    verbose: bool,
+    color: bool,
+) -> String {
+    panel::frame(
+        "KASEIFU / DISCOVER",
+        &body_lines(target_name, candidates, show_all, verbose, color),
+        color,
+    )
 }
 
 pub fn print_rich(
@@ -107,28 +150,10 @@ pub fn print_rich(
     candidates: &[CandidateDestination],
     show_all: bool,
     verbose: bool,
+    color: bool,
 ) {
-    use rich_rs::{Console, Panel, Table, Text};
-    let plain = render_text(target_name, candidates, show_all, verbose, true);
-    let mut console = Console::new();
-    let text = Text::plain(&plain);
-    let panel = Panel::new(Box::new(text)).with_title("KASEIFU / DISCOVER");
-    let _ = console.print(&panel, None, None, None, false, "\n");
-    if verbose {
-        let mut table = Table::new();
-        table.add_column_str("ID");
-        table.add_column_str("score");
-        table.add_column_str("evidence");
-        for c in candidates
-            .iter()
-            .take(if show_all { candidates.len() } else { 5 })
-        {
-            table.add_row_strs(&[
-                &c.id,
-                &format!("{:.3}", c.score),
-                &c.evidence_count.to_string(),
-            ]);
-        }
-        let _ = console.print(&table, None, None, None, false, "\n");
-    }
+    print!(
+        "{}",
+        render_panel(target_name, candidates, show_all, verbose, color)
+    );
 }
