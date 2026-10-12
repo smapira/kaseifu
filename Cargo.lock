@@ -940,6 +940,7 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
+ "libc",
  "notify",
  "reqwest",
  "rich-rs",

@@ -26,6 +26,14 @@ pub fn visible_width(s: &str) -> usize {
     display_width(&strip_ansi(s))
 }
 
+/// Display budget for paths: fill the terminal width minus the row
+/// chrome (`D16  `, `  0.00`, panel borders), floored so narrow
+/// terminals still show a useful tail. Over-long paths are shortened
+/// head-first (see [`paint_path`]).
+pub fn path_budget() -> usize {
+    super::score_bar::term_width().saturating_sub(16).max(48)
+}
+
 /// Display a path relative to the current directory when possible,
 /// otherwise relative to `$HOME` (`~`), otherwise as-is.
 pub fn relative_display(path: &str) -> String {

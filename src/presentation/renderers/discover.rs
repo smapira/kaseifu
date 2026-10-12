@@ -1,13 +1,8 @@
 use crate::models::candidate::CandidateDestination;
 use crate::presentation::components::panel;
-use crate::presentation::components::path::paint_path;
+use crate::presentation::components::path::{paint_path, path_budget};
 use crate::presentation::components::score_bar::render_bar_auto;
 use crate::presentation::theme;
-
-/// Path display budget: wide enough that the differing middle of long
-/// Spotlight paths survives; overflow is shortened head-first so the
-/// last (most identifying) segment is never cut in the middle.
-pub const PATH_WIDTH: usize = 64;
 
 pub struct DiscoverRow {
     pub id: String,
@@ -55,7 +50,7 @@ pub fn build_rows(
         };
         rows.push(DiscoverRow {
             id: c.id.clone(),
-            short: paint_path(&c.path.to_string_lossy(), PATH_WIDTH, color),
+            short: paint_path(&c.path.to_string_lossy(), path_budget(), color),
             score: c.score,
             bar: render_bar_auto(c.score, max, color),
             reason,

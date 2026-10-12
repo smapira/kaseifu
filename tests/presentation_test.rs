@@ -1,6 +1,6 @@
 use kaseifu::models::candidate::CandidateDestination;
 use kaseifu::presentation::components::path::{
-    paint_path, relative_display, strip_ansi, visible_width,
+    paint_path, path_budget, relative_display, strip_ansi, visible_width,
 };
 use kaseifu::presentation::components::score_bar::{relative_percent, render_bar};
 use kaseifu::presentation::format::{OutputFormat, resolve_mode_for_test};
@@ -136,6 +136,22 @@ fn panel_lines_share_visible_width() {
             assert_eq!(visible_width(l), first, "misaligned: {}", l);
         }
         assert!(out.contains("KASEIFU / DISCOVER"));
+    }
+}
+
+#[test]
+fn path_budget_fills_wide_terminals() {
+    let prev = std::env::var("COLUMNS").ok();
+    // Wide value only: narrower widths would also shrink bars in
+    // parallel tests, but >=80 keeps every bar at 30 cells.
+    unsafe { std::env::set_var("COLUMNS", "202") };
+    let budget = path_budget();
+    assert!(budget >= 180, "budget must use the terminal: {}", budget);
+    let p = "~/Work/Weed/Trade/sinks/State Of Mind Labs/extra/deep/dir/coa";
+    assert_eq!(paint_path(p, budget, false), p);
+    match prev {
+        Some(v) => unsafe { std::env::set_var("COLUMNS", v) },
+        None => unsafe { std::env::remove_var("COLUMNS") },
     }
 }
 
