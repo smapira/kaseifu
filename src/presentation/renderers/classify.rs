@@ -49,12 +49,7 @@ fn target_summary(report: &ClassifyReport) -> String {
         .map(|ext| ext.to_uppercase())
         .or_else(|| report.target_file_type.clone())
         .unwrap_or_else(|| "unknown type".to_string());
-    format!(
-        "{} {} {}",
-        kind,
-        "\u{00b7}",
-        format_bytes(report.target_size_bytes)
-    )
+    format!("{} - {}", kind, format_bytes(report.target_size_bytes))
 }
 
 fn policy_view(policy: &DecisionAction) -> (&'static str, String) {
@@ -163,10 +158,17 @@ fn body_sections(
             ranking.push(String::new());
         }
         if !show_all && ranked.len() > limit {
+            // The ranked distribution includes NONE, which is not a
+            // destination: say so to avoid confusion with the DISCOVERY
+            // count above.
+            let scope = if ranked.iter().any(|(id, _)| id == "NONE") {
+                format!("{} (incl. NONE)", ranked.len())
+            } else {
+                ranked.len().to_string()
+            };
             ranking.push(format!(
                 "Showing {} of {} destinations (use --all)",
-                limit,
-                ranked.len()
+                limit, scope
             ));
         }
     }
@@ -181,9 +183,8 @@ fn body_sections(
             .unwrap_or_else(|| "unresolved candidate".to_string())
     };
     decision.push(format!(
-        "Selected     {} {} {}",
+        "Selected     {} - {}",
         theme::paint(selected, theme::ANSI_VIOLET, color),
-        theme::paint("\u{00b7}", theme::ANSI_DIM, color),
         selected_dir
     ));
     decision.push(format!("Confidence   {:.2}", report.decision.confidence));
@@ -199,9 +200,8 @@ fn body_sections(
             .map(|s| paint_path(s, path_budget(), color))
             .unwrap_or_else(|| "unresolved candidate".to_string());
         policy_lines.push(format!(
-            "{} {} {}",
+            "{} - {}",
             theme::paint(id, theme::ANSI_VIOLET, color),
-            theme::paint("\u{00b7}", theme::ANSI_DIM, color),
             dir
         ));
     }

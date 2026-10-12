@@ -23,7 +23,7 @@ fn bar_relative_math() {
     assert_eq!(relative_percent(0.9, 1.0), Some(90.0));
     let bar = render_bar(0.9, 1.0, 30, false);
     assert!(bar.contains("90.0%"));
-    assert_eq!(bar.chars().filter(|c| *c == '\u{2588}').count(), 27);
+    assert_eq!(bar.chars().filter(|c| *c == '#').count(), 27);
 }
 
 #[test]
@@ -102,7 +102,7 @@ fn path_truncation_keeps_last_segment() {
         "last segment must survive: {}",
         got
     );
-    assert!(got.starts_with("\u{2026}") || got.contains("\u{2026}"));
+    assert!(got.starts_with("..."), "head-first shortening: {}", got);
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn path_last_segment_emphasized_with_color() {
 #[test]
 fn visible_width_ignores_ansi() {
     assert_eq!(visible_width("a\x1b[1mb\x1b[0m"), 2);
-    assert_eq!(visible_width("\u{2588}\u{2588}"), 2);
+    assert_eq!(visible_width("ab\u{65e5}\u{672c}"), 6);
 }
 
 #[test]
@@ -129,8 +129,8 @@ fn panel_lines_share_visible_width() {
         let out = render_panel("target.pdf", &c, false, false, color);
         let lines: Vec<&str> = out.lines().collect();
         assert!(lines.len() > 3);
-        assert!(strip_ansi(lines[0]).starts_with("\u{256d}"));
-        assert!(strip_ansi(lines[lines.len() - 1]).starts_with("\u{2570}"));
+        assert!(strip_ansi(lines[0]).starts_with("+"));
+        assert!(strip_ansi(lines[lines.len() - 1]).starts_with("+"));
         let first = visible_width(lines[0]);
         for l in &lines {
             assert_eq!(visible_width(l), first, "misaligned: {}", l);
@@ -152,6 +152,19 @@ fn path_budget_fills_wide_terminals() {
     match prev {
         Some(v) => unsafe { std::env::set_var("COLUMNS", v) },
         None => unsafe { std::env::remove_var("COLUMNS") },
+    }
+}
+
+#[test]
+fn panel_is_ascii_only() {
+    let c: Vec<CandidateDestination> = (1..=3)
+        .map(|i| cand(&format!("D{}", i), 1.0 - i as f64 * 0.1))
+        .collect();
+    // Chrome must survive CJK-font terminals where box-drawing and
+    // block glyphs render double-width: emit ASCII only.
+    for color in [false, true] {
+        let out = render_panel("target.pdf", &c, false, true, color);
+        assert!(out.is_ascii(), "non-ASCII chrome:\n{}", out);
     }
 }
 

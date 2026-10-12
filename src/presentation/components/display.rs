@@ -8,7 +8,9 @@
 use crate::models::file_context::EntryKind;
 
 /// Placeholder shown when a field could not be obtained.
-pub const MISSING: &str = "\u{2014}";
+/// Plain ASCII hyphen: the em dash renders double-width on CJK-font
+/// terminals, like all other non-ASCII chrome.
+pub const MISSING: &str = "-";
 
 /// `126597` -> `"123.6 KiB"`. Binary units, one decimal above bytes.
 pub fn format_bytes(bytes: u64) -> String {

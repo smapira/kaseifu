@@ -68,8 +68,9 @@ pub fn relative_display(path: &str) -> String {
 ///
 /// - Shows [`relative_display`] instead of absolute paths.
 /// - Never cuts the last segment in the middle: over-long paths are
-///   shortened head-first (`first/…/parent/last`, then `…/parent/last`,
-///   then `…` + tail of the last segment).
+///   shortened head-first (`first/.../parent/last`, then `.../parent/last`,
+///   then `...` + tail of the last segment). A leading `~`/`.` carries no
+///   identity, so it is dropped instead of kept (`.../parent/last`).
 /// - With `color`, the last segment is bold (readable on both dark and
 ///   light themes) and the leading part is dimmed.
 pub fn paint_path(path: &str, max_len: usize, color: bool) -> String {
@@ -108,33 +109,39 @@ fn shorten_head_first(rel: &str, max_len: usize) -> String {
     }
     let segs: Vec<&str> = rel.split('/').collect();
     if segs.len() >= 3 {
-        // Keep the first segment plus the last two: `~/…/parent/last`.
-        let first = segs[0];
+        // Keep the first segment plus the last two, unless the first is
+        // a placeholder (`~`/`.`) that tells nothing: `.../parent/last`.
         let tail = segs[segs.len() - 2..].join("/");
-        let candidate = format!("{}/\u{2026}/{}", first, tail);
+        // A leading `~`, `.`, or empty root (`/data/...`) carries no
+        // identity on its own: `.../parent/last`.
+        let candidate = if segs[0] == "~" || segs[0] == "." || segs[0].is_empty() {
+            format!(".../{}", tail)
+        } else {
+            format!("{}/.../{}", segs[0], tail)
+        };
         if display_width(&candidate) <= max_len {
             return candidate;
         }
     }
     if segs.len() >= 2 {
-        // Keep the last two segments: `…/parent/last`.
+        // Keep the last two segments: `.../parent/last`.
         let tail = segs[segs.len() - 2..].join("/");
-        let candidate = format!("\u{2026}/{}", tail);
+        let candidate = format!(".../{}", tail);
         if display_width(&candidate) <= max_len {
             return candidate;
         }
         // Keep only the last segment.
         let last = segs[segs.len() - 1];
-        let candidate = format!("\u{2026}/{}", last);
+        let candidate = format!(".../{}", last);
         if display_width(&candidate) <= max_len {
             return candidate;
         }
     }
     // Last resort: left-truncate, keeping the tail intact.
     let chars: Vec<char> = rel.chars().collect();
-    let keep = max_len.saturating_sub(1).max(1);
+    let keep = max_len.saturating_sub(3).max(1);
     let tail: String = chars[chars.len() - keep..].iter().collect();
-    format!("\u{2026}{}", tail)
+    format!("...{}", tail)
 }
 
 pub fn display_width(s: &str) -> usize {

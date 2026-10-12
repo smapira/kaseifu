@@ -91,7 +91,7 @@ fn ctx_with_entries(n: usize) -> (FileContext, NormalizedFileContext) {
 fn probability_bar_uses_raw_value() {
     let bar = render_probability_bar(0.29, 30, false);
     assert!(bar.contains("29.0%"), "got: {}", bar);
-    assert_eq!(bar.chars().filter(|c| *c == '\u{2588}').count(), 9);
+    assert_eq!(bar.chars().filter(|c| *c == '#').count(), 9);
     // values are never renormalized: 0.29 of a sub-1.0 total stays 29%
     assert_eq!(percent_label(0.29), "29%");
     assert_eq!(render_probability_bar(f64::NAN, 30, false), "N/A");
@@ -121,11 +121,7 @@ fn sections_share_visible_width() {
             color,
         );
         let plain = strip_ansi(&out);
-        assert!(
-            plain.contains("\u{251c}\u{2500} JEV RANKING"),
-            "got:\n{}",
-            plain
-        );
+        assert!(plain.contains("|-- JEV RANKING"), "got:\n{}", plain);
         let widths: Vec<usize> = out.lines().map(visible_width).collect();
         assert!(
             widths.iter().all(|w| *w == widths[0]),
@@ -221,6 +217,44 @@ fn policy_is_real_verdict_and_no_move_to() {
     assert!(out2.contains("AUTO MOVE"), "got:\n{}", out2);
 }
 
+#[test]
+fn panels_are_ascii_only() {
+    // Same rule as discover: no box-drawing, blocks, or wide punctuation
+    // in emitted chrome, so CJK-font terminals cannot misalign borders.
+    let r = report(&[("D1", 0.29), ("D2", 0.23), ("NONE", 0.12)], "D1", 2);
+    let policy = policy::decision::evaluate(&r.decision);
+    let (ctx, normalized) = ctx_with_entries(7);
+    for out in [
+        classify::render_panel(&r, &policy, true, true, true),
+        inspect::render_panel(&ctx, &normalized, true, true, true),
+    ] {
+        let plain = strip_ansi(&out);
+        assert!(plain.is_ascii(), "non-ASCII chrome:\n{}", plain);
+    }
+}
+
+#[test]
+fn ranked_footer_mentions_none() {
+    let r = report(&[("D1", 0.29), ("D2", 0.23), ("NONE", 0.12)], "D1", 2);
+    let policy = policy::decision::evaluate(&r.decision);
+    // more ranked entries than shown, NONE among them
+    let r_many = report(
+        &[
+            ("D1", 0.29),
+            ("D2", 0.23),
+            ("D3", 0.10),
+            ("D4", 0.09),
+            ("D5", 0.08),
+            ("D6", 0.07),
+            ("NONE", 0.05),
+        ],
+        "D1",
+        6,
+    );
+    let out = classify::render_panel(&r_many, &policy, false, false, false);
+    assert!(out.contains("(incl. NONE)"), "got:\n{}", out);
+}
+
 // --- inspect ---
 
 #[test]
@@ -258,7 +292,7 @@ fn inspect_missing_fields_do_not_crash() {
     let out = inspect::render_panel(&ctx, &normalized, false, false, false);
     assert!(out.contains("report.pdf"));
     assert!(
-        out.contains("\u{2014}"),
+        out.contains("Type      -") || out.contains("| - "),
         "missing marker expected:\n{}",
         out
     );

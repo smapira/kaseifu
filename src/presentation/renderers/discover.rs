@@ -37,7 +37,7 @@ pub fn build_rows(
             .take(3)
             .cloned()
             .collect::<Vec<_>>()
-            .join(" \u{00b7} ");
+            .join(" - ");
         let breakdown = if verbose {
             Some(format!(
                 "score={:.3} evidence={} reasons=[{}]",
@@ -111,7 +111,7 @@ pub fn render_text(
     color: bool,
 ) -> String {
     let title = theme::paint("KASEIFU / DISCOVER", theme::ANSI_CYAN, color);
-    let mut out = format!("{} \u{2500} {}\n", title, target_name);
+    let mut out = format!("{} - {}\n", title, target_name);
     for line in body_lines(target_name, candidates, show_all, verbose, color)
         .iter()
         .skip(1)

@@ -58,7 +58,7 @@ pub fn render_bar(score: f64, max_score: f64, width: usize, color_enabled: bool)
     let filled = ((pct / 100.0) * width as f64).round() as usize;
     let filled = filled.min(width);
     let empty = width - filled;
-    let body = format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(empty));
+    let body = format!("{}{}", "#".repeat(filled), ".".repeat(empty));
     let label = format!("{:>5.1}%", pct);
     if color_enabled {
         format!(
@@ -89,7 +89,7 @@ pub fn render_probability_bar(probability: f64, width: usize, color_enabled: boo
     }
     let filled = ((probability * width as f64).round() as usize).min(width);
     let empty = width - filled;
-    let body = format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(empty));
+    let body = format!("{}{}", "#".repeat(filled), ".".repeat(empty));
     let label = format!("{:>5.1}%", probability * 100.0);
     if color_enabled {
         format!(
