@@ -43,11 +43,3 @@ pub fn watch_line(event: &str, path: &str, dry_run: bool, color: bool) -> String
         }
     )
 }
-
-pub fn print_panel(title: &str, body: &str) {
-    use rich_rs::{Console, Panel, Text};
-    let mut console = Console::new();
-    let combined = format!("{}\n{}", title, body);
-    let panel = Panel::new(Box::new(Text::plain(&combined))).with_title(title);
-    let _ = console.print(&panel, None, None, None, false, "\n");
-}

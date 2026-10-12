@@ -76,3 +76,43 @@ pub fn render_bar(score: f64, max_score: f64, width: usize, color_enabled: bool)
 pub fn render_bar_auto(score: f64, max_score: f64, color_enabled: bool) -> String {
     render_bar(score, max_score, bar_width(), color_enabled)
 }
+
+/// Render an **absolute** probability bar: the fill is `probability` itself
+/// (`0.29` fills 29% of the width), never renormalized against its peers.
+///
+/// This is the Jev-ranking bar. The discover renderer keeps using
+/// [`render_bar`] (relative score within its candidates); the two must not
+/// be confused. Out-of-range or non-finite inputs render as `N/A`.
+pub fn render_probability_bar(probability: f64, width: usize, color_enabled: bool) -> String {
+    if !probability.is_finite() || probability < 0.0 || probability > 1.0 {
+        return "N/A".to_string();
+    }
+    let filled = ((probability * width as f64).round() as usize).min(width);
+    let empty = width - filled;
+    let body = format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(empty));
+    let label = format!("{:>5.1}%", probability * 100.0);
+    if color_enabled {
+        format!(
+            "{}{}{} {}",
+            theme::ANSI_MINT,
+            body,
+            theme::ANSI_RESET,
+            label
+        )
+    } else {
+        format!("{} {}", body, label)
+    }
+}
+
+pub fn render_probability_bar_auto(probability: f64, color_enabled: bool) -> String {
+    render_probability_bar(probability, bar_width(), color_enabled)
+}
+
+/// Whole-percent label for ranking rows (`0.29` -> `"29%"`).
+/// Non-finite or out-of-range inputs render as `N/A`.
+pub fn percent_label(probability: f64) -> String {
+    if !probability.is_finite() || probability < 0.0 || probability > 1.0 {
+        return "N/A".to_string();
+    }
+    format!("{}%", (probability * 100.0).round() as u32)
+}

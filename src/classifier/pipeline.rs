@@ -37,7 +37,9 @@ pub async fn classify(file: &Path, jev: &dyn JevIntegration) -> Result<JevDecisi
         crate::platform::macos::spotlight::search(query, limit)
     })?;
 
-    decide_from_candidates(&normalized, &candidates, jev).await
+    let (decision, _) = decide_from_candidates(&normalized, &candidates, jev).await?;
+
+    Ok(decision)
 }
 
 /// Run the full decision pipeline and also return the discovered candidates.
@@ -52,9 +54,63 @@ pub async fn classify_with_candidates(
         crate::platform::macos::spotlight::search(query, limit)
     })?;
 
-    let decision = decide_from_candidates(&normalized, &candidates, jev).await?;
+    let (decision, _) = decide_from_candidates(&normalized, &candidates, jev).await?;
 
     Ok((decision, candidates))
+}
+
+/// Everything a Rich renderer needs to display one classification.
+///
+/// Built in a single pipeline pass: the decision, the raw Jev probability
+/// distribution (never renormalized downstream), the discovered candidates
+/// for ID-to-directory resolution, and the target/signal summary.
+/// Read-only payload: renderers must not mutate it.
+#[derive(Debug, Clone)]
+pub struct ClassifyReport {
+    pub decision: JevDecision,
+    pub probabilities: Vec<(String, f64)>,
+    pub candidates: Vec<CandidateDestination>,
+    pub target_filename: String,
+    pub target_extension: Option<String>,
+    pub target_file_type: Option<String>,
+    pub target_size_bytes: u64,
+    pub semantic_signals: Vec<String>,
+}
+
+/// Run the full decision pipeline and keep everything needed for display.
+///
+/// Same single pass as [`classify`]; the report additionally carries the
+/// validated probability distribution and the candidate list so renderers
+/// never re-run Discovery or Jev (v3.1 section 9).
+pub async fn classify_report(file: &Path, jev: &dyn JevIntegration) -> Result<ClassifyReport> {
+    classify_report_with_search(file, jev, |query, limit| {
+        crate::platform::macos::spotlight::search(query, limit)
+    })
+    .await
+}
+
+/// [`classify_report`] with an injectable Spotlight search boundary.
+pub async fn classify_report_with_search<F>(
+    file: &Path,
+    jev: &dyn JevIntegration,
+    search: F,
+) -> Result<ClassifyReport>
+where
+    F: Fn(&str, usize) -> Result<Vec<String>>,
+{
+    let (normalized, candidates) = discover_candidates(file, search)?;
+    let (decision, probabilities) = decide_from_candidates(&normalized, &candidates, jev).await?;
+
+    Ok(ClassifyReport {
+        decision,
+        probabilities,
+        candidates,
+        target_filename: normalized.target.filename.clone(),
+        target_extension: normalized.target.extension.clone(),
+        target_file_type: normalized.file_type.clone(),
+        target_size_bytes: normalized.size_bytes,
+        semantic_signals: normalized.semantic_signals.clone(),
+    })
 }
 
 /// Run the full decision pipeline with an injectable Spotlight search
@@ -69,7 +125,9 @@ where
 {
     let (normalized, candidates) = discover_candidates(file, search)?;
 
-    decide_from_candidates(&normalized, &candidates, jev).await
+    let (decision, _) = decide_from_candidates(&normalized, &candidates, jev).await?;
+
+    Ok(decision)
 }
 
 /// Observe -> Normalize -> Discover.
@@ -92,14 +150,17 @@ where
 }
 
 /// Ask Jev to select among the discovered candidates and validate the answer.
+///
+/// Returns the validated decision together with the raw probability
+/// distribution (kept for display; never renormalized downstream).
 async fn decide_from_candidates(
     normalized: &NormalizedFileContext,
     candidates: &[CandidateDestination],
     jev: &dyn JevIntegration,
-) -> Result<JevDecision> {
+) -> Result<(JevDecision, Vec<(String, f64)>)> {
     if candidates.is_empty() {
         // No choices exist; never invent one and never ask Jev.
-        return Ok(JevDecision::new_none());
+        return Ok((JevDecision::new_none(), Vec::new()));
     }
 
     let decision_context = DecisionContext::from_normalized(normalized, candidates);
@@ -127,5 +188,8 @@ async fn decide_from_candidates(
     validate_probabilities(&probabilities)
         .map_err(|error| anyhow!("malformed Jev response: {error}"))?;
 
-    Ok(JevDecision::from_selection(&validated, &probabilities))
+    Ok((
+        JevDecision::from_selection(&validated, &probabilities),
+        probabilities,
+    ))
 }

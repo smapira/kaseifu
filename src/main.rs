@@ -9,7 +9,9 @@ use kaseifu::operations::organize::{self, OrganizeOutcome};
 use kaseifu::operations::plan::PlanError;
 use kaseifu::operations::undo;
 use kaseifu::platform::macos::fsevents;
-use kaseifu::presentation::renderers::{discover as discover_view, generic};
+use kaseifu::presentation::renderers::{
+    classify as classify_view, discover as discover_view, generic, inspect as inspect_view,
+};
 use kaseifu::presentation::{OutputFormat, resolve_mode};
 use kaseifu::storage::history::{DEFAULT_DATABASE_PATH, OperationHistory};
 use kaseifu::watch::coordinator::WatchConfig;
@@ -32,7 +34,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Build and display FileContext JSON.
-    Inspect { path: PathBuf },
+    Inspect {
+        path: PathBuf,
+        /// Show all directory entries and evidence (default: up to 5).
+        #[arg(long)]
+        all: bool,
+        /// Show the DETAILS layer (full paths, schema, raw metadata).
+        #[arg(long)]
+        verbose: bool,
+    },
 
     /// Scan a directory.
     Scan { path: PathBuf },
@@ -73,7 +83,15 @@ enum Commands {
     ///
     /// Observe -> Normalize -> Discover -> Jev -> validated JevDecision.
     /// This command never moves the file (execution is a later phase).
-    Classify { file: PathBuf },
+    Classify {
+        file: PathBuf,
+        /// Show all ranked candidates (default: top 5).
+        #[arg(long)]
+        all: bool,
+        /// Show extra detail (full paths, evidence breakdowns).
+        #[arg(long)]
+        verbose: bool,
+    },
 
     /// Watch directories and organize changed files automatically (Phase 6).
     ///
@@ -99,16 +117,12 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Inspect { path } => {
+        Commands::Inspect { path, all, verbose } => {
             let mode = resolve_mode(cli.format);
             let ctx = context::builder::build(&path)?;
             if mode.rich {
-                let body = serde_json::to_string_pretty(&ctx)?;
-                if mode.color {
-                    generic::print_panel("KASEIFU / INSPECT", &body);
-                } else {
-                    println!("{}\n{}", generic::header("KASEIFU / INSPECT", false), body);
-                }
+                let normalized = normalize::normalize(ctx.clone())?;
+                inspect_view::print_rich(&ctx, &normalized, all, verbose, mode.color);
             } else {
                 println!("{}", serde_json::to_string_pretty(&ctx)?);
             }
@@ -273,30 +287,36 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Classify { file } => {
+        Commands::Classify { file, all, verbose } => {
             let jev = build_jev_integration()?;
-            let observer = ObservingJevIntegration { inner: &jev };
+            let observer = ObservingJevIntegration {
+                inner: &jev,
+                verbose,
+            };
 
-            let decision = pipeline::classify(&file, &observer).await?;
+            let report = pipeline::classify_report(&file, &observer).await?;
+            // Rust Policy verdict: Jev's `move_to` selection is never shown
+            // as a move permission; AutoMove/Review/Leave comes from here.
+            let policy = kaseifu::policy::decision::evaluate(&report.decision);
             let mode = resolve_mode(cli.format);
             if mode.rich {
-                println!("{}", generic::header("KASEIFU / CLASSIFY", mode.color));
+                classify_view::print_rich(&report, &policy, all, verbose, mode.color);
+            } else {
+                println!("{}", serde_json::to_string_pretty(&report.decision)?);
             }
-
-            println!();
-            println!("== JevDecision ==");
-            println!("{}", serde_json::to_string_pretty(&decision)?);
         }
     }
 
     Ok(())
 }
 
-/// Minimal decision observability for the `classify` entry point: prints the
+/// Minimal decision observability for the `classify` entry point: notes the
 /// `DecisionContext` handed to Jev and the raw response, then delegates.
-/// Contains no business logic.
+/// Contains no business logic. Diagnostics go to stderr and only with
+/// `--verbose`, so Rich/JSON on stdout is never polluted.
 struct ObservingJevIntegration<'a> {
     inner: &'a dyn JevIntegration,
+    verbose: bool,
 }
 
 impl JevIntegration for ObservingJevIntegration<'_> {
@@ -304,22 +324,24 @@ impl JevIntegration for ObservingJevIntegration<'_> {
         &self,
         context: &DecisionContext,
     ) -> Pin<Box<dyn Future<Output = Result<JevResponse, JevError>> + Send + '_>> {
-        println!("== Target ==");
-        println!("  filename:  {}", context.target().filename);
-        println!("  extension: {:?}", context.target().extension);
-        println!("  file_type: {:?}", context.target().file_type);
+        if self.verbose {
+            eprintln!("== Target ==");
+            eprintln!("  filename:  {}", context.target().filename);
+            eprintln!("  extension: {:?}", context.target().extension);
+            eprintln!("  file_type: {:?}", context.target().file_type);
 
-        println!("== Semantic signals ==");
-        for signal in context.semantic_signals() {
-            println!("  {signal}");
-        }
+            eprintln!("== Semantic signals ==");
+            for signal in context.semantic_signals() {
+                eprintln!("  {signal}");
+            }
 
-        println!("== Candidates sent to Jev ==");
-        for candidate in context.candidates() {
-            println!(
-                "  {}: {} ({} related files)",
-                candidate.id, candidate.path, candidate.evidence_count
-            );
+            eprintln!("== Candidates sent to Jev ==");
+            for candidate in context.candidates() {
+                eprintln!(
+                    "  {}: {} ({} related files)",
+                    candidate.id, candidate.path, candidate.evidence_count
+                );
+            }
         }
 
         let inner = self.inner;
@@ -330,11 +352,13 @@ impl JevIntegration for ObservingJevIntegration<'_> {
 
             match &response {
                 Ok(response) => {
-                    println!("== Jev response ==");
-                    println!("  selection:     {:?}", response.destination_id);
-                    println!("  probabilities: {:?}", response.probabilities);
+                    if self.verbose {
+                        eprintln!("== Jev response ==");
+                        eprintln!("  selection:     {:?}", response.destination_id);
+                        eprintln!("  probabilities: {:?}", response.probabilities);
+                    }
                 }
-                Err(error) => println!("== Jev error ==\n  {error}"),
+                Err(error) => eprintln!("== Jev error ==\n  {error}"),
             }
 
             response
