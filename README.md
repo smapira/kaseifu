@@ -1,4 +1,6 @@
-# kaseifu — Semantic File Organizer
+# Kaseifu — Semantic File Organizer
+
+![Kaseifu hero](assets/hero.png)
 
 A macOS-first semantic file organizer written in Rust.
 
@@ -225,3 +227,7 @@ All six phases are implemented:
 ## License
 
 MIT
+
+---
+
+*Hero artwork: [aahub.org](https://aahub.org)*
