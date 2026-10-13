@@ -1,7 +1,11 @@
-//! Terminal prompts for interactive commands (`setup`, `auth set-key`).
+//! Terminal prompts for interactive commands (`setup`, `auth set-key`, and
+//! the on-demand key entry in `classify`/`organize`/`watch`).
 //!
 //! Secret input disables terminal echo and is never logged. All prompts
 //! refuse to run without a TTY so scripts get an error instead of a hang.
+//! Prompts are written to **stderr**: stdout stays parseable when it is
+//! redirected or piped (`--format json`), and the prompt is still visible
+//! when stdout is not a terminal.
 
 use anyhow::{Context, Result};
 use std::io::{IsTerminal, Write};
@@ -37,13 +41,16 @@ fn require_tty() -> Result<()> {
 }
 
 fn show_prompt(prompt: &str, default: Option<&str>) -> Result<()> {
+    // stderr, not stdout: the answer is the only thing a caller may parse,
+    // and a redirected stdout must not swallow the prompt (which would look
+    // like a hang).
+    let mut stderr = std::io::stderr();
     match default {
-        Some(current) => print!("{prompt} [{current}]: "),
-        None => print!("{prompt}: "),
+        Some(current) => write!(stderr, "{prompt} [{current}]: "),
+        None => write!(stderr, "{prompt}: "),
     }
-    std::io::stdout()
-        .flush()
-        .context("flush prompt to terminal")?;
+    .context("write prompt to terminal")?;
+    stderr.flush().context("flush prompt to terminal")?;
     Ok(())
 }
 
@@ -70,7 +77,7 @@ fn read_secret_trimmed() -> Result<String> {
     let mut input = String::new();
     let read = std::io::stdin().read_line(&mut input);
     drop(guard);
-    println!();
+    eprintln!();
     read.context("read secret from terminal")?;
     Ok(input.trim().to_string())
 }
