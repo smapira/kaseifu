@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use crate::classifier::jev::JevIntegration;
 use crate::models::decision::DecisionAction;
-use crate::operations::organize::{OrganizeOutcome, organize_file};
+use crate::operations::organize::{OrganizeOutcome, organize_file_with};
 use crate::operations::plan::PlanError;
 use crate::storage::history::OperationHistory;
 use crate::watch::coordinator::{
@@ -47,10 +47,30 @@ pub async fn process_request(
     history: &OperationHistory,
     execute: bool,
 ) -> ProcessOutcome {
+    process_request_with(
+        request,
+        coordinator,
+        jev,
+        history,
+        execute,
+        crate::policy::decision::Thresholds::default(),
+    )
+    .await
+}
+
+/// Process one request with explicit policy thresholds (user TOML overrides).
+pub async fn process_request_with(
+    request: &ProcessingRequest,
+    coordinator: &mut EventCoordinator,
+    jev: &dyn JevIntegration,
+    history: &OperationHistory,
+    execute: bool,
+    thresholds: crate::policy::decision::Thresholds,
+) -> ProcessOutcome {
     // Deduplication: the path is locked for the duration of processing.
     coordinator.begin_processing(&request.path);
 
-    let outcome = match organize_file(&request.path, jev, history, execute).await {
+    let outcome = match organize_file_with(&request.path, jev, history, execute, thresholds).await {
         Ok(report) => match report.outcome {
             OrganizeOutcome::Moved {
                 operation_id,
@@ -135,6 +155,7 @@ pub async fn run_loop(
     history: &OperationHistory,
     execute: bool,
     config: WatchConfig,
+    thresholds: crate::policy::decision::Thresholds,
 ) -> Result<()> {
     let mut coordinator = EventCoordinator::new(config);
 
@@ -154,7 +175,15 @@ pub async fn run_loop(
         // so the Jev API is never called for a rejected event.
         for request in coordinator.drain_due(Instant::now()) {
             println!("detected {}", request.path.display());
-            let outcome = process_request(&request, &mut coordinator, jev, history, execute).await;
+            let outcome = process_request_with(
+                &request,
+                &mut coordinator,
+                jev,
+                history,
+                execute,
+                thresholds,
+            )
+            .await;
             log_outcome(&request.path, &outcome);
         }
 

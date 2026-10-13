@@ -49,11 +49,32 @@ pub async fn organize_file(
     history: &OperationHistory,
     execute: bool,
 ) -> Result<OrganizeReport> {
+    organize_file_with(
+        file,
+        jev,
+        history,
+        execute,
+        policy::decision::Thresholds::default(),
+    )
+    .await
+}
+
+/// Observe -> Normalize -> Discover -> Jev -> Policy -> Plan -> Execute.
+///
+/// Uses explicit policy thresholds (user TOML overrides) for both the policy
+/// verdict and the move-plan gate, so the two always agree.
+pub async fn organize_file_with(
+    file: &Path,
+    jev: &dyn JevIntegration,
+    history: &OperationHistory,
+    execute: bool,
+    thresholds: policy::decision::Thresholds,
+) -> Result<OrganizeReport> {
     // Phase 4: decision (the candidate list is needed to resolve the path).
     let (decision, candidates) = pipeline::classify_with_candidates(file, jev).await?;
 
     // Phase 5: policy.
-    let action = policy::decision::evaluate(&decision);
+    let action = policy::decision::evaluate_with(&decision, thresholds);
 
     let candidate_path = decision
         .destination_id
@@ -62,7 +83,7 @@ pub async fn organize_file(
         .map(|candidate| candidate.path.clone());
 
     // Phase 5: plan + safe execution.
-    let outcome = match plan::build_move_plan(file, &decision, &candidates) {
+    let outcome = match plan::build_move_plan_with(file, &decision, &candidates, thresholds) {
         Ok(plan) => {
             let planned_destination = plan.destination_path.clone();
 

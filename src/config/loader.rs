@@ -1,0 +1,278 @@
+//! User TOML configuration: schema, loading, validation, atomic saving.
+//!
+//! The API key is never part of this file. Unknown keys are rejected so
+//! typos fail loudly instead of being silently ignored.
+
+use super::storage::{ensure_parent, user_config_path};
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+
+/// Top-level user configuration (every field optional; defaults fill gaps).
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UserConfig {
+    /// Jev endpoint/model section.
+    pub jev: JevSection,
+    /// Classifier thresholds section.
+    pub classifier: ClassifierSection,
+    /// Local operation flags section.
+    pub operations: OperationsSection,
+}
+
+/// `[jev]` section of the user configuration.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct JevSection {
+    /// API endpoint URL (base URL or full `/v1/systemone` URL).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    /// Model alias sent to the API.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// `[classifier]` section of the user configuration.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ClassifierSection {
+    /// Threshold values for the policy engine.
+    pub thresholds: ThresholdSection,
+}
+
+/// `[classifier.thresholds]` section of the user configuration.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ThresholdSection {
+    /// Minimum confidence for automatic moves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_move_confidence: Option<f64>,
+    /// Minimum margin over the second-best candidate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_move_margin: Option<f64>,
+    /// Below this confidence the file is left in place.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_confidence: Option<f64>,
+}
+
+/// `[operations]` section of the user configuration.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OperationsSection {
+    /// Default to dry run unless `--execute` is passed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dry_run: Option<bool>,
+    /// Record moves in the journal so they can be undone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_undo: Option<bool>,
+}
+
+/// Load the user configuration from its standard location.
+///
+/// A missing file is not an error: it yields an empty configuration and the
+/// application boots with defaults.
+pub fn load_user() -> Result<UserConfig> {
+    load_from(&user_config_path())
+}
+
+/// Load a configuration from an explicit path (missing file yields defaults).
+pub fn load_from(path: &Path) -> Result<UserConfig> {
+    if !path.exists() {
+        return Ok(UserConfig::default());
+    }
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("read configuration {}", path.display()))?;
+    let config = parse_toml(&text)?;
+    validate(&config)?;
+    Ok(config)
+}
+
+/// Parse TOML text into a configuration (unknown keys are rejected).
+pub fn parse_toml(text: &str) -> Result<UserConfig> {
+    toml::from_str(text).context("parse configuration TOML")
+}
+
+/// Validate every set value; unset values are always valid.
+pub fn validate(config: &UserConfig) -> Result<()> {
+    validate_endpoint(config.jev.endpoint.as_deref())?;
+    validate_model(config.jev.model.as_deref())?;
+    validate_threshold(
+        "classifier.thresholds.auto_move_confidence",
+        config.classifier.thresholds.auto_move_confidence,
+    )?;
+    validate_threshold(
+        "classifier.thresholds.auto_move_margin",
+        config.classifier.thresholds.auto_move_margin,
+    )?;
+    validate_threshold(
+        "classifier.thresholds.review_confidence",
+        config.classifier.thresholds.review_confidence,
+    )?;
+    Ok(())
+}
+
+fn validate_endpoint(value: Option<&str>) -> Result<()> {
+    let Some(endpoint) = value else {
+        return Ok(());
+    };
+    validate_endpoint_value(endpoint)
+}
+
+/// Check one endpoint URL (shared by the loader and `config set`).
+pub fn validate_endpoint_value(endpoint: &str) -> Result<()> {
+    let url = url::Url::parse(endpoint).with_context(|| "invalid jev.endpoint URL")?;
+    if url.scheme() != "https" && url.scheme() != "http" {
+        anyhow::bail!("invalid jev.endpoint URL scheme (expected http or https)");
+    }
+    Ok(())
+}
+
+fn validate_model(value: Option<&str>) -> Result<()> {
+    if value.is_some_and(|model| model.trim().is_empty()) {
+        anyhow::bail!("invalid jev.model (must not be empty)");
+    }
+    Ok(())
+}
+
+fn validate_threshold(name: &str, value: Option<f64>) -> Result<()> {
+    if value.is_some_and(|v| !(0.0..=1.0).contains(&v)) {
+        anyhow::bail!("invalid {name} (expected a number between 0 and 1)");
+    }
+    Ok(())
+}
+
+/// Save a configuration atomically: write a sibling temp file, then rename.
+///
+/// Validation runs first so a failed update keeps the existing file intact.
+pub fn save_to(path: &Path, config: &UserConfig) -> Result<()> {
+    validate(config)?;
+    ensure_parent(path)?;
+    let text = toml::to_string_pretty(config).context("serialize configuration")?;
+    write_atomically(path, text.as_bytes())
+}
+
+fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
+    let temp = sibling_temp_path(path)?;
+    std::fs::write(&temp, contents)
+        .with_context(|| format!("write temporary configuration {}", temp.display()))?;
+    std::fs::rename(&temp, path).with_context(|| {
+        format!(
+            "replace configuration {} (temp file kept at {})",
+            path.display(),
+            temp.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn sibling_temp_path(path: &Path) -> Result<PathBuf> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| CONFIG_TMP_FALLBACK.to_string());
+    Ok(parent.join(format!(".{name}.tmp-{}", std::process::id())))
+}
+
+/// Fallback file name used only when the target path has no file name.
+const CONFIG_TMP_FALLBACK: &str = "config.toml";
+
+// ---------------------------------------------------------------------------
+// `config set` support
+// ---------------------------------------------------------------------------
+
+/// Settings writable through `config set` (the API key is never one of them).
+pub const SUPPORTED_KEYS: &[&str] = &[
+    "jev.endpoint",
+    "jev.model",
+    "classifier.thresholds.auto_move_confidence",
+    "classifier.thresholds.auto_move_margin",
+    "classifier.thresholds.review_confidence",
+    "operations.dry_run",
+    "operations.enable_undo",
+];
+
+/// Apply one `config set` update (typed parsing plus validation).
+pub fn apply_setting(config: &mut UserConfig, key: &str, value: &str) -> Result<()> {
+    match key {
+        "jev.endpoint" => set_endpoint(&mut config.jev.endpoint, value),
+        "jev.model" => set_model(&mut config.jev.model, value),
+        "classifier.thresholds.auto_move_confidence" => set_threshold(
+            &mut config.classifier.thresholds.auto_move_confidence,
+            key,
+            value,
+        ),
+        "classifier.thresholds.auto_move_margin" => set_threshold(
+            &mut config.classifier.thresholds.auto_move_margin,
+            key,
+            value,
+        ),
+        "classifier.thresholds.review_confidence" => set_threshold(
+            &mut config.classifier.thresholds.review_confidence,
+            key,
+            value,
+        ),
+        "operations.dry_run" => set_flag(&mut config.operations.dry_run, key, value),
+        "operations.enable_undo" => set_flag(&mut config.operations.enable_undo, key, value),
+        _ => reject_unknown_key(key),
+    }
+}
+
+fn set_endpoint(slot: &mut Option<String>, value: &str) -> Result<()> {
+    validate_endpoint_value(value)?;
+    *slot = Some(value.to_string());
+    Ok(())
+}
+
+fn set_model(slot: &mut Option<String>, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        anyhow::bail!("invalid jev.model (must not be empty)");
+    }
+    *slot = Some(value.to_string());
+    Ok(())
+}
+
+fn set_threshold(slot: &mut Option<f64>, name: &str, value: &str) -> Result<()> {
+    let parsed: f64 = value
+        .parse()
+        .with_context(|| format!("invalid {name} (expected a number between 0 and 1)"))?;
+    validate_threshold(name, Some(parsed))?;
+    *slot = Some(parsed);
+    Ok(())
+}
+
+fn set_flag(slot: &mut Option<bool>, name: &str, value: &str) -> Result<()> {
+    let parsed =
+        parse_bool(value).with_context(|| format!("invalid {name} (expected true or false)"))?;
+    *slot = Some(parsed);
+    Ok(())
+}
+
+fn parse_bool(value: &str) -> Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" | "1" => Ok(true),
+        "false" | "no" | "off" | "0" => Ok(false),
+        _ => anyhow::bail!("expected true or false"),
+    }
+}
+
+fn reject_unknown_key(key: &str) -> Result<()> {
+    if is_secret_key(key) {
+        anyhow::bail!(
+            "refused: the API key cannot be stored with `config set` (use `auth set-key`)"
+        );
+    }
+    anyhow::bail!(
+        "unknown setting `{key}` (supported: {})",
+        SUPPORTED_KEYS.join(", ")
+    )
+}
+
+fn is_secret_key(key: &str) -> bool {
+    let normalized: String = key
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    normalized.contains("apikey")
+}

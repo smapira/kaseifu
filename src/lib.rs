@@ -19,9 +19,12 @@ macro_rules! debug {
     };
 }
 
+pub mod auth;
 pub mod classifier;
+pub mod config;
 pub mod context;
 pub mod discovery;
+pub mod doctor;
 pub mod models;
 pub mod normalize;
 pub mod operations;

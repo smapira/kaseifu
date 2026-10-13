@@ -162,6 +162,19 @@ impl RealJevIntegration {
         self
     }
 
+    /// Create an adapter from resolved configuration (preferred entry point).
+    ///
+    /// Resolution (CLI > env > user TOML/Keychain > defaults) happens in
+    /// `crate::config`; the adapter only receives the outcome, so it never
+    /// searches the environment or the working directory itself.
+    pub fn from_resolved(config: &crate::config::JevConfig) -> Self {
+        Self::new(
+            config.endpoint.clone(),
+            config.api_key.as_ref().map(|key| key.expose().to_string()),
+        )
+        .with_model(config.model.clone())
+    }
+
     /// Create an adapter from the environment (`JEV_API_URL`,
     /// `JEV_API_KEY`, optional `JEV_MODEL`). Credentials are never read from
     /// source or config files.

@@ -1,9 +1,13 @@
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use kaseifu::classifier::jev::{
-    JEV_API_KEY_ENV, JEV_API_URL_ENV, JevError, JevIntegration, JevResponse, RealJevIntegration,
-};
+use kaseifu::auth::keychain::{AuthError, KeychainStore, SecretStore};
+use kaseifu::auth::prompt;
+use kaseifu::classifier::jev::{JevError, JevIntegration, JevResponse, RealJevIntegration};
 use kaseifu::classifier::pipeline;
+use kaseifu::config::loader::validate_endpoint_value;
+use kaseifu::config::{
+    CliOverrides, ResolvedConfig, apply_setting, load_user, resolve, resolve_with_env, save_to,
+};
 use kaseifu::models::decision::DecisionContext;
 use kaseifu::operations::organize::{self, OrganizeOutcome};
 use kaseifu::operations::plan::PlanError;
@@ -27,6 +31,12 @@ use std::pin::Pin;
 struct Cli {
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Auto)]
     format: OutputFormat,
+    /// Override the Jev endpoint URL (highest priority).
+    #[arg(long, global = true)]
+    jev_endpoint: Option<String>,
+    /// Override the Jev model alias (highest priority).
+    #[arg(long, global = true)]
+    jev_model: Option<String>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -110,12 +120,68 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// First-time setup wizard (settings to TOML, API key to Keychain).
+    Setup {
+        /// Probe endpoint reachability after saving (uses the network).
+        #[arg(long)]
+        check_connection: bool,
+    },
+
+    /// Manage the Jev API key in the macOS Keychain.
+    Auth {
+        #[command(subcommand)]
+        action: AuthCommands,
+    },
+
+    /// Show or update user settings (TOML; never secrets).
+    Config {
+        #[command(subcommand)]
+        action: ConfigCommands,
+    },
+
+    /// Diagnose configuration and environment (ASCII report).
+    Doctor {
+        /// Probe endpoint reachability (uses the network).
+        #[arg(long)]
+        check_connection: bool,
+    },
+}
+
+/// `auth` subcommands (the key itself is never a CLI argument).
+#[derive(Subcommand)]
+enum AuthCommands {
+    /// Read the API key interactively and store it in the Keychain.
+    SetKey,
+    /// Show whether an API key is stored (never the key itself).
+    Status,
+    /// Delete the stored API key (asks first unless `--yes`).
+    RemoveKey {
+        /// Delete without asking for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+/// `config` subcommands.
+#[derive(Subcommand)]
+enum ConfigCommands {
+    /// Show effective settings (secrets are never shown).
+    Show,
+    /// Set one setting, e.g. `config set jev.model jev-latest`.
+    Set {
+        /// Setting key (see `config show` for the supported list).
+        key: String,
+        /// New value.
+        value: String,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let format = cli.format;
+    let overrides = cli_overrides(&cli);
     match cli.command {
         Commands::Inspect { path, all, verbose } => handle_inspect(&path, all, verbose, format),
         Commands::Scan { path } => {
@@ -126,16 +192,24 @@ async fn main() -> Result<()> {
             file,
             execute,
             dry_run,
-        } => handle_organize(&file, execute, dry_run, format).await,
+        } => handle_organize(&file, execute, dry_run, format, &overrides).await,
         Commands::Watch {
             paths,
             execute,
             dry_run,
-        } => handle_watch(&paths, execute, dry_run, format).await,
+        } => handle_watch(&paths, execute, dry_run, format, &overrides).await,
         Commands::Undo { last } => handle_undo(last, format),
         Commands::Discover { file, all, verbose } => handle_discover(&file, all, verbose, format),
         Commands::Classify { file, all, verbose } => {
-            handle_classify(&file, all, verbose, format).await
+            handle_classify(&file, all, verbose, format, &overrides).await
+        }
+        Commands::Setup { check_connection } => {
+            handle_setup(&overrides, check_connection, format).await
+        }
+        Commands::Auth { action } => handle_auth(action, format),
+        Commands::Config { action } => handle_config(action, format),
+        Commands::Doctor { check_connection } => {
+            handle_doctor(&overrides, check_connection, format).await
         }
     }
 }
@@ -173,13 +247,23 @@ async fn handle_organize(
     execute: bool,
     dry_run: bool,
     format: OutputFormat,
+    overrides: &CliOverrides,
 ) -> Result<()> {
     let actually_move = execute && !dry_run;
 
-    let jev = build_jev_integration()?;
+    let resolved = resolve_for(overrides)?;
+    validate_endpoint_value(&resolved.jev.endpoint)?;
+    let jev = RealJevIntegration::from_resolved(&resolved.jev);
     let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
 
-    let report = organize::organize_file(file, &jev, &history, actually_move).await?;
+    let report = organize::organize_file_with(
+        file,
+        &jev,
+        &history,
+        actually_move,
+        policy_thresholds(&resolved),
+    )
+    .await?;
 
     println!("== Decision ==");
     println!("  destination: {:?}", report.decision.destination_id);
@@ -243,6 +327,7 @@ async fn handle_watch(
     execute: bool,
     dry_run: bool,
     format: OutputFormat,
+    overrides: &CliOverrides,
 ) -> Result<()> {
     let actually_move = execute && !dry_run;
 
@@ -252,7 +337,9 @@ async fn handle_watch(
         }
     }
 
-    let jev = build_jev_integration()?;
+    let resolved = resolve_for(overrides)?;
+    validate_endpoint_value(&resolved.jev.endpoint)?;
+    let jev = RealJevIntegration::from_resolved(&resolved.jev);
     let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
 
     let (sender, receiver) = std::sync::mpsc::channel();
@@ -265,6 +352,7 @@ async fn handle_watch(
         &history,
         actually_move,
         WatchConfig::default(),
+        policy_thresholds(&resolved),
     )
     .await?;
     Ok(())
@@ -348,8 +436,11 @@ async fn handle_classify(
     all: bool,
     verbose: bool,
     format: OutputFormat,
+    overrides: &CliOverrides,
 ) -> Result<()> {
-    let jev = build_jev_integration()?;
+    let resolved = resolve_for(overrides)?;
+    validate_endpoint_value(&resolved.jev.endpoint)?;
+    let jev = RealJevIntegration::from_resolved(&resolved.jev);
     let observer = ObservingJevIntegration {
         inner: &jev,
         verbose,
@@ -358,7 +449,8 @@ async fn handle_classify(
     let report = pipeline::classify_report(file, &observer).await?;
     // Rust Policy verdict: Jev's `move_to` selection is never shown
     // as a move permission; AutoMove/Review/Leave comes from here.
-    let policy = kaseifu::policy::decision::evaluate(&report.decision);
+    let policy =
+        kaseifu::policy::decision::evaluate_with(&report.decision, policy_thresholds(&resolved));
     let mode = resolve_mode(format);
     if mode.rich {
         classify_view::print_rich(&report, &policy, all, verbose, mode.color);
@@ -424,42 +516,444 @@ impl JevIntegration for ObservingJevIntegration<'_> {
     }
 }
 
-/// Build the real Jev adapter from configuration.
+/// CLI overrides carried by the global flags (never secrets).
+fn cli_overrides(cli: &Cli) -> CliOverrides {
+    CliOverrides {
+        endpoint: cli.jev_endpoint.clone(),
+        model: cli.jev_model.clone(),
+    }
+}
+
+/// Resolve settings for this invocation.
 ///
-/// Values are read from the process environment, falling back to the
-/// project-local `.env` (which is git-ignored). Credentials are never
-/// printed and never stored anywhere else.
-fn build_jev_integration() -> Result<RealJevIntegration> {
-    let url = config_value(JEV_API_URL_ENV)
-        .or_else(|| config_value("JEV_API_BASE_URL"))
-        .context("JEV_API_URL is not set (environment or .env)")?;
-    let api_key = config_value(JEV_API_KEY_ENV);
-
-    Ok(RealJevIntegration::new(url, api_key))
+/// Priority: CLI overrides > environment (including the project-local `.env`
+/// for developers) > user TOML plus Keychain > application defaults.
+/// Credentials are never printed and never stored anywhere else.
+fn resolve_for(overrides: &CliOverrides) -> Result<ResolvedConfig> {
+    let store = KeychainStore::production();
+    resolve(overrides, &store)
 }
 
-fn config_value(name: &str) -> Option<String> {
-    std::env::var(name).ok().or_else(|| dotenv_value(name))
+/// Policy thresholds from resolved configuration (user TOML may tune them).
+fn policy_thresholds(resolved: &ResolvedConfig) -> kaseifu::policy::decision::Thresholds {
+    kaseifu::policy::decision::Thresholds {
+        auto_move_confidence: resolved.auto_move_confidence,
+        auto_move_margin: resolved.auto_move_margin,
+        review_confidence: resolved.review_confidence,
+    }
 }
 
-fn dotenv_value(name: &str) -> Option<String> {
-    let contents = std::fs::read_to_string(".env").ok()?;
+// ---------------------------------------------------------------------------
+// Setup / auth / config / doctor (v3.3 user-facing configuration)
+// ---------------------------------------------------------------------------
 
-    contents.lines().find_map(|line| {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            return None;
+/// Emit a command report: JSON for `--format json`, an ASCII panel for Rich,
+/// plain `label: value` lines otherwise. Secrets must never be in `lines`.
+fn emit_report(format: OutputFormat, title: &str, lines: &[String], json: &str) {
+    if format == OutputFormat::Json {
+        println!("{json}");
+        return;
+    }
+    let mode = resolve_mode(format);
+    if mode.rich {
+        print!(
+            "{}",
+            kaseifu::presentation::components::panel::frame(title, lines, mode.color)
+        );
+    } else {
+        for line in lines {
+            println!("{line}");
         }
-        let (key, value) = line.split_once('=')?;
-        if key.trim() != name {
-            return None;
-        }
-        Some(
-            value
-                .trim()
-                .trim_matches('"')
-                .trim_matches('\'')
-                .to_string(),
-        )
+    }
+}
+
+/// Status word for a boolean check (ASCII only).
+fn check_word(ok: bool) -> &'static str {
+    if ok { "ok" } else { "FAIL" }
+}
+
+// --- setup ---------------------------------------------------------------
+
+/// Answers collected by the setup wizard (the key is only a new value).
+struct SetupInputs {
+    endpoint: String,
+    model: String,
+    api_key: Option<String>,
+}
+
+/// `setup`: interactive first-time configuration.
+async fn handle_setup(
+    overrides: &CliOverrides,
+    check_connection: bool,
+    format: OutputFormat,
+) -> Result<()> {
+    let store = KeychainStore::production();
+    let file = load_user().unwrap_or_default();
+    let current = resolve_with_env(overrides, &file, &store)?;
+    let keychain_has_key = store.get().is_ok();
+
+    emit_setup_intro(&current, keychain_has_key, format);
+    let inputs = prompt_setup_inputs(&current, keychain_has_key)?;
+    apply_setup_inputs(&inputs, &store)?;
+
+    let verified = resolve_for(overrides)?;
+    let report = kaseifu::doctor::diagnose(&verified, &store, check_connection).await;
+    emit_setup_summary(&verified, &report, format);
+    Ok(())
+}
+
+fn emit_setup_intro(current: &ResolvedConfig, keychain_has_key: bool, format: OutputFormat) {
+    let key_state = if current.api_key_from_env {
+        "provided via environment"
+    } else if keychain_has_key {
+        "stored"
+    } else {
+        "not configured"
+    };
+    let lines = vec![
+        "Welcome to kaseifu".to_string(),
+        format!("Jev API endpoint: {}", current.jev.endpoint),
+        format!("Model: {}", current.jev.model),
+        format!("API key: {key_state}"),
+    ];
+    emit_report(
+        format,
+        "KASEIFU / SETUP",
+        &lines,
+        &setup_json(current, keychain_has_key),
+    );
+}
+
+fn setup_json(current: &ResolvedConfig, keychain_has_key: bool) -> String {
+    let configured = current.jev.api_key.is_some();
+    serde_json::json!({
+        "endpoint": current.jev.endpoint,
+        "model": current.jev.model,
+        "api_key_configured": configured,
+        "api_key_in_keychain": keychain_has_key,
     })
+    .to_string()
+}
+
+fn prompt_setup_inputs(current: &ResolvedConfig, keychain_has_key: bool) -> Result<SetupInputs> {
+    let endpoint = prompt_endpoint(&current.jev.endpoint)?;
+    let model = prompt_model(&current.jev.model)?;
+    let api_key = prompt_setup_key(keychain_has_key)?;
+    Ok(SetupInputs {
+        endpoint,
+        model,
+        api_key,
+    })
+}
+
+fn prompt_endpoint(current: &str) -> Result<String> {
+    let input = prompt::prompt_line("Jev API endpoint", Some(current))?;
+    let endpoint = or_current(input, current);
+    validate_endpoint_value(&endpoint)?;
+    Ok(endpoint)
+}
+
+fn prompt_model(current: &str) -> Result<String> {
+    let input = prompt::prompt_line("Model", Some(current))?;
+    let model = or_current(input, current);
+    if model.trim().is_empty() {
+        anyhow::bail!("invalid model (must not be empty)");
+    }
+    Ok(model)
+}
+
+fn or_current(input: String, current: &str) -> String {
+    if input.trim().is_empty() {
+        current.to_string()
+    } else {
+        input
+    }
+}
+
+fn prompt_setup_key(keychain_has_key: bool) -> Result<Option<String>> {
+    if keychain_has_key && !prompt::confirm("Replace the stored API key?", false)? {
+        return Ok(None);
+    }
+    let secret = prompt::prompt_secret("Jev API key")?;
+    if secret.trim().is_empty() {
+        anyhow::bail!("API key must not be empty");
+    }
+    Ok(Some(secret))
+}
+
+fn apply_setup_inputs(inputs: &SetupInputs, store: &dyn SecretStore) -> Result<()> {
+    let mut file = load_user().unwrap_or_default();
+    file.jev.endpoint = Some(inputs.endpoint.clone());
+    file.jev.model = Some(inputs.model.clone());
+    save_to(&kaseifu::config::user_config_path(), &file)?;
+    if let Some(secret) = &inputs.api_key {
+        store
+            .set(secret)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn emit_setup_summary(
+    verified: &ResolvedConfig,
+    report: &kaseifu::doctor::DoctorReport,
+    format: OutputFormat,
+) {
+    let key_state = status_word(verified.jev.api_key.is_some());
+    let mut lines = vec![
+        format!("{} API key saved to macOS Keychain", check_word(true)),
+        format!("{} Configuration saved", check_word(true)),
+        format!("Endpoint: {}", verified.jev.endpoint),
+        format!("Model: {}", verified.jev.model),
+        format!("API key: {key_state}"),
+        format!("Setup {}", setup_verdict(report)),
+    ];
+    lines.push(format!(
+        "Jev connectivity: {}",
+        connectivity_word(&report.connectivity)
+    ));
+    let json = serde_json::json!({
+        "endpoint": verified.jev.endpoint,
+        "model": verified.jev.model,
+        "api_key_configured": verified.jev.api_key.is_some(),
+        "connectivity": connectivity_word(&report.connectivity),
+    })
+    .to_string();
+    emit_report(format, "KASEIFU / SETUP", &lines, &json);
+}
+
+fn setup_verdict(report: &kaseifu::doctor::DoctorReport) -> &'static str {
+    if report.checks.iter().all(|check| check.ok) {
+        "complete"
+    } else {
+        "complete with warnings (run doctor)"
+    }
+}
+
+fn status_word(configured: bool) -> &'static str {
+    if configured {
+        "Configured"
+    } else {
+        "Not configured"
+    }
+}
+
+fn connectivity_word(connectivity: &kaseifu::doctor::Connectivity) -> String {
+    match connectivity {
+        kaseifu::doctor::Connectivity::NotTested => "Not tested".to_string(),
+        kaseifu::doctor::Connectivity::Reachable => "Reachable".to_string(),
+        kaseifu::doctor::Connectivity::Unreachable(detail) => format!("Unreachable ({detail})"),
+    }
+}
+
+// --- auth ----------------------------------------------------------------
+
+/// `auth`: dispatch to the Keychain subcommands.
+fn handle_auth(action: AuthCommands, format: OutputFormat) -> Result<()> {
+    match action {
+        AuthCommands::SetKey => handle_auth_set_key(format),
+        AuthCommands::Status => handle_auth_status(format),
+        AuthCommands::RemoveKey { yes } => handle_auth_remove_key(yes, format),
+    }
+}
+
+fn keychain_store() -> KeychainStore {
+    KeychainStore::production()
+}
+
+fn handle_auth_set_key(format: OutputFormat) -> Result<()> {
+    let store = keychain_store();
+    if store.get().is_ok() && !prompt::confirm("Replace the stored API key?", false)? {
+        let lines = vec!["API key unchanged".to_string()];
+        emit_report(
+            format,
+            "KASEIFU / AUTH",
+            &lines,
+            r#"{"stored":false,"unchanged":true}"#,
+        );
+        return Ok(());
+    }
+    let secret = prompt::prompt_secret("Jev API key")?;
+    if secret.trim().is_empty() {
+        anyhow::bail!("API key must not be empty");
+    }
+    store
+        .set(&secret)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let lines = vec!["API key saved to macOS Keychain".to_string()];
+    emit_report(format, "KASEIFU / AUTH", &lines, r#"{"stored":true}"#);
+    Ok(())
+}
+
+fn handle_auth_status(format: OutputFormat) -> Result<()> {
+    let store = keychain_store();
+    let file = load_user().unwrap_or_default();
+    let cli = CliOverrides::default();
+    let resolved = kaseifu::config::resolve_with_env(&cli, &file, &store)?;
+    let (state, storage) = key_status(&resolved, &store);
+    let lines = vec![
+        "Jev Authentication".to_string(),
+        "Provider: Jev".to_string(),
+        format!("API Key: {state}"),
+        format!("Storage: {storage}"),
+        format!("Endpoint: {}", resolved.jev.endpoint),
+    ];
+    let json = serde_json::json!({
+        "provider": "jev",
+        "api_key_configured": resolved.jev.api_key.is_some(),
+        "storage": storage,
+        "endpoint": resolved.jev.endpoint,
+    })
+    .to_string();
+    emit_report(format, "KASEIFU / AUTH", &lines, &json);
+    Ok(())
+}
+
+/// Key presence for display (never the key itself).
+///
+/// A Keychain failure is reported as-is instead of degrading to
+/// "Not configured" so the cause stays visible.
+fn key_status(resolved: &ResolvedConfig, store: &dyn SecretStore) -> (String, String) {
+    if resolved.api_key_from_env {
+        return ("Configured".to_string(), "Environment".to_string());
+    }
+    match store.get() {
+        Ok(_) => ("Configured".to_string(), "macOS Keychain".to_string()),
+        Err(AuthError::NotFound) => ("Not configured".to_string(), "-".to_string()),
+        Err(error) => ("Unknown".to_string(), error.to_string()),
+    }
+}
+
+fn handle_auth_remove_key(yes: bool, format: OutputFormat) -> Result<()> {
+    let store = keychain_store();
+    if matches!(store.get(), Err(AuthError::NotFound)) {
+        let lines = vec!["No API key is stored".to_string()];
+        emit_report(
+            format,
+            "KASEIFU / AUTH",
+            &lines,
+            r#"{"removed":false,"reason":"not-found"}"#,
+        );
+        return Ok(());
+    }
+    if !yes && !prompt::confirm("Delete the stored API key?", false)? {
+        let lines = vec!["API key unchanged".to_string()];
+        emit_report(
+            format,
+            "KASEIFU / AUTH",
+            &lines,
+            r#"{"removed":false,"reason":"cancelled"}"#,
+        );
+        return Ok(());
+    }
+    match store.delete() {
+        Ok(()) => {
+            let lines = vec!["API key deleted from macOS Keychain".to_string()];
+            emit_report(format, "KASEIFU / AUTH", &lines, r#"{"removed":true}"#);
+        }
+        Err(AuthError::NotFound) => {
+            let lines = vec!["No API key is stored".to_string()];
+            emit_report(
+                format,
+                "KASEIFU / AUTH",
+                &lines,
+                r#"{"removed":false,"reason":"not-found"}"#,
+            );
+        }
+        Err(error) => return Err(anyhow::anyhow!(error.to_string())),
+    }
+    Ok(())
+}
+
+// --- config --------------------------------------------------------------
+
+/// `config`: dispatch to the TOML subcommands.
+fn handle_config(action: ConfigCommands, format: OutputFormat) -> Result<()> {
+    match action {
+        ConfigCommands::Show => handle_config_show(format),
+        ConfigCommands::Set { key, value } => handle_config_set(&key, &value, format),
+    }
+}
+
+fn handle_config_show(format: OutputFormat) -> Result<()> {
+    let store = keychain_store();
+    let file = load_user().unwrap_or_default();
+    let cli = CliOverrides::default();
+    let resolved = kaseifu::config::resolve_with_env(&cli, &file, &store)?;
+    let (state, _) = key_status(&resolved, &store);
+    let lines = vec![
+        "[jev]".to_string(),
+        format!("endpoint = {}", resolved.jev.endpoint),
+        format!("model = {}", resolved.jev.model),
+        "[classifier.thresholds]".to_string(),
+        format!("auto_move_confidence = {}", resolved.auto_move_confidence),
+        format!("auto_move_margin = {}", resolved.auto_move_margin),
+        format!("review_confidence = {}", resolved.review_confidence),
+        "[operations]".to_string(),
+        format!("dry_run = {}", resolved.dry_run),
+        format!("enable_undo = {}", resolved.enable_undo),
+        format!("API key: {state}"),
+    ];
+    let json = serde_json::json!({
+        "jev": {"endpoint": resolved.jev.endpoint, "model": resolved.jev.model},
+        "classifier": {"thresholds": {
+            "auto_move_confidence": resolved.auto_move_confidence,
+            "auto_move_margin": resolved.auto_move_margin,
+            "review_confidence": resolved.review_confidence,
+        }},
+        "operations": {"dry_run": resolved.dry_run, "enable_undo": resolved.enable_undo},
+        "api_key_configured": resolved.jev.api_key.is_some(),
+    })
+    .to_string();
+    emit_report(format, "KASEIFU / CONFIG", &lines, &json);
+    Ok(())
+}
+
+fn handle_config_set(key: &str, value: &str, format: OutputFormat) -> Result<()> {
+    let mut file = load_user().unwrap_or_default();
+    apply_setting(&mut file, key, value)?;
+    save_to(&kaseifu::config::user_config_path(), &file)?;
+    let lines = vec![format!("Updated {key}")];
+    let json = serde_json::json!({"updated": key}).to_string();
+    emit_report(format, "KASEIFU / CONFIG", &lines, &json);
+    Ok(())
+}
+
+// --- doctor --------------------------------------------------------------
+
+/// `doctor`: local diagnostics plus optional connectivity probing.
+async fn handle_doctor(
+    overrides: &CliOverrides,
+    check_connection: bool,
+    format: OutputFormat,
+) -> Result<()> {
+    let store = keychain_store();
+    let file = load_user().unwrap_or_default();
+    let resolved = resolve_with_env(overrides, &file, &store)?;
+    let report = kaseifu::doctor::diagnose(&resolved, &store, check_connection).await;
+    emit_doctor_report(&report, format);
+    Ok(())
+}
+
+fn emit_doctor_report(report: &kaseifu::doctor::DoctorReport, format: OutputFormat) {
+    let mut lines: Vec<String> = report
+        .checks
+        .iter()
+        .map(|check| format!("{} {}: {}", check_word(check.ok), check.name, check.detail))
+        .collect();
+    lines.push(format!(
+        "Jev connectivity: {}",
+        connectivity_word(&report.connectivity)
+    ));
+    let json = serde_json::json!({
+        "checks": report.checks.iter().map(|check| serde_json::json!({
+            "name": check.name,
+            "ok": check.ok,
+            "detail": check.detail,
+        })).collect::<Vec<_>>(),
+        "connectivity": connectivity_word(&report.connectivity),
+        "endpoint": report.endpoint,
+    })
+    .to_string();
+    emit_report(format, "KASEIFU / DOCTOR", &lines, &json);
 }

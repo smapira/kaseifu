@@ -73,6 +73,22 @@ cd kaseifu
 cargo install --path .
 ```
 
+### Quick Start
+
+Run the setup wizard once:
+
+```bash
+kaseifu setup
+```
+
+Classify a file:
+
+```bash
+kaseifu classify ~/Desktop/example.pdf
+```
+
+No environment variables or `.env` file are required.
+
 ### Inspect a file
 
 Print the `FileContext` JSON that forms the basis of candidate discovery and classification.
@@ -141,6 +157,46 @@ kaseifu watch --path ~/Downloads --execute
 
 Events are filtered, debounced, deduplicated, and stability-checked before the pipeline runs.
 
+### Setup
+
+Interactive first-time configuration. General settings go to
+`~/Library/Application Support/kaseifu/config.toml`, the API key goes to
+the macOS Keychain (never to a file, never to shell history):
+
+```bash
+kaseifu setup
+```
+
+### Auth
+
+Manage the stored API key:
+
+```bash
+kaseifu auth set-key      # read the key interactively, store it in the Keychain
+kaseifu auth status       # show whether a key is stored (never the key itself)
+kaseifu auth remove-key   # delete the stored key (asks first)
+```
+
+### Config
+
+Show or update general settings (the API key cannot be set this way):
+
+```bash
+kaseifu config show
+kaseifu config set jev.model jev-latest
+kaseifu config set jev.endpoint https://api.typesafe.ai/v1/systemone
+```
+
+### Doctor
+
+Diagnose configuration and environment without touching the network:
+
+```bash
+kaseifu doctor
+```
+
+Add `--check-connection` to also probe endpoint reachability.
+
 ### Debug
 
 Enable debug output with the `KASEIFU_DEBUG` environment variable:
@@ -151,25 +207,25 @@ KASEIFU_DEBUG=1 kaseifu discover ~/Desktop/example.pdf
 
 ## Configuration
 
-Copy `.env.example` to `.env` and fill in your Jev credentials:
+Settings resolve in this order: CLI flags (`--jev-endpoint`, `--jev-model`)
+win over environment variables, which win over the user configuration file
+plus Keychain, which win over application defaults. The legacy
+`JEV_API_BASE_URL` variable still works as a fallback for `JEV_API_URL`.
 
-```bash
-cp .env.example .env
-```
-
-```
-JEV_API_KEY=your-key-here
-JEV_API_URL=https://your-jev-endpoint.example.com
-```
-
-Thresholds and behavior can be tuned in `config/default.toml`:
+| Setting | Default | Description |
 
 | Setting | Default | Description |
 |---|---|---|
+| `jev.endpoint` | `https://api.typesafe.ai/v1/systemone` | Jev API endpoint (base or full URL) |
+| `jev.model` | `jev-latest` | Model alias sent to the API |
 | `classifier.thresholds.auto_move_confidence` | 0.85 | Minimum confidence for automatic moves |
 | `classifier.thresholds.auto_move_margin` | 0.40 | Minimum margin over second-best candidate |
 | `classifier.thresholds.review_confidence` | 0.60 | Below this, the file is left in place |
 | `operations.dry_run` | `true` | Default to dry run unless `--execute` is passed |
+| `operations.enable_undo` | `true` | Record moves in the journal so they can be undone |
+
+Developer setup (`.env` files, environment variables, local builds, tests,
+CI, API mocks, resolution order) lives in `documents/development.md`.
 
 ## Project structure
 
@@ -177,6 +233,9 @@ Thresholds and behavior can be tuned in `config/default.toml`:
 src/
 ├── main.rs              # CLI entry point (clap)
 ├── lib.rs               # Library root
+├── auth/                # Keychain access + interactive prompts (v3.3)
+├── config/              # User TOML + resolution order (v3.3)
+├── doctor.rs            # Environment diagnostics (v3.3)
 ├── context/             # FileContext builder (Phase 1)
 ├── normalize/           # Normalization layer (Phase 2)
 ├── discovery/           # Candidate discovery (Phase 3)

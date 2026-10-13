@@ -43,8 +43,26 @@ pub fn build_move_plan(
     decision: &JevDecision,
     candidates: &[CandidateDestination],
 ) -> Result<MovePlan, PlanError> {
+    build_move_plan_with(
+        source,
+        decision,
+        candidates,
+        crate::policy::decision::Thresholds::default(),
+    )
+}
+
+/// Build a move plan with explicit policy thresholds (user TOML overrides).
+///
+/// The gate agrees with `organize_file_with`: both use the same thresholds,
+/// so a plan is never refused that the policy allowed (and vice versa).
+pub fn build_move_plan_with(
+    source: &Path,
+    decision: &JevDecision,
+    candidates: &[CandidateDestination],
+    thresholds: crate::policy::decision::Thresholds,
+) -> Result<MovePlan, PlanError> {
     // 1. Policy gate: only an auto-move may be planned.
-    let candidate_id = match crate::policy::decision::evaluate(decision) {
+    let candidate_id = match crate::policy::decision::evaluate_with(decision, thresholds) {
         DecisionAction::AutoMove(id) => id,
         _ => return Err(PlanError::NotAutoMove),
     };
