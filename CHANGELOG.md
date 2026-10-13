@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Threshold transparency (`classify` / `organize`)** — when a decision
+  lands just below the auto-move thresholds (within 0.05), the POLICY section
+  now says how much more confidence or margin a move needs (e.g. `near auto
+  move: 0.010 more confidence would reach AUTO MOVE`). `--explain` adds an
+  EXPLANATION section with the confidence, the margin, the effective
+  thresholds (user TOML overrides included) and the destination the
+  selection resolved to. In `--format json` it adds an `explanation` object
+  and leaves every existing key untouched.
+- **`organize --format json`** — the result is one structured object now:
+  `decision` (the existing decision shape), `policy` (the local verdict),
+  `candidate_path`, `mode` and `outcome` (`would_move` / `moved` / `refused`
+  / `unplanable` with a machine `kind` and a human `reason` / `move_failed`).
+  The plain rendering is unchanged.
+- **`organize --select`: choose the destination yourself** — the menu lists
+  the candidate folders Discovery found (number, path, score, related-file
+  count). Jev is never consulted, so this works with no API key, no Keychain
+  access and no network. `q` (or Ctrl+C) cancels with nothing changed;
+  `--execute` moves the file after a confirmation (`--yes` skips it); the
+  plan is marked `[MANUAL]` and the journal stores no classifier confidence
+  for it, so `undo` and `doctor` stay consistent. Non-TTY runs fail with
+  guidance (`--select --format json` prints the candidate list instead of
+  prompting), and destinations that can never be used (`~/Library/**`,
+  caches, system trees) are not offered and are refused by the plan layer
+  even if one arrives from elsewhere.
+- **The top-level help explains the policies** — AUTO MOVE / REVIEW / LEAVE
+  with the built-in thresholds, where the effective values live (`kaseifu
+  config show`), and the rule that files never move without `--execute`.
+- **Scope is documented** — README and `--help` state that image files
+  (jpg, jpeg, png, heic, heif, hif, tif, tiff, webp) are classified today
+  and that video (mp4, mov) is not (its capture metadata is not sent to
+  Jev), and that Spotlight indexing is asynchronous (about 4 s), so a file
+  written moments ago may still be missing from `mdfind`.
+
+### Changed
+
+- **Help text speaks about the user's work, not the implementation** — the
+  `Phase N` markers, internal type names and pipeline arrows are gone from
+  every help output. `scan` now says it only prints the target banner,
+  `--execute` / `--dry-run` state their mutual exclusion, `completions`
+  states that only zsh can be installed, and the global `--format` help
+  names the commands that honor `json` (`scan`, `undo` and `watch` always
+  render text). A test walks the top-level help, every visible subcommand
+  and nested subcommand in both `-h` and `--help` and fails on internal
+  wording.
+
 ## [0.6.0] - 2026-10-14
 
 ### Added

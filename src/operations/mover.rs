@@ -77,16 +77,54 @@ pub fn dry_run(plan: &MovePlan) -> Result<MoveOutcome, MoveError> {
 /// stays `pending` in the journal: the mutation is always *recorded*, even
 /// when its outcome could not be written.
 pub fn execute_move(plan: &MovePlan, history: &OperationHistory) -> Result<MoveOutcome, MoveError> {
+    execute_move_inner(plan, history, MoveJournal::Jev)
+}
+
+/// Execute a move the user picked by hand (ZC-13).
+///
+/// Identical to [`execute_move`] except for the journal row: a manual move
+/// has no Jev selection, confidence or margin, so those columns stay NULL.
+/// That is how `doctor`, `undo` and any journal reader can tell a human
+/// decision apart from a Jev decision.
+pub fn execute_manual_move(
+    plan: &MovePlan,
+    history: &OperationHistory,
+) -> Result<MoveOutcome, MoveError> {
+    execute_move_inner(plan, history, MoveJournal::Manual)
+}
+
+/// Which selection the journal row should carry.
+enum MoveJournal {
+    /// Jev selected the candidate: record its id and numbers.
+    Jev,
+    /// The user selected the candidate: no Jev numbers exist.
+    Manual,
+}
+
+fn execute_move_inner(
+    plan: &MovePlan,
+    history: &OperationHistory,
+    journal: MoveJournal,
+) -> Result<MoveOutcome, MoveError> {
     verify_preconditions(plan)?;
+
+    let (candidate_id, confidence, margin) = match journal {
+        MoveJournal::Jev => (
+            Some(plan.candidate_id.as_str()),
+            Some(plan.confidence),
+            Some(plan.margin),
+        ),
+        MoveJournal::Manual => (None, None, None),
+    };
 
     let operation_id = history
         .record_pending(
             "move",
             &plan.source,
             &plan.destination_path,
-            Some(&plan.candidate_id),
-            Some(plan.confidence),
-            Some(plan.margin),
+            candidate_id,
+            confidence,
+            margin,
         )
         .map_err(|error| MoveError::History(error.to_string()))?;
 

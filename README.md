@@ -47,14 +47,28 @@ Undo                     (restore from journal)
 | Content extraction | optional content analysis |
 | Semantic classification | Jev API |
 
+### What kaseifu classifies
+
+Today's supported target is image files: `.jpg`, `.jpeg`, `.png`, `.heic`,
+`.heif`, `.hif`, `.tif`, `.tiff` and `.webp`. Each of them is observed like
+any other file, and images additionally get capture time, camera and (when
+allowed) location handling. Everything else is matched by name and Spotlight
+metadata only.
+
+Video files (MP4, MOV, and other video containers) are not classified yet:
+their capture time and GPS are neither read nor sent to Jev, so a video may
+look untouched even when it sits next to a well organized photo series.
+Whether to support video is a separate decision, not a hidden setting.
+
 ### Spotlight indexing
 
 Discovery uses the macOS Spotlight index, which macOS updates in the
 background, so results depend on its current state:
 
-- A file that was just created, copied or moved appears in search after a few
-  seconds (about 4 s measured on an idle machine), and later under load or
-  after bulk copies. A very recent file may not be found yet.
+- Spotlight indexing is asynchronous, so a file that was just created, copied
+  or moved may not appear in `mdfind` (the search Discovery uses) yet: about
+  4 s measured on an idle machine, and later under load or after bulk copies.
+  A very recent file may not be found at all.
 - Attributes come from per-type importers. Names and sizes are immediate, but
   content-derived values (EXIF capture time, GPS, camera, pixel size) can be
   missing for a given file. Missing means missing: kaseifu never guesses, and
@@ -145,6 +159,11 @@ Run the full decision pipeline — observe, normalize, discover, Jev — and pri
 kaseifu classify ~/Desktop/example.pdf
 ```
 
+`--explain` adds the numbers behind the verdict: the confidence, the margin
+and the effective thresholds, plus the destination the selection resolved to.
+When a decision lands just below the auto-move thresholds, the display also
+says how much more confidence or margin a move would need.
+
 ### Organize (dry run by default)
 
 Run the full pipeline and print what *would* happen.
@@ -158,6 +177,34 @@ Pass `--execute` to actually move the file:
 ```bash
 kaseifu organize ~/Desktop/example.pdf --execute
 ```
+
+`--explain` adds the same threshold view as `classify`, and `--format json`
+prints the result as one structured object (`decision`, `policy`,
+`candidate_path`, `mode` and `outcome`); the outcome says whether the file
+`would_move`, `moved`, was `refused` or could not be planned, with a machine
+`kind` and a human `reason`. `--explain` adds an `explanation` object.
+
+### Choose the destination yourself
+
+Jev's choice is a suggestion; `--select` lets you pick from the candidate
+folders Discovery found instead:
+
+```bash
+kaseifu organize ~/Desktop/example.pdf --select
+kaseifu organize ~/Desktop/example.pdf --select --execute --yes
+```
+
+The menu lists each candidate with its score and related-file count, and asks
+for a number. Jev is not consulted in this flow, so it works without an API
+key, without the Keychain and without the network. `q` (or Ctrl+C) cancels
+with nothing changed. `--execute` performs the move after a confirmation
+(`--yes` skips it), and the move is recorded as a human decision: the plan is
+marked `[MANUAL]`, the journal keeps no classifier confidence for it, and
+`undo` reverses it like any other move. Destinations that can never be used
+(`~/Library/**`, caches, system trees) are not offered and are refused by the
+plan even if one arrives from somewhere else. Without a terminal, `--select`
+fails with guidance; `--select --format json` prints the candidate list
+instead of prompting.
 
 ### Undo
 

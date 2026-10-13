@@ -11,12 +11,11 @@ use kaseifu::config::{
     load_user, resolve, resolve_with_env, save_to,
 };
 use kaseifu::models::decision::DecisionContext;
-use kaseifu::operations::organize;
-use kaseifu::operations::undo;
+use kaseifu::operations::{mover, organize, plan, select as select_ops, undo};
 use kaseifu::platform::macos::fsevents;
 use kaseifu::presentation::renderers::{
     classify as classify_view, discover as discover_view, generic, inspect as inspect_view,
-    organize as organize_view,
+    organize as organize_view, select as select_view,
 };
 use kaseifu::presentation::{OutputFormat, resolve_mode};
 use kaseifu::storage::history::{OperationHistory, journal_path};
@@ -31,7 +30,25 @@ use std::pin::Pin;
 #[derive(Parser)]
 #[command(name = "kaseifu")]
 #[command(version, about = "Semantic file organization for macOS")]
+#[command(after_help = "\
+Policies decide what kaseifu does with a classified file:
+  AUTO MOVE  confidence >= 0.85 and margin >= 0.40 (built-in defaults;
+             `kaseifu config show` prints the effective thresholds)
+  REVIEW     confidence >= 0.60; a person should decide before it moves
+  LEAVE      anything else; the file stays where it is
+
+Naming a policy is not a command: they are the three verdicts of the local
+policy check. Files are never moved unless you pass --execute.
+
+Scope: image files are classified today (jpg, jpeg, png, heic, heif, hif,
+tif, tiff, webp). Video (mp4, mov) is not classified yet and its capture
+metadata is not sent to Jev.")]
 struct Cli {
+    /// Output format for commands with structured output.
+    ///
+    /// `json` applies to inspect, classify, organize, doctor, setup, auth,
+    /// config and completions --install. `scan`, `undo` and `watch` always
+    /// render text.
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Auto)]
     format: OutputFormat,
     /// Override the Jev endpoint URL (highest priority).
@@ -47,48 +64,68 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Build and display FileContext JSON.
+    /// Show what kaseifu observes in a file (read-only).
+    ///
+    /// Prints the observation report behind classification: paths, directory
+    /// entries, metadata and Spotlight evidence, as JSON when stdout is not a
+    /// terminal. Nothing is moved.
     Inspect {
         path: PathBuf,
         /// Show all directory entries and evidence (default: up to 5).
         #[arg(long)]
         all: bool,
-        /// Show the DETAILS layer (full paths, schema, raw metadata).
+        /// Include full paths, the report schema and raw metadata.
         #[arg(long)]
         verbose: bool,
     },
 
-    /// Scan a directory.
+    /// Print the target banner for a directory (scanning is not implemented yet).
+    ///
+    /// A placeholder for a future scan command: it prints the directory it
+    /// was given and exits. Nothing is read, moved or written.
     Scan { path: PathBuf },
 
-    /// Organize a file: decision -> policy -> plan -> (dry-run or move).
+    /// Decide where a file belongs and show the result (moves only with --execute).
     ///
-    /// Dry run is the default; pass `--execute` to actually move the file.
-    /// Every executed move is journaled and undoable with `undo`.
+    /// Builds a move plan from the candidate folders and the classifier
+    /// answer, then either reports what would happen (the default) or
+    /// performs the move with --execute. Every executed move is journaled and
+    /// can be reversed with `undo`.
     Organize {
         file: PathBuf,
-        /// Actually perform the move (default is a dry run).
+        /// Move the file (default is a dry run; cannot be combined with --dry-run).
         #[arg(long, conflicts_with = "dry_run")]
         execute: bool,
-        /// Explicitly request a dry run (the default).
+        /// Request a dry run explicitly (the default; cannot be combined with --execute).
         #[arg(long)]
         dry_run: bool,
+        /// Pick the destination yourself from the candidate folders (needs a terminal).
+        #[arg(long, conflicts_with = "explain")]
+        select: bool,
+        /// Skip the confirmation prompt when `--select --execute` moves a file.
+        #[arg(long, requires = "select")]
+        yes: bool,
+        /// Show the confidence, margin and effective thresholds behind the verdict.
+        #[arg(long)]
+        explain: bool,
     },
 
-    /// Undo previous operations.
+    /// Restore files moved by earlier runs (newest first).
+    ///
+    /// Reverses the last successful move; `--last N` reverses up to N moves.
+    /// The original location must be free: a collision stops the undo
+    /// instead of overwriting anything.
     Undo {
         #[arg(long, default_value_t = 1)]
         last: usize,
     },
 
-    /// Discover candidate destination directories (debug only).
+    /// List candidate destination directories for one file (diagnostic view).
     ///
-    /// Searches for similar files using Spotlight and aggregates
-    /// parent directories with scoring.
-    ///
-    /// Hidden from `--help`: this is a diagnostic view of the discovery
-    /// stage, not part of the supported workflow (`classify` runs the same
-    /// discovery internally). The command stays functional.
+    /// Searches for similar files using Spotlight and ranks their parent
+    /// directories. This is a diagnostic view of one internal step, not part
+    /// of the normal workflow: `classify` runs the same search internally.
+    /// Hidden from `--help`.
     #[command(hide = true)]
     Discover {
         file: PathBuf,
@@ -98,10 +135,12 @@ enum Commands {
         verbose: bool,
     },
 
-    /// Run the full decision pipeline for one file (Phase 4).
+    /// Decide where a file belongs without moving anything.
     ///
-    /// Observe -> Normalize -> Discover -> Jev -> validated JevDecision.
-    /// This command never moves the file (execution is a later phase).
+    /// Runs the full search-and-classify flow for one file and prints the
+    /// decision together with what kaseifu would do about it. This command
+    /// never moves the file and never writes to the journal; `--explain`
+    /// shows the numbers behind the verdict.
     Classify {
         file: PathBuf,
         /// Show all ranked candidates (default: top 5).
@@ -110,34 +149,40 @@ enum Commands {
         /// Show extra detail (full paths, evidence breakdowns).
         #[arg(long)]
         verbose: bool,
+        /// Show the confidence, margin and effective thresholds behind the verdict.
+        #[arg(long)]
+        explain: bool,
     },
 
-    /// Watch directories and organize changed files automatically (Phase 6).
+    /// Watch directories and organize changed files automatically.
     ///
     /// Events are filtered, debounced, deduplicated and stability-checked
-    /// before the existing pipeline runs. Dry run by default; pass
+    /// before the same flow as `organize` runs. Dry run by default; pass
     /// `--execute` to actually move files.
     Watch {
-        /// Directory to watch (repeatable). Never implicit: home-wide
-        /// watching is not a default.
+        /// Directory to watch (repeatable; there is no default).
         #[arg(long = "path", required = true)]
         paths: Vec<PathBuf>,
-        /// Actually perform moves (default is a dry run).
+        /// Move files (default is a dry run; cannot be combined with --dry-run).
         #[arg(long, conflicts_with = "dry_run")]
         execute: bool,
-        /// Explicitly request a dry run (the default).
+        /// Request a dry run explicitly (the default; cannot be combined with --execute).
         #[arg(long)]
         dry_run: bool,
     },
 
-    /// First-time setup wizard (settings to TOML; the API key goes to the Keychain unless KASEIFU_KEY_SOURCE=env).
+    /// First-time setup: save the endpoint, the model and the API key.
+    ///
+    /// Interactive (needs a terminal). General settings go to the user TOML
+    /// file; the API key goes to the macOS Keychain unless
+    /// KASEIFU_KEY_SOURCE=env, which points at `.env` instead.
     Setup {
         /// Probe endpoint reachability after saving (uses the network).
         #[arg(long)]
         check_connection: bool,
     },
 
-    /// Manage the Jev API key in the macOS Keychain (not used in KASEIFU_KEY_SOURCE=env).
+    /// Manage the Jev API key in the macOS Keychain (not touched in KASEIFU_KEY_SOURCE=env).
     Auth {
         #[command(subcommand)]
         action: AuthCommands,
@@ -149,27 +194,33 @@ enum Commands {
         action: ConfigCommands,
     },
 
-    /// Diagnose configuration and environment (ASCII report).
+    /// Diagnose configuration and environment (one-page report).
+    ///
+    /// Checks platform, configuration, API key, endpoint, Spotlight, storage,
+    /// journal, the old CWD-relative journal and zsh completions. Every
+    /// failing check names the next command to run. The network is only
+    /// reached with --check-connection.
     Doctor {
         /// Probe endpoint reachability (uses the network).
         #[arg(long)]
         check_connection: bool,
     },
 
-    /// Print a shell completion script (`zsh --install` writes the file).
+    /// Print a shell completion script (only zsh can be installed).
     ///
-    /// Without `--install` the script goes to stdout and nothing is written.
-    /// With `--install` the zsh script is written to the first writable
-    /// completion directory (`--dir` > `KASEIFU_COMPLETION_DIR` > Homebrew /
-    /// Prezto / XDG candidates); no `.zshrc` change is needed.
+    /// Without --install the script goes to stdout and nothing is written;
+    /// any supported shell can be printed that way. --install writes the zsh
+    /// script into the first writable completion directory (`--dir` >
+    /// KASEIFU_COMPLETION_DIR > Homebrew / Prezto / XDG candidates); no
+    /// `.zshrc` change is needed.
     Completions {
         /// Shell to generate for (`zsh` is the supported, installed shell).
         #[arg(value_enum)]
         shell: clap_complete::Shell,
-        /// Write the script into the detected completion directory.
+        /// Write the zsh script into the detected completion directory (zsh only).
         #[arg(long)]
         install: bool,
-        /// Explicit target directory for `--install`.
+        /// Explicit target directory for --install.
         #[arg(long, value_name = "PATH")]
         dir: Option<PathBuf>,
     },
@@ -218,7 +269,16 @@ async fn main() -> Result<()> {
     ) {
         kaseifu::completion::refresh_if_stale(&mut Cli::command());
     }
-    match cli.command {
+    dispatch(cli.command, format, &overrides).await
+}
+
+/// Run the requested subcommand (kept separate so `main` stays trivial).
+async fn dispatch(
+    command: Option<Commands>,
+    format: OutputFormat,
+    overrides: &CliOverrides,
+) -> Result<()> {
+    match command {
         None => handle_usage(format),
         Some(Commands::Inspect { path, all, verbose }) => {
             handle_inspect(&path, all, verbose, format)
@@ -231,32 +291,88 @@ async fn main() -> Result<()> {
             file,
             execute,
             dry_run,
-        }) => handle_organize(&file, execute, dry_run, format, &overrides).await,
+            select,
+            yes,
+            explain,
+        }) => {
+            let options = OrganizeOptions {
+                file,
+                execute,
+                dry_run,
+                select,
+                yes,
+                explain,
+            };
+            dispatch_organize(options, format, overrides).await
+        }
         Some(Commands::Watch {
             paths,
             execute,
             dry_run,
-        }) => handle_watch(&paths, execute, dry_run, format, &overrides).await,
+        }) => handle_watch(&paths, execute, dry_run, format, overrides).await,
         Some(Commands::Undo { last }) => handle_undo(last, format),
         Some(Commands::Discover { file, all, verbose }) => {
             handle_discover(&file, all, verbose, format)
         }
-        Some(Commands::Classify { file, all, verbose }) => {
-            handle_classify(&file, all, verbose, format, &overrides).await
-        }
+        Some(Commands::Classify {
+            file,
+            all,
+            verbose,
+            explain,
+        }) => handle_classify(&file, all, verbose, explain, format, overrides).await,
         Some(Commands::Setup { check_connection }) => {
-            handle_setup(&overrides, check_connection, format).await
+            handle_setup(overrides, check_connection, format).await
         }
         Some(Commands::Auth { action }) => handle_auth(action, format),
         Some(Commands::Config { action }) => handle_config(action, format),
         Some(Commands::Doctor { check_connection }) => {
-            handle_doctor(&overrides, check_connection, format).await
+            handle_doctor(overrides, check_connection, format).await
         }
         Some(Commands::Completions {
             shell,
             install,
             dir,
         }) => handle_completions(shell, install, dir, format),
+    }
+}
+
+/// The parsed `organize` flags, kept together so the dispatch helpers stay
+/// within a readable argument count.
+struct OrganizeOptions {
+    file: PathBuf,
+    execute: bool,
+    dry_run: bool,
+    select: bool,
+    yes: bool,
+    explain: bool,
+}
+
+/// `organize` with or without the interactive selection (ZC-13).
+async fn dispatch_organize(
+    options: OrganizeOptions,
+    format: OutputFormat,
+    overrides: &CliOverrides,
+) -> Result<()> {
+    if options.select {
+        handle_organize_select(
+            &options.file,
+            options.execute,
+            options.dry_run,
+            options.yes,
+            format,
+            overrides,
+        )
+        .await
+    } else {
+        handle_organize(
+            &options.file,
+            options.execute,
+            options.dry_run,
+            options.explain,
+            format,
+            overrides,
+        )
+        .await
     }
 }
 
@@ -389,11 +505,15 @@ fn handle_scan(path: &Path, format: OutputFormat) {
     }
 }
 
-/// `organize`: decision -> policy -> plan -> dry-run or move (journaled).
+/// `organize`: decide, plan, then dry-run or move (journaled).
+///
+/// `--explain` adds the threshold view (ZC-5); the default output keeps the
+/// historical sections.
 async fn handle_organize(
     file: &Path,
     execute: bool,
     dry_run: bool,
+    explain: bool,
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
@@ -414,16 +534,193 @@ async fn handle_organize(
     )
     .await?;
 
+    let thresholds = policy_thresholds(&resolved);
     let mode = resolve_mode(format);
-    if mode.rich {
-        organize_view::print_rich(&report, file, actually_move, mode.color);
+    if format == OutputFormat::Json {
+        let explanation = explain.then(|| organize_view::explanation_for(&report, thresholds));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&organize_view::json_report(
+                &report,
+                file,
+                actually_move,
+                explanation.as_ref(),
+            ))?
+        );
+    } else if mode.rich {
+        organize_view::print_rich(
+            &report,
+            file,
+            actually_move,
+            mode.color,
+            thresholds,
+            explain,
+        );
     } else {
         print!(
             "{}",
-            organize_view::render_text(&report, file, actually_move)
+            organize_view::render_text_with(&report, file, actually_move, thresholds, explain)
         );
     }
     Ok(())
+}
+
+/// `organize --select`: pick the destination by hand (ZC-13).
+///
+/// Discovery only: Jev is never consulted, so this path needs no API key,
+/// never reads or writes the Keychain and never opens a network connection.
+/// The plan layer re-validates the destination (usable folder, no
+/// collision); the move is journaled with NULL candidate/confidence/margin
+/// columns so `undo` and `doctor` can tell a human move from a Jev move.
+/// `--format json` prints the candidate list instead of prompting.
+async fn handle_organize_select(
+    file: &Path,
+    execute: bool,
+    dry_run: bool,
+    yes: bool,
+    format: OutputFormat,
+    overrides: &CliOverrides,
+) -> Result<()> {
+    let actually_move = execute && !dry_run;
+    let mode = resolve_mode(format);
+
+    if format == OutputFormat::Json {
+        return print_select_candidates(file, execute, overrides);
+    }
+
+    // TTY first: without a terminal the selection must fail before any work
+    // (no `mdfind` run, no prompt, nothing read).
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!(SELECT_NON_TTY_GUIDANCE);
+    }
+
+    let candidates = select_candidates(file, overrides)?;
+    if candidates.is_empty() {
+        print!("{}", select_view::no_candidates_text(mode.rich, mode.color));
+        return Ok(());
+    }
+
+    print!(
+        "{}",
+        select_view::render_menu(file, &candidates, mode.rich, mode.color)
+    );
+    let Some(chosen) = prompt_select_choice(&candidates)? else {
+        println!("{}", select_view::cancelled_line());
+        return Ok(());
+    };
+
+    run_selected_move(file, &candidates[chosen], actually_move, yes, mode)
+}
+
+/// Plan, display and (when requested) perform the chosen manual move.
+fn run_selected_move(
+    file: &Path,
+    candidate: &kaseifu::models::candidate::CandidateDestination,
+    actually_move: bool,
+    yes: bool,
+    mode: kaseifu::presentation::OutputMode,
+) -> Result<()> {
+    let move_plan = match plan::build_manual_move_plan(file, candidate) {
+        Ok(move_plan) => move_plan,
+        Err(error) => {
+            anyhow::bail!(
+                "cannot move this file: {}",
+                organize_view::plan_error_message(&error, mode.rich, mode.color)
+            );
+        }
+    };
+    print!(
+        "{}",
+        select_view::render_plan(&move_plan, candidate, actually_move, mode.rich, mode.color)
+    );
+
+    if !actually_move {
+        return Ok(());
+    }
+    if !confirm_manual_move(yes)? {
+        println!("{}", select_view::cancelled_line());
+        return Ok(());
+    }
+    execute_manual_move_report(&move_plan, mode.rich, mode.color)
+}
+
+/// Non-TTY guidance for `organize --select` (ZC-13).
+///
+/// `discover` is deliberately not named: it stays a hidden diagnostic view.
+const SELECT_NON_TTY_GUIDANCE: &str = "interactive selection needs a terminal (stdin is not a TTY)\n\
+list the candidate destinations in JSON: kaseifu organize <file> --select --format json\n\
+a future release will add --to <dir> for non-interactive selection";
+
+/// `--select --format json`: the candidate list, no interaction, no Jev.
+fn print_select_candidates(file: &Path, execute: bool, overrides: &CliOverrides) -> Result<()> {
+    if execute {
+        anyhow::bail!(
+            "--format json lists the candidate destinations and does not select; \
+             run without --format json to select and move interactively"
+        );
+    }
+    let candidates = select_candidates(file, overrides)?;
+    println!("{}", serde_json::to_string_pretty(&candidates)?);
+    Ok(())
+}
+
+/// Discovery for the selection flow (observe -> normalize -> discover; no Jev).
+fn select_candidates(
+    file: &Path,
+    overrides: &CliOverrides,
+) -> Result<Vec<kaseifu::models::candidate::CandidateDestination>> {
+    let resolved = resolve_for(overrides)?;
+    let (_, candidates) = pipeline::discover_candidates(
+        file,
+        &kaseifu::context::image_metadata::MetadataOptions::from_resolved(&resolved.metadata),
+    )?;
+    Ok(candidates)
+}
+
+/// Ask until a valid answer arrives; `None` means the user cancelled.
+fn prompt_select_choice(
+    candidates: &[kaseifu::models::candidate::CandidateDestination],
+) -> Result<Option<usize>> {
+    loop {
+        let answer = prompt::prompt_line(select_ops::SELECT_PROMPT, None)?;
+        match select_ops::parse_select_command(&answer, candidates.len()) {
+            Ok(select_ops::SelectCommand::Quit) => return Ok(None),
+            Ok(select_ops::SelectCommand::Choose(index)) => return Ok(Some(index)),
+            Err(message) => eprintln!("{message}"),
+        }
+    }
+}
+
+/// `--yes` skips the confirmation; the default is to ask and to cancel.
+fn confirm_manual_move(yes: bool) -> Result<bool> {
+    if yes {
+        return Ok(true);
+    }
+    prompt::confirm("Move this file?", false)
+}
+
+/// Perform the chosen manual move and report it (journal included).
+fn execute_manual_move_report(
+    plan: &kaseifu::operations::plan::MovePlan,
+    rich: bool,
+    color: bool,
+) -> Result<()> {
+    let history = OperationHistory::open(journal_path())?;
+    match mover::execute_manual_move(plan, &history) {
+        Ok(mover::MoveOutcome::Moved { operation_id }) => {
+            print!(
+                "{}",
+                select_view::render_moved(plan, &operation_id, rich, color)
+            );
+            Ok(())
+        }
+        Ok(mover::MoveOutcome::WouldMove) => {
+            // execute_manual_move always performs the move; this arm only
+            // keeps the outcome match exhaustive.
+            anyhow::bail!("the move was not performed")
+        }
+        Err(error) => anyhow::bail!("move failed: {error:?}"),
+    }
 }
 
 /// `watch`: validate roots, then run the debounced FSEvents loop.
@@ -577,6 +874,7 @@ async fn handle_classify(
     file: &Path,
     all: bool,
     verbose: bool,
+    explain: bool,
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
@@ -600,7 +898,27 @@ async fn handle_classify(
         kaseifu::policy::decision::evaluate_with(&report.decision, policy_thresholds(&resolved));
     let mode = resolve_mode(format);
     if mode.rich {
-        classify_view::print_rich(&report, &policy, all, verbose, mode.color);
+        classify_view::print_rich(
+            &report,
+            &policy,
+            all,
+            verbose,
+            mode.color,
+            policy_thresholds(&resolved),
+            explain,
+        );
+    } else if explain {
+        // Additive only: the decision object keeps every existing key and
+        // gains the explanation (ZC-5).
+        let mut value = serde_json::to_value(&report.decision)?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "explanation".to_string(),
+                classify_view::decision_explanation(&report, &policy, policy_thresholds(&resolved))
+                    .to_json(),
+            );
+        }
+        println!("{}", serde_json::to_string_pretty(&value)?);
     } else {
         println!("{}", serde_json::to_string_pretty(&report.decision)?);
     }
