@@ -7,7 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.2] - 2026-10-14
+## [0.5.0] - 2026-10-13
+
+### Added
+
+- **API key source selection (`KASEIFU_KEY_SOURCE`)** — the API key now comes
+  from exactly one source per invocation: `auto` (environment/`.env` first,
+  then the macOS Keychain; release default), `env` (environment/`.env` only —
+  the Keychain is never read or written; debug default) or `keychain` (the
+  Keychain only; `JEV_API_KEY` is ignored). The variable is read from the
+  process environment first, then from the project-local `.env`; unknown
+  values are rejected with a clear error. `auth status` and `doctor` report
+  the resolved source (`env` / `.env` / `keychain` / `not configured`) and
+  the effective mode, and `doctor`'s `Keychain` check becomes `API Key`
+  (seven checks stay). In `env` mode `setup`, `auth set-key` and
+  `auth remove-key` never touch the Keychain and explain the development
+  policy instead; `classify` / `organize` / `watch` fail fast with a clear
+  "no API key configured" error when an explicit mode resolves no key
+  (`auto` keeps the historical behavior).
+- **zsh completion generation and installation** — `kaseifu completions zsh`
+  prints the completion script and `completions zsh --install` writes
+  `_kaseifu` into the first writable site-functions directory (Homebrew,
+  `/usr/local`, Prezto, XDG or `~/.zsh/completions`; `--dir` and
+  `KASEIFU_COMPLETION_DIR` take precedence, no `.zshrc` change is needed).
+  The script carries a version marker and is regenerated automatically — best
+  effort only, so a failure never changes the exit code or the output — when
+  any command runs and the installed file is missing or stale;
+  `KASEIFU_NO_COMPLETION_UPDATE` disables that update. `doctor` now reports
+  the completion state (`installed` / `stale` / `missing`) with its directory.
+  `clap_complete` renders hidden subcommands in every shell it supports
+  (clap-rs/clap#1335), so the debug-only `discover` command is removed from
+  the generated zsh script explicitly; other shells print whatever
+  `clap_complete` produces.
+
+### Changed
+
+- **Debug builds no longer consult the macOS Keychain by default** — because
+  `KASEIFU_KEY_SOURCE` defaults to `env` for debug builds, `cargo run` and
+  tests resolve the key from the environment/`.env` only. This removes the
+  macOS approval dialog (and the indefinite hang it caused) when the Keychain
+  entry was created by a different binary than the one reading it; release
+  builds default to `auto` and keep the Keychain behavior unchanged. The
+  resolver performs at most one Keychain read per invocation and diagnostics
+  never re-read it; `auth status` prints `Source:` instead of `Storage:`
+  (`--format json` keeps the existing `storage` key and adds
+  `api_key_source`, `key_source_mode`, `key_source_default`).
+- **`organize` output** — the Rich view is now the same ASCII dashboard as
+  `classify`/`inspect`/`discover`, in the order mode -> decision -> policy ->
+  result (the mode line no longer splits the decision information). The Jev
+  selection shows the directory the chosen candidate resolved to (or
+  `no destination` for `NONE`) instead of only an ID, and it stays visible
+  even when the policy leaves the file in place — it is a considered
+  destination, never an execution permission. The mode banner reads
+  `execute mode` / `dry run (no files moved)` instead of `executed`, which
+  claimed a move the policy had refused; only the result section states what
+  actually happened. Refused plans render as human sentences (`policy
+  refused: automatic move not allowed`, `destination already exists: ...`,
+  `unknown candidate selected by the decision: ...`) instead of Rust enum
+  debug output (`NotAutoMove`), and the policy verdict reuses `classify`'s
+  wording. Plain (non-TTY) output keeps the same sections without ANSI.
+
+## [0.4.2] - 2026-10-13
 
 ### Fixed
 
@@ -40,7 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment). The `discover` command is now hidden from `--help`: it stays
   available as a diagnostic view, while `classify` remains the supported path
 
-## [0.4.1] - 2026-10-14
+## [0.4.1] - 2026-10-13
 
 ### Fixed
 
@@ -52,7 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Rich `inspect` no longer repeats the markers next to the capture/location
   panels
 
-## [0.4.0] - 2026-10-14
+## [0.4.0] - 2026-10-13
 
 ### Added
 

@@ -9,7 +9,6 @@
 
 use crate::classifier::pipeline::ClassifyReport;
 use crate::models::decision::DecisionAction;
-use crate::policy::decision::{AUTO_MOVE_CONFIDENCE, AUTO_MOVE_MARGIN, REVIEW_CONFIDENCE};
 use crate::presentation::components::display::{MISSING, format_bytes};
 use crate::presentation::components::panel::{self, Section};
 use crate::presentation::components::path::{paint_path, path_budget, relative_display};
@@ -50,29 +49,6 @@ fn target_summary(report: &ClassifyReport) -> String {
         .or_else(|| report.target_file_type.clone())
         .unwrap_or_else(|| "unknown type".to_string());
     format!("{} - {}", kind, format_bytes(report.target_size_bytes))
-}
-
-fn policy_view(policy: &DecisionAction) -> (&'static str, String) {
-    match policy {
-        DecisionAction::AutoMove(_) => (
-            "AUTO MOVE",
-            format!(
-                "meets auto-move thresholds (confidence >= {:.2}, margin >= {:.2})",
-                AUTO_MOVE_CONFIDENCE, AUTO_MOVE_MARGIN
-            ),
-        ),
-        DecisionAction::Review(_) => (
-            "REVIEW",
-            format!(
-                "below auto-move thresholds; human review required (review confidence >= {:.2})",
-                REVIEW_CONFIDENCE
-            ),
-        ),
-        DecisionAction::Leave { what } => ("LEAVE", what.clone()),
-        // `evaluate` only yields the three variants above; anything else is
-        // not an execution verdict, so it must read as LEAVE, never as a move.
-        _ => ("LEAVE", "policy did not authorize execution".to_string()),
-    }
 }
 
 fn policy_destination(policy: &DecisionAction) -> Option<&str> {
@@ -259,7 +235,7 @@ fn policy_lines(
     color: bool,
 ) -> Vec<String> {
     let mut lines = Vec::new();
-    let (kind, reason) = policy_view(policy);
+    let (kind, reason) = generic::policy_view(policy);
     lines.push(generic::decision_line(kind, color));
     lines.push(reason);
     if let Some(id) = policy_destination(policy) {

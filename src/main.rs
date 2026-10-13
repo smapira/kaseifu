@@ -1,20 +1,21 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use kaseifu::auth::keychain::{AuthError, KeychainStore, SecretStore};
 use kaseifu::auth::prompt;
 use kaseifu::classifier::jev::{JevError, JevIntegration, JevResponse, RealJevIntegration};
 use kaseifu::classifier::pipeline;
 use kaseifu::config::loader::validate_endpoint_value;
 use kaseifu::config::{
-    CliOverrides, ResolvedConfig, apply_setting, load_user, resolve, resolve_with_env, save_to,
+    ApiKeyOrigin, CliOverrides, KeySourceMode, ResolvedConfig, apply_setting, key_source_setting,
+    load_user, resolve, resolve_with_env, save_to,
 };
 use kaseifu::models::decision::DecisionContext;
-use kaseifu::operations::organize::{self, OrganizeOutcome};
-use kaseifu::operations::plan::PlanError;
+use kaseifu::operations::organize;
 use kaseifu::operations::undo;
 use kaseifu::platform::macos::fsevents;
 use kaseifu::presentation::renderers::{
     classify as classify_view, discover as discover_view, generic, inspect as inspect_view,
+    organize as organize_view,
 };
 use kaseifu::presentation::{OutputFormat, resolve_mode};
 use kaseifu::storage::history::{DEFAULT_DATABASE_PATH, OperationHistory};
@@ -22,6 +23,7 @@ use kaseifu::watch::coordinator::WatchConfig;
 use kaseifu::watch::runner;
 use kaseifu::{context, discovery, normalize};
 use std::future::Future;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
@@ -126,14 +128,14 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// First-time setup wizard (settings to TOML, API key to Keychain).
+    /// First-time setup wizard (settings to TOML; the API key goes to the Keychain unless KASEIFU_KEY_SOURCE=env).
     Setup {
         /// Probe endpoint reachability after saving (uses the network).
         #[arg(long)]
         check_connection: bool,
     },
 
-    /// Manage the Jev API key in the macOS Keychain.
+    /// Manage the Jev API key in the macOS Keychain (not used in KASEIFU_KEY_SOURCE=env).
     Auth {
         #[command(subcommand)]
         action: AuthCommands,
@@ -150,6 +152,24 @@ enum Commands {
         /// Probe endpoint reachability (uses the network).
         #[arg(long)]
         check_connection: bool,
+    },
+
+    /// Print a shell completion script (`zsh --install` writes the file).
+    ///
+    /// Without `--install` the script goes to stdout and nothing is written.
+    /// With `--install` the zsh script is written to the first writable
+    /// completion directory (`--dir` > `KASEIFU_COMPLETION_DIR` > Homebrew /
+    /// Prezto / XDG candidates); no `.zshrc` change is needed.
+    Completions {
+        /// Shell to generate for (`zsh` is the supported, installed shell).
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+        /// Write the script into the detected completion directory.
+        #[arg(long)]
+        install: bool,
+        /// Explicit target directory for `--install`.
+        #[arg(long, value_name = "PATH")]
+        dir: Option<PathBuf>,
     },
 }
 
@@ -187,6 +207,14 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let format = cli.format;
     let overrides = cli_overrides(&cli);
+    // Best-effort completion upkeep before dispatch: `completions` must stay
+    // free of side effects and `doctor` must report the state as it is.
+    if !matches!(
+        &cli.command,
+        Commands::Completions { .. } | Commands::Doctor { .. }
+    ) {
+        kaseifu::completion::refresh_if_stale(&mut Cli::command());
+    }
     match cli.command {
         Commands::Inspect { path, all, verbose } => handle_inspect(&path, all, verbose, format),
         Commands::Scan { path } => {
@@ -216,6 +244,11 @@ async fn main() -> Result<()> {
         Commands::Doctor { check_connection } => {
             handle_doctor(&overrides, check_connection, format).await
         }
+        Commands::Completions {
+            shell,
+            install,
+            dir,
+        } => handle_completions(shell, install, dir, format),
     }
 }
 
@@ -290,6 +323,7 @@ async fn handle_organize(
     let actually_move = execute && !dry_run;
 
     let resolved = resolve_for(overrides)?;
+    require_jev_api_key(&resolved)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
     let jev = RealJevIntegration::from_resolved_full(&resolved);
     let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
@@ -304,60 +338,16 @@ async fn handle_organize(
     )
     .await?;
 
-    println!("== Decision ==");
-    println!("  destination: {:?}", report.decision.destination_id);
-    println!("  confidence:  {:.3}", report.decision.confidence);
-    println!("  margin:      {:.3}", report.decision.margin);
     let mode = resolve_mode(format);
     if mode.rich {
-        println!(
-            "{} {}",
-            generic::header("KASEIFU / ORGANIZE", mode.color),
-            generic::dry_run_banner(actually_move, mode.color)
+        organize_view::print_rich(&report, file, actually_move, mode.color);
+    } else {
+        print!(
+            "{}",
+            organize_view::render_text(&report, file, actually_move)
         );
     }
-    println!("== Policy ==\n  {:?}", report.policy);
-
-    print_organize_outcome(&report, file);
     Ok(())
-}
-
-/// Outcome banner for `organize` (pure display over the report).
-fn print_organize_outcome(report: &organize::OrganizeReport, file: &Path) {
-    match &report.outcome {
-        OrganizeOutcome::Moved {
-            operation_id,
-            destination,
-        } => {
-            println!("== Moved ==");
-            println!("  {}", destination.display());
-            println!("  operation: {operation_id}");
-        }
-        OrganizeOutcome::WouldMove { destination } => {
-            println!("== Dry run ==");
-            println!(
-                "  would move {} -> {}",
-                file.display(),
-                destination.display()
-            );
-        }
-        OrganizeOutcome::Refused => {
-            println!("== No move ==\n  policy refused");
-        }
-        OrganizeOutcome::Unplanable(PlanError::Collision(path)) => {
-            // docs/design/05-execute.md: a collision goes to REVIEW.
-            println!(
-                "== REVIEW ==\n  destination already exists: {}",
-                path.display()
-            );
-        }
-        OrganizeOutcome::Unplanable(error) => {
-            println!("== No move ==\n  {error:?}");
-        }
-        OrganizeOutcome::MoveFailed(error) => {
-            println!("== Move failed ==\n  {error}");
-        }
-    }
 }
 
 /// `watch`: validate roots, then run the debounced FSEvents loop.
@@ -377,6 +367,7 @@ async fn handle_watch(
     }
 
     let resolved = resolve_for(overrides)?;
+    require_jev_api_key(&resolved)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
     let jev = RealJevIntegration::from_resolved_full(&resolved);
     let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
@@ -479,6 +470,7 @@ async fn handle_classify(
     overrides: &CliOverrides,
 ) -> Result<()> {
     let resolved = resolve_for(overrides)?;
+    require_jev_api_key(&resolved)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
     let jev = RealJevIntegration::from_resolved_full(&resolved);
     let observer = ObservingJevIntegration {
@@ -586,10 +578,30 @@ fn cli_overrides(cli: &Cli) -> CliOverrides {
 ///
 /// Priority: CLI overrides > environment (including the project-local `.env`
 /// for developers) > user TOML plus Keychain > application defaults.
-/// Credentials are never printed and never stored anywhere else.
+/// The API key source itself is selected by `KASEIFU_KEY_SOURCE`
+/// (`auto`/`env`/`keychain`; debug builds default to `env`, releases to
+/// `auto`). Credentials are never printed and never stored anywhere else.
 fn resolve_for(overrides: &CliOverrides) -> Result<ResolvedConfig> {
     let store = KeychainStore::production();
     resolve(overrides, &store)
+}
+
+/// Jev-calling commands must not run without a key when the source was pinned:
+/// `env` / `keychain` fail fast with the reason instead of attempting an
+/// unauthenticated request. `auto` keeps the historical behavior.
+fn require_jev_api_key(resolved: &ResolvedConfig) -> Result<()> {
+    if resolved.jev.api_key.is_some() {
+        return Ok(());
+    }
+    match resolved.key_source.mode {
+        KeySourceMode::Auto => Ok(()),
+        KeySourceMode::Env => anyhow::bail!(
+            "no API key is configured (KASEIFU_KEY_SOURCE=env); set JEV_API_KEY in the environment or in .env"
+        ),
+        KeySourceMode::Keychain => anyhow::bail!(
+            "no API key is stored in the macOS Keychain (KASEIFU_KEY_SOURCE=keychain); run the release-build kaseifu setup to store it"
+        ),
+    }
 }
 
 /// Policy thresholds from resolved configuration (user TOML may tune them).
@@ -640,6 +652,9 @@ struct SetupInputs {
 }
 
 /// `setup`: interactive first-time configuration.
+///
+/// `env` mode (the debug default) never touches the Keychain: the key step is
+/// replaced by guidance and the TOML settings are still saved.
 async fn handle_setup(
     overrides: &CliOverrides,
     check_connection: bool,
@@ -648,32 +663,37 @@ async fn handle_setup(
     let store = KeychainStore::production();
     let file = load_user().unwrap_or_default();
     let current = resolve_with_env(overrides, &file, &store)?;
-    let keychain_has_key = store.get().is_ok();
+    // The Keychain is not even read when the mode forbids it.
+    let keychain_has_key = current.key_source.mode.keychain_allowed() && store.get().is_ok();
 
     emit_setup_intro(&current, keychain_has_key, format);
     let inputs = prompt_setup_inputs(&current, keychain_has_key)?;
     apply_setup_inputs(&inputs, &store)?;
 
     let verified = resolve_for(overrides)?;
-    let report = kaseifu::doctor::diagnose(&verified, &store, check_connection).await;
+    let report = kaseifu::doctor::diagnose(&verified, check_connection).await;
     emit_setup_summary(&verified, &report, format);
     Ok(())
 }
 
 fn emit_setup_intro(current: &ResolvedConfig, keychain_has_key: bool, format: OutputFormat) {
     let key_state = if current.api_key_from_env {
-        "provided via environment"
+        "provided via environment or .env"
     } else if keychain_has_key {
         "stored"
     } else {
         "not configured"
     };
-    let lines = vec![
+    let mut lines = vec![
         "Welcome to kaseifu".to_string(),
         format!("Jev API endpoint: {}", current.jev.endpoint),
         format!("Model: {}", current.jev.model),
         format!("API key: {key_state}"),
+        format!("Key source: {}", current.key_source.label()),
     ];
+    if !current.key_source.mode.keychain_allowed() {
+        lines.extend(env_mode_keychain_lines());
+    }
     emit_report(
         format,
         "KASEIFU / SETUP",
@@ -689,6 +709,9 @@ fn setup_json(current: &ResolvedConfig, keychain_has_key: bool) -> String {
         "model": current.jev.model,
         "api_key_configured": configured,
         "api_key_in_keychain": keychain_has_key,
+        "api_key_source": current.api_key_origin.label(),
+        "key_source_mode": current.key_source.mode.label(),
+        "key_source_default": !current.key_source.explicit,
     })
     .to_string()
 }
@@ -696,7 +719,12 @@ fn setup_json(current: &ResolvedConfig, keychain_has_key: bool) -> String {
 fn prompt_setup_inputs(current: &ResolvedConfig, keychain_has_key: bool) -> Result<SetupInputs> {
     let endpoint = prompt_endpoint(&current.jev.endpoint)?;
     let model = prompt_model(&current.jev.model)?;
-    let api_key = prompt_setup_key(keychain_has_key)?;
+    // env mode: no key prompt and no Keychain write (guidance is in the intro).
+    let api_key = if current.key_source.mode.keychain_allowed() {
+        prompt_setup_key(keychain_has_key)?
+    } else {
+        None
+    };
     Ok(SetupInputs {
         endpoint,
         model,
@@ -759,7 +787,7 @@ fn emit_setup_summary(
 ) {
     let key_state = status_word(verified.jev.api_key.is_some());
     let mut lines = vec![
-        format!("{} API key saved to macOS Keychain", check_word(true)),
+        setup_key_summary_line(verified),
         format!("{} Configuration saved", check_word(true)),
         format!("Endpoint: {}", verified.jev.endpoint),
         format!("Model: {}", verified.jev.model),
@@ -778,6 +806,27 @@ fn emit_setup_summary(
     })
     .to_string();
     emit_report(format, "KASEIFU / SETUP", &lines, &json);
+}
+
+fn setup_key_summary_line(verified: &ResolvedConfig) -> String {
+    if verified.key_source.mode.keychain_allowed() {
+        format!("{} API key saved to macOS Keychain", check_word(true))
+    } else {
+        format!(
+            "{} API key stays in env/.env (KASEIFU_KEY_SOURCE=env; the Keychain was not written)",
+            check_word(true)
+        )
+    }
+}
+
+/// Guidance shown when `env` mode forbids the Keychain (development/tests).
+fn env_mode_keychain_lines() -> Vec<String> {
+    vec![
+        "env mode (KASEIFU_KEY_SOURCE=env): the macOS Keychain is not used".to_string(),
+        "Development and tests use JEV_API_KEY in `.env` or the environment.".to_string(),
+        "Run the release-build kaseifu (or KASEIFU_KEY_SOURCE=auto) to register the key in the Keychain."
+            .to_string(),
+    ]
 }
 
 fn setup_verdict(report: &kaseifu::doctor::DoctorReport) -> &'static str {
@@ -820,6 +869,18 @@ fn keychain_store() -> KeychainStore {
 }
 
 fn handle_auth_set_key(format: OutputFormat) -> Result<()> {
+    // Gate first: in env mode not a single Keychain call may happen.
+    let setting = key_source_setting()?;
+    if !setting.mode.keychain_allowed() {
+        let json = serde_json::json!({
+            "stored": false,
+            "reason": "env-mode",
+            "key_source_mode": setting.mode.label(),
+        })
+        .to_string();
+        emit_report(format, "KASEIFU / AUTH", &env_mode_keychain_lines(), &json);
+        return Ok(());
+    }
     let store = keychain_store();
     if store.get().is_ok() && !prompt::confirm("Replace the stored API key?", false)? {
         let lines = vec!["API key unchanged".to_string()];
@@ -848,18 +909,21 @@ fn handle_auth_status(format: OutputFormat) -> Result<()> {
     let file = load_user().unwrap_or_default();
     let cli = CliOverrides::default();
     let resolved = kaseifu::config::resolve_with_env(&cli, &file, &store)?;
-    let (state, storage) = key_status(&resolved, &store);
     let lines = vec![
         "Jev Authentication".to_string(),
         "Provider: Jev".to_string(),
-        format!("API Key: {state}"),
-        format!("Storage: {storage}"),
+        format!("API Key: {}", key_state(&resolved)),
+        format!("Source: {}", key_source_line(&resolved)),
+        format!("KASEIFU_KEY_SOURCE: {}", resolved.key_source.label()),
         format!("Endpoint: {}", resolved.jev.endpoint),
     ];
     let json = serde_json::json!({
         "provider": "jev",
         "api_key_configured": resolved.jev.api_key.is_some(),
-        "storage": storage,
+        "storage": key_storage(&resolved),
+        "api_key_source": resolved.api_key_origin.label(),
+        "key_source_mode": resolved.key_source.mode.label(),
+        "key_source_default": !resolved.key_source.explicit,
         "endpoint": resolved.jev.endpoint,
     })
     .to_string();
@@ -869,20 +933,54 @@ fn handle_auth_status(format: OutputFormat) -> Result<()> {
 
 /// Key presence for display (never the key itself).
 ///
-/// A Keychain failure is reported as-is instead of degrading to
-/// "Not configured" so the cause stays visible.
-fn key_status(resolved: &ResolvedConfig, store: &dyn SecretStore) -> (String, String) {
-    if resolved.api_key_from_env {
-        return ("Configured".to_string(), "Environment".to_string());
+/// The origin comes from resolution, so no display path ever re-reads the
+/// Keychain (this is what keeps `env` mode free of Keychain calls).
+fn key_state(resolved: &ResolvedConfig) -> &'static str {
+    if resolved.jev.api_key.is_some() {
+        "Configured"
+    } else if matches!(resolved.api_key_origin, ApiKeyOrigin::Unavailable(_)) {
+        "Unknown"
+    } else {
+        "Not configured"
     }
-    match store.get() {
-        Ok(_) => ("Configured".to_string(), "macOS Keychain".to_string()),
-        Err(AuthError::NotFound) => ("Not configured".to_string(), "-".to_string()),
-        Err(error) => ("Unknown".to_string(), error.to_string()),
+}
+
+/// JSON `storage` value (kept compatible with earlier releases).
+fn key_storage(resolved: &ResolvedConfig) -> String {
+    match &resolved.api_key_origin {
+        ApiKeyOrigin::Environment | ApiKeyOrigin::Dotenv => "Environment".to_string(),
+        ApiKeyOrigin::Keychain => "macOS Keychain".to_string(),
+        ApiKeyOrigin::Missing => "-".to_string(),
+        ApiKeyOrigin::Unavailable(message) => message.clone(),
+    }
+}
+
+/// `Source:` line: the origin that resolved the key (`env` / `.env` / ...).
+fn key_source_line(resolved: &ResolvedConfig) -> String {
+    match &resolved.api_key_origin {
+        ApiKeyOrigin::Unavailable(message) => format!("unavailable ({message})"),
+        origin => origin.label().to_string(),
     }
 }
 
 fn handle_auth_remove_key(yes: bool, format: OutputFormat) -> Result<()> {
+    // Gate first: in env mode not a single Keychain call may happen.
+    let setting = key_source_setting()?;
+    if !setting.mode.keychain_allowed() {
+        let lines = vec![
+            "env mode (KASEIFU_KEY_SOURCE=env): the macOS Keychain is not touched".to_string(),
+            "Nothing was removed. Run the release-build kaseifu (or KASEIFU_KEY_SOURCE=auto) to manage the Keychain entry."
+                .to_string(),
+        ];
+        let json = serde_json::json!({
+            "removed": false,
+            "reason": "env-mode",
+            "key_source_mode": setting.mode.label(),
+        })
+        .to_string();
+        emit_report(format, "KASEIFU / AUTH", &lines, &json);
+        return Ok(());
+    }
     let store = keychain_store();
     if matches!(store.get(), Err(AuthError::NotFound)) {
         let lines = vec!["No API key is stored".to_string()];
@@ -938,7 +1036,7 @@ fn handle_config_show(format: OutputFormat) -> Result<()> {
     let file = load_user().unwrap_or_default();
     let cli = CliOverrides::default();
     let resolved = kaseifu::config::resolve_with_env(&cli, &file, &store)?;
-    let (state, _) = key_status(&resolved, &store);
+    let state = key_state(&resolved);
     let lines = vec![
         "[jev]".to_string(),
         format!("endpoint = {}", resolved.jev.endpoint),
@@ -1010,7 +1108,7 @@ async fn handle_doctor(
     let store = keychain_store();
     let file = load_user().unwrap_or_default();
     let resolved = resolve_with_env(overrides, &file, &store)?;
-    let report = kaseifu::doctor::diagnose(&resolved, &store, check_connection).await;
+    let report = kaseifu::doctor::diagnose(&resolved, check_connection).await;
     emit_doctor_report(&report, format);
     Ok(())
 }
@@ -1036,4 +1134,50 @@ fn emit_doctor_report(report: &kaseifu::doctor::DoctorReport, format: OutputForm
     })
     .to_string();
     emit_report(format, "KASEIFU / DOCTOR", &lines, &json);
+}
+
+// --- completions -----------------------------------------------------------
+
+/// `completions`: print a script, or install the zsh one.
+///
+/// Printing is pure: the script is the only thing on stdout and `--format`
+/// does not apply. `--install` reports through the usual `emit_report` shapes.
+fn handle_completions(
+    shell: clap_complete::Shell,
+    install: bool,
+    dir: Option<PathBuf>,
+    format: OutputFormat,
+) -> Result<()> {
+    let mut cmd = Cli::command();
+    if !install {
+        let script = kaseifu::completion::render(shell, &mut cmd);
+        let mut stdout = std::io::stdout();
+        stdout.write_all(&script)?;
+        stdout.flush()?;
+        return Ok(());
+    }
+    if shell != clap_complete::Shell::Zsh {
+        anyhow::bail!("--install supports zsh only (requested: {shell})");
+    }
+    let target = kaseifu::completion::install_dir(dir.as_deref())?;
+    let outcome = kaseifu::completion::install(&target, &mut cmd)?;
+    let path = target.join(kaseifu::completion::FILE_NAME);
+    let (line, status) = match outcome {
+        kaseifu::completion::WriteOutcome::Written => (
+            format!("Installed zsh completions: {}", path.display()),
+            "installed",
+        ),
+        kaseifu::completion::WriteOutcome::Unchanged => (
+            format!("zsh completions already up to date: {}", path.display()),
+            "unchanged",
+        ),
+    };
+    let json = serde_json::json!({
+        "shell": "zsh",
+        "path": path.display().to_string(),
+        "status": status,
+    })
+    .to_string();
+    emit_report(format, "KASEIFU / COMPLETIONS", &[line], &json);
+    Ok(())
 }

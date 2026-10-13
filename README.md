@@ -159,6 +159,9 @@ the macOS Keychain (never to a file, never to shell history):
 kaseifu setup
 ```
 
+In `env` mode the Keychain step is skipped and setup points at `.env`
+instead (see "API key source" below).
+
 ### Auth
 
 Manage the stored API key:
@@ -168,6 +171,12 @@ kaseifu auth set-key      # read the key interactively, store it in the Keychain
 kaseifu auth status       # show whether a key is stored (never the key itself)
 kaseifu auth remove-key   # delete the stored key (asks first)
 ```
+
+`auth status` also reports where the key resolved (`Source: env` / `.env` /
+`keychain` / `not configured`) and the effective `KASEIFU_KEY_SOURCE` mode.
+The same source appears in `doctor` as the `API Key` check. In `env` mode
+these commands are fast and never trigger a Keychain approval dialog,
+because the Keychain is not consulted at all in that mode.
 
 ### Config
 
@@ -187,7 +196,10 @@ Diagnose configuration and environment without touching the network:
 kaseifu doctor
 ```
 
-Add `--check-connection` to also probe endpoint reachability.
+Add `--check-connection` to also probe endpoint reachability. The
+`API Key` check reports the resolved source
+(`provided via environment (JEV_API_KEY)` / `provided via .env` /
+`resolved from macOS Keychain` / a clear failure when nothing is configured).
 
 ### Debug
 
@@ -197,12 +209,85 @@ Enable debug output with the `KASEIFU_DEBUG` environment variable:
 KASEIFU_DEBUG=1 kaseifu classify ~/Desktop/example.pdf
 ```
 
+### Shell completion
+
+Print the zsh completion script (stdout only — nothing is written):
+
+```bash
+kaseifu completions zsh
+```
+
+Install it into the first writable completion directory:
+
+```bash
+kaseifu completions zsh --install
+```
+
+The target directory is detected in this order; every candidate must already
+exist and be writable:
+
+1. `--dir <PATH>`
+2. `KASEIFU_COMPLETION_DIR`
+3. `/opt/homebrew/share/zsh/site-functions`
+4. `/usr/local/share/zsh/site-functions`
+5. `~/.zprezto/modules/completion/external/src`
+6. `${XDG_DATA_HOME:-~/.local/share}/zsh/site-functions`
+7. `~/.zsh/completions`
+
+No `.zshrc` change is required: the Homebrew and Prezto directories are
+already on `fpath` on those setups, and the file is named `_kaseifu` so
+`compinit` picks it up. `--dir` and `KASEIFU_COMPLETION_DIR` are used as
+given: when they cannot be written to, the command fails instead of silently
+falling back. `--install` supports zsh only.
+
+After upgrading kaseifu, the installed script is regenerated automatically the
+next time any command runs when the file is missing or still carries an older
+version marker. Every failure (no directory, no permission, concurrent write)
+is ignored so the command you ran is not affected, and `KASEIFU_NO_COMPLETION_UPDATE`
+(non-empty) turns the automatic update off. `kaseifu doctor` reports the state
+as `installed`, `stale`, or `missing` together with the directory it refers to.
+
+Verify a generated script before installing it:
+
+```bash
+kaseifu completions zsh > /tmp/_kaseifu
+zsh -n /tmp/_kaseifu
+```
+
+Other shells (`bash`, `fish`, `elvish`, `powershell`) can be printed as well.
+Only the zsh script is installed, and only the zsh script hides the
+debug-only `discover` command: `clap_complete` renders hidden subcommands in
+every shell it supports (upstream
+[clap-rs/clap#1335](https://github.com/clap-rs/clap/issues/1335)), so kaseifu
+removes them from the zsh output after generation.
+
 ## Configuration
 
 Settings resolve in this order: CLI flags (`--jev-endpoint`, `--jev-model`)
 win over environment variables, which win over the user configuration file
 plus Keychain, which win over application defaults. The legacy
 `JEV_API_BASE_URL` variable still works as a fallback for `JEV_API_URL`.
+
+### API key source (`KASEIFU_KEY_SOURCE`)
+
+The API key is resolved from exactly one place per invocation:
+
+| `KASEIFU_KEY_SOURCE` | Key comes from | Notes |
+|---|---|---|
+| `auto` | `JEV_API_KEY` (environment or `.env`) first, then the macOS Keychain | Default for release builds |
+| `env` | `JEV_API_KEY` (environment or `.env`) only | Default for debug builds; the Keychain is never read or written |
+| `keychain` | the macOS Keychain only | `JEV_API_KEY` is ignored; for verifying the Keychain path |
+
+The variable is read from the process environment first, then from the
+project-local `.env`; unknown values are rejected with an error. In `env`
+mode `setup`, `auth set-key` and `auth remove-key` do not touch the
+Keychain and instead explain that development uses `JEV_API_KEY` in `.env`
+or the environment (register the Keychain entry with the release-build
+kaseifu, or with `KASEIFU_KEY_SOURCE=auto kaseifu setup`). Commands that
+call Jev (`classify`, `organize`, `watch`) fail fast with a clear
+"no API key configured" error when an explicit mode resolves no key,
+instead of attempting an unauthenticated request. `auto` keeps the
+historical behavior.
 
 | Setting | Default | Description |
 
@@ -226,6 +311,7 @@ src/
 ├── main.rs              # CLI entry point (clap)
 ├── lib.rs               # Library root
 ├── auth/                # Keychain access + interactive prompts (v3.3)
+├── completion/          # zsh completion generation + installation
 ├── config/              # User TOML + resolution order (v3.3)
 ├── doctor.rs            # Environment diagnostics (v3.3)
 ├── context/             # FileContext builder (Phase 1)

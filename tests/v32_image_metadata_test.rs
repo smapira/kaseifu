@@ -16,8 +16,9 @@ use std::time::Duration;
 
 use kaseifu::auth::keychain::MemoryStore;
 use kaseifu::classifier::jev::{JevIntegration, RealJevIntegration};
+use kaseifu::config::key_source::{KeySourceMode, KeySourceSetting};
 use kaseifu::config::loader::{UserConfig, apply_setting, parse_toml};
-use kaseifu::config::resolver::{CliOverrides, resolve_with};
+use kaseifu::config::resolver::{CliOverrides, LocatedValue, resolve_with};
 use kaseifu::context::exif::{ExifOutcome, parse_bytes};
 use kaseifu::context::image_metadata::{MetadataOptions, collect, masked_location};
 use kaseifu::models::decision::DecisionContext;
@@ -684,12 +685,13 @@ async fn v32_jev_capture_withheld_leaves_no_trace() {
 // ---------------------------------------------------------------------------
 
 fn resolve_defaults() -> kaseifu::config::ResolvedConfig {
-    let lookup = |_: &str| None;
+    let lookup = |_: &str| Option::<LocatedValue>::None;
     resolve_with(
         &CliOverrides::default(),
         &lookup,
         &UserConfig::default(),
         &MemoryStore::new(),
+        KeySourceSetting::explicit(KeySourceMode::Auto),
     )
     .expect("resolves")
 }
@@ -718,12 +720,13 @@ fn v32_config_parses_metadata_toml() {
     .expect("parses");
     assert_eq!(config.metadata.image.exif_fallback, Some(false));
     assert_eq!(config.metadata.privacy.send_gps_to_jev, Some(true));
-    let lookup = |_: &str| None;
+    let lookup = |_: &str| Option::<LocatedValue>::None;
     let resolved = resolve_with(
         &CliOverrides::default(),
         &lookup,
         &config,
         &MemoryStore::new(),
+        KeySourceSetting::explicit(KeySourceMode::Auto),
     )
     .expect("resolves");
     assert!(!resolved.metadata.exif_fallback);

@@ -9,11 +9,12 @@ use kaseifu::auth::keychain::{
     AuthError, KEYCHAIN_ACCOUNT, KEYCHAIN_SERVICE, KeychainStore, MemoryStore, SecretStore,
     TEST_KEYCHAIN_SERVICE,
 };
+use kaseifu::config::key_source::{KeySourceMode, KeySourceSetting};
+use kaseifu::config::load_from;
 use kaseifu::config::loader::{
     UserConfig, apply_setting, parse_toml, save_to, validate, validate_endpoint_value,
 };
-use kaseifu::config::resolver::{CliOverrides, resolve_with};
-use kaseifu::config::{load_from, resolve_with_env};
+use kaseifu::config::resolver::{CliOverrides, LocatedValue, resolve_with};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -37,8 +38,31 @@ fn resolve_with_map(
     file: &UserConfig,
     store: &dyn SecretStore,
 ) -> kaseifu::config::ResolvedConfig {
-    let lookup = |name: &str| vars.get(name).cloned();
-    resolve_with(cli, &lookup, file, store).expect("resolution succeeds")
+    // Same behavior as before the key-source split: `auto` (the release
+    // default) keeps environment-then-Keychain resolution.
+    resolve_with_map_with(
+        cli,
+        vars,
+        file,
+        store,
+        KeySourceSetting::explicit(KeySourceMode::Auto),
+    )
+}
+
+fn resolve_with_map_with(
+    cli: &CliOverrides,
+    vars: &HashMap<String, String>,
+    file: &UserConfig,
+    store: &dyn SecretStore,
+    key_source: KeySourceSetting,
+) -> kaseifu::config::ResolvedConfig {
+    let lookup = |name: &str| {
+        vars.get(name).cloned().map(|value| LocatedValue {
+            value,
+            from_dotenv: false,
+        })
+    };
+    resolve_with(cli, &lookup, file, store, key_source).expect("resolution succeeds")
 }
 
 fn empty_cli() -> CliOverrides {
@@ -473,36 +497,41 @@ fn v33_keychain_service_ids_do_not_collide() {
 async fn v33_doctor_local_checks_without_network() {
     let store = MemoryStore::new();
     let file = UserConfig::default();
-    let resolved = resolve_with_env(&empty_cli(), &file, &store).expect("resolves");
-    let report = kaseifu::doctor::diagnose(&resolved, &store, false).await;
+    let resolved = resolve_with_map(&empty_cli(), &lookup_of(&[]), &file, &store);
+    let report = kaseifu::doctor::diagnose(&resolved, false).await;
 
     assert!(matches!(
         report.connectivity,
         kaseifu::doctor::Connectivity::NotTested
     ));
-    assert_eq!(report.checks.len(), 6);
-    let keychain = report
+    assert_eq!(report.checks.len(), 7);
+    let api_key = report
         .checks
         .iter()
-        .find(|check| check.name == "Keychain")
-        .expect("keychain check exists");
-    assert!(!keychain.ok, "missing key must fail the keychain check");
+        .find(|check| check.name == "API Key")
+        .expect("API key check exists");
+    assert!(!api_key.ok, "missing key must fail the API key check");
     let debug = format!("{:?}", report);
     assert!(!debug.contains(SECRET));
 }
 
 #[tokio::test]
-async fn v33_doctor_keychain_check_passes_with_a_key() {
+async fn v33_doctor_api_key_check_passes_with_a_key() {
     let store = MemoryStore::with_secret(SECRET);
     let file = UserConfig::default();
-    let resolved = resolve_with_env(&empty_cli(), &file, &store).expect("resolves");
-    let report = kaseifu::doctor::diagnose(&resolved, &store, false).await;
-    let keychain = report
+    let resolved = resolve_with_map(&empty_cli(), &lookup_of(&[]), &file, &store);
+    let report = kaseifu::doctor::diagnose(&resolved, false).await;
+    let api_key = report
         .checks
         .iter()
-        .find(|check| check.name == "Keychain")
-        .expect("keychain check exists");
-    assert!(keychain.ok);
+        .find(|check| check.name == "API Key")
+        .expect("API key check exists");
+    assert!(api_key.ok);
+    assert!(
+        api_key.detail.contains("macOS Keychain"),
+        "the source stays visible: {}",
+        api_key.detail
+    );
 }
 
 #[tokio::test]
@@ -510,8 +539,8 @@ async fn v33_doctor_endpoint_check_catches_bad_urls() {
     let store = MemoryStore::new();
     let mut file = UserConfig::default();
     file.jev.endpoint = Some("not a url".to_string());
-    let resolved = resolve_with_env(&empty_cli(), &file, &store).expect("resolves");
-    let report = kaseifu::doctor::diagnose(&resolved, &store, false).await;
+    let resolved = resolve_with_map(&empty_cli(), &lookup_of(&[]), &file, &store);
+    let report = kaseifu::doctor::diagnose(&resolved, false).await;
     let endpoint = report
         .checks
         .iter()

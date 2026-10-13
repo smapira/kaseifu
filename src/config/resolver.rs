@@ -1,15 +1,33 @@
 //! Configuration resolution: CLI > environment > user TOML/Keychain > defaults.
 //!
-//! The resolver is pure over its inputs (no global reads inside the core), so
-//! tests inject values instead of mutating the process environment. The only
-//! secret handled here is the API key, wrapped in [`ApiKey`] whose `Debug`
-//! output is redacted.
+//! The API key comes from exactly one source per invocation, selected by
+//! `KASEIFU_KEY_SOURCE` (see [`crate::config::key_source`]): `auto` keeps the
+//! historical environment-then-Keychain order, `env` never touches the
+//! Keychain and `keychain` never reads the environment. The resolver is pure
+//! over its inputs (no global reads inside the core), so tests inject values
+//! instead of mutating the process environment. The only secret handled here
+//! is the API key, wrapped in [`ApiKey`] whose `Debug` output is redacted.
 
 use super::defaults;
+use super::key_source::{ApiKeyOrigin, KEY_SOURCE_ENV, KeySourceMode, KeySourceSetting};
 use super::loader::UserConfig;
-use crate::auth::keychain::SecretStore;
+use crate::auth::keychain::{AuthError, SecretStore};
 use crate::classifier::jev::{JEV_API_KEY_ENV, JEV_API_URL_ENV, JEV_ENDPOINT_ENV, JEV_MODEL_ENV};
 use anyhow::Result;
+
+/// A value found for a configuration key, with its origin.
+///
+/// Only the API key reports the origin (the process environment and `.env`
+/// are shown separately); other settings ignore [`LocatedValue::from_dotenv`].
+/// The value is a secret when the key is an API key, so this type deliberately
+/// has no `Debug` implementation.
+#[derive(Clone)]
+pub struct LocatedValue {
+    /// The raw value.
+    pub value: String,
+    /// True when the value came from `.env` rather than the process environment.
+    pub from_dotenv: bool,
+}
 
 /// An API key that never prints its value (no `Display`, redacted `Debug`).
 #[derive(Clone)]
@@ -70,8 +88,12 @@ pub struct ResolvedConfig {
     pub enable_undo: bool,
     /// Effective image metadata and privacy settings (v3.2).
     pub metadata: ResolvedMetadata,
-    /// Whether the API key came from the process environment.
+    /// Whether the API key came from the process environment or `.env`.
     pub api_key_from_env: bool,
+    /// Effective `KASEIFU_KEY_SOURCE` setting for this invocation.
+    pub key_source: KeySourceSetting,
+    /// Where the resolved API key came from (never the key itself).
+    pub api_key_origin: ApiKeyOrigin,
 }
 
 /// Fully resolved image metadata and privacy settings (v3.2).
@@ -97,6 +119,18 @@ pub fn resolve(cli: &CliOverrides, store: &dyn SecretStore) -> Result<ResolvedCo
     resolve_with_env(cli, &file, store)
 }
 
+/// Effective key source from the live process environment and `.env`.
+///
+/// Commands that act before resolution (`auth set-key`, `auth remove-key`) use
+/// this to decide whether the Keychain may be touched at all. The process
+/// environment wins over `.env`; empty values count as unset.
+pub fn key_source_setting() -> Result<KeySourceSetting> {
+    let dotenv = dotenv_map();
+    Ok(KeySourceSetting::from_raw(
+        raw_key_source(&dotenv).as_deref(),
+    )?)
+}
+
 /// Resolve from the live environment with an explicit file configuration.
 ///
 /// Callers that must survive a corrupt TOML (e.g. `doctor`, `setup`) load
@@ -107,20 +141,42 @@ pub fn resolve_with_env(
     store: &dyn SecretStore,
 ) -> Result<ResolvedConfig> {
     let dotenv = dotenv_map();
+    let key_source = KeySourceSetting::from_raw(raw_key_source(&dotenv).as_deref())?;
     let lookup = |name: &str| env_or_dotenv(name, &dotenv);
-    resolve_with(cli, &lookup, file, store)
+    resolve_with(cli, &lookup, file, store, key_source)
+}
+
+/// Raw `KASEIFU_KEY_SOURCE` value: process environment first, then `.env`.
+///
+/// An empty process variable never masks a `.env` value; both empty resolve to
+/// the build default in [`KeySourceSetting::from_raw`].
+fn raw_key_source(dotenv: &std::collections::HashMap<String, String>) -> Option<String> {
+    let from_env = std::env::var(KEY_SOURCE_ENV).ok();
+    if let Some(value) = non_empty(from_env) {
+        return Some(value);
+    }
+    non_empty(dotenv.get(KEY_SOURCE_ENV).cloned())
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|text| !text.trim().is_empty())
 }
 
 /// Core resolution over injected inputs (used by [`resolve`] and tests).
 pub fn resolve_with(
     cli: &CliOverrides,
-    lookup: &dyn Fn(&str) -> Option<String>,
+    lookup: &dyn Fn(&str) -> Option<LocatedValue>,
     file: &UserConfig,
     store: &dyn SecretStore,
+    key_source: KeySourceSetting,
 ) -> Result<ResolvedConfig> {
     let endpoint = pick_endpoint(cli, lookup, file)?;
     let model = pick_model(cli, lookup, file);
-    let (api_key, from_env) = pick_api_key(lookup, store)?;
+    let (api_key, api_key_origin) = pick_api_key(lookup, store, key_source.mode);
+    let api_key_from_env = matches!(
+        api_key_origin,
+        ApiKeyOrigin::Environment | ApiKeyOrigin::Dotenv
+    );
     Ok(ResolvedConfig {
         jev: JevConfig {
             endpoint,
@@ -148,7 +204,9 @@ pub fn resolve_with(
             .enable_undo
             .unwrap_or(defaults::DEFAULT_ENABLE_UNDO),
         metadata: resolve_metadata(file),
-        api_key_from_env: from_env,
+        api_key_from_env,
+        key_source,
+        api_key_origin,
     })
 }
 
@@ -190,17 +248,17 @@ fn resolve_metadata(file: &UserConfig) -> ResolvedMetadata {
 
 fn pick_endpoint(
     cli: &CliOverrides,
-    lookup: &dyn Fn(&str) -> Option<String>,
+    lookup: &dyn Fn(&str) -> Option<LocatedValue>,
     file: &UserConfig,
 ) -> Result<String> {
     if let Some(endpoint) = cli.endpoint.clone() {
         return Ok(endpoint);
     }
     if let Some(endpoint) = lookup(JEV_API_URL_ENV) {
-        return Ok(endpoint);
+        return Ok(endpoint.value);
     }
     if let Some(endpoint) = lookup(JEV_ENDPOINT_ENV) {
-        return Ok(endpoint);
+        return Ok(endpoint.value);
     }
     if let Some(endpoint) = file.jev.endpoint.clone() {
         return Ok(endpoint);
@@ -210,14 +268,14 @@ fn pick_endpoint(
 
 fn pick_model(
     cli: &CliOverrides,
-    lookup: &dyn Fn(&str) -> Option<String>,
+    lookup: &dyn Fn(&str) -> Option<LocatedValue>,
     file: &UserConfig,
 ) -> String {
     if let Some(model) = cli.model.clone() {
         return model;
     }
     if let Some(model) = lookup(JEV_MODEL_ENV) {
-        return model;
+        return model.value;
     }
     if let Some(model) = file.jev.model.clone() {
         return model;
@@ -225,22 +283,48 @@ fn pick_model(
     defaults::DEFAULT_MODEL.to_string()
 }
 
+/// Pick the API key for the selected source mode.
+///
+/// `env` never touches the store, `keychain` never touches the environment,
+/// and `auto` keeps the historical environment-first-then-Keychain order.
+/// A *present but blank* `JEV_API_KEY` counts as missing in every mode and
+/// never triggers the Keychain fallback (a copied `.env.example` must not
+/// cause an approval dialog).
 fn pick_api_key(
-    lookup: &dyn Fn(&str) -> Option<String>,
+    lookup: &dyn Fn(&str) -> Option<LocatedValue>,
     store: &dyn SecretStore,
-) -> Result<(Option<ApiKey>, bool)> {
-    if let Some(raw) = lookup(JEV_API_KEY_ENV) {
-        if raw.trim().is_empty() {
-            return Ok((None, false));
-        }
-        return Ok((Some(ApiKey::new(raw)), true));
+    mode: KeySourceMode,
+) -> (Option<ApiKey>, ApiKeyOrigin) {
+    if mode == KeySourceMode::Keychain {
+        return pick_keychain_key(store);
     }
-    // A Keychain failure reads as "no key" here so diagnostics (`doctor`,
-    // `auth status`) can report the cause themselves instead of aborting.
-    // Callers that write (`setup`, `auth set-key`) still surface the error.
+    match lookup(JEV_API_KEY_ENV) {
+        Some(found) => env_key(found),
+        None if mode == KeySourceMode::Auto => pick_keychain_key(store),
+        None => (None, ApiKeyOrigin::Missing),
+    }
+}
+
+/// Convert a located `JEV_API_KEY` value into the resolved key.
+fn env_key(found: LocatedValue) -> (Option<ApiKey>, ApiKeyOrigin) {
+    if found.value.trim().is_empty() {
+        return (None, ApiKeyOrigin::Missing);
+    }
+    let origin = if found.from_dotenv {
+        ApiKeyOrigin::Dotenv
+    } else {
+        ApiKeyOrigin::Environment
+    };
+    (Some(ApiKey::new(found.value)), origin)
+}
+
+/// Read the Keychain; a failure is carried to diagnostics instead of aborting.
+/// Callers that write (`setup`, `auth set-key`) still surface the error.
+fn pick_keychain_key(store: &dyn SecretStore) -> (Option<ApiKey>, ApiKeyOrigin) {
     match store.get() {
-        Ok(raw) => Ok((Some(ApiKey::new(raw)), false)),
-        Err(_) => Ok((None, false)),
+        Ok(raw) => (Some(ApiKey::new(raw)), ApiKeyOrigin::Keychain),
+        Err(AuthError::NotFound) => (None, ApiKeyOrigin::Missing),
+        Err(error) => (None, ApiKeyOrigin::Unavailable(error.to_string())),
     }
 }
 
@@ -249,11 +333,20 @@ pub fn dotenv_value(name: &str) -> Option<String> {
     dotenv_map().remove(name)
 }
 
-fn env_or_dotenv(name: &str, dotenv: &std::collections::HashMap<String, String>) -> Option<String> {
+fn env_or_dotenv(
+    name: &str,
+    dotenv: &std::collections::HashMap<String, String>,
+) -> Option<LocatedValue> {
     if let Ok(value) = std::env::var(name) {
-        return Some(value);
+        return Some(LocatedValue {
+            value,
+            from_dotenv: false,
+        });
     }
-    dotenv.get(name).cloned()
+    dotenv.get(name).cloned().map(|value| LocatedValue {
+        value,
+        from_dotenv: true,
+    })
 }
 
 fn dotenv_map() -> std::collections::HashMap<String, String> {

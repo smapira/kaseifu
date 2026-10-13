@@ -2,11 +2,15 @@
 //!
 //! Local checks always run; network checks only run with an explicit flag so
 //! a plain `doctor` never touches the network. Output is ASCII-only and the
-//! API key value never appears.
+//! API key value never appears. The API key check reports the resolved source
+//! (environment / `.env` / Keychain) from the already-resolved configuration;
+//! `doctor` itself never touches the Keychain, so it can never trigger an
+//! access-approval dialog.
 
-use crate::auth::keychain::{AuthError, SecretStore};
-use crate::config::loader::load_user;
-use crate::config::resolver::ResolvedConfig;
+use crate::completion::{self, Status};
+use crate::config::ResolvedConfig;
+use crate::config::key_source::{ApiKeyOrigin, KeySourceMode};
+use std::path::Path;
 use std::time::Duration;
 
 /// Outcome of one diagnostic check.
@@ -43,18 +47,15 @@ pub struct DoctorReport {
 }
 
 /// Run local diagnostics; probe the network only when `check_connection`.
-pub async fn diagnose(
-    config: &ResolvedConfig,
-    store: &dyn SecretStore,
-    check_connection: bool,
-) -> DoctorReport {
+pub async fn diagnose(config: &ResolvedConfig, check_connection: bool) -> DoctorReport {
     let checks = vec![
         check_platform(),
         check_configuration(),
-        check_keychain(config, store),
+        check_api_key(config),
         check_endpoint(&config.jev.endpoint),
         check_spotlight(),
         check_storage(),
+        check_completion(),
     ];
     let connectivity = probe_connectivity(&config.jev.endpoint, check_connection).await;
     DoctorReport {
@@ -89,20 +90,37 @@ fn check_platform() -> CheckResult {
 }
 
 fn check_configuration() -> CheckResult {
-    match load_user() {
+    match crate::config::loader::load_user() {
         Ok(_) => pass("Configuration", "TOML loaded"),
         Err(error) => fail("Configuration", &short_error(&error)),
     }
 }
 
-fn check_keychain(config: &ResolvedConfig, store: &dyn SecretStore) -> CheckResult {
-    if config.api_key_from_env {
-        return pass("Keychain", "API key provided via environment");
+/// API key source check.
+///
+/// The resolver already recorded where the key came from (including why a
+/// lookup failed), so this check never reads the Keychain itself: in `env`
+/// mode the Keychain is not reached by any doctor code path.
+fn check_api_key(config: &ResolvedConfig) -> CheckResult {
+    match &config.api_key_origin {
+        ApiKeyOrigin::Environment => pass("API Key", "provided via environment (JEV_API_KEY)"),
+        ApiKeyOrigin::Dotenv => pass("API Key", "provided via .env"),
+        ApiKeyOrigin::Keychain => pass("API Key", "resolved from macOS Keychain"),
+        ApiKeyOrigin::Missing => fail("API Key", missing_key_detail(config.key_source.mode)),
+        ApiKeyOrigin::Unavailable(message) => fail("API Key", message),
     }
-    match store.get() {
-        Ok(_) => pass("Keychain", "API key configured"),
-        Err(AuthError::NotFound) => fail("Keychain", "no API key stored (run setup)"),
-        Err(error) => fail("Keychain", &error.to_string()),
+}
+
+/// Missing-key detail depends on the selected source so the fix is obvious.
+fn missing_key_detail(mode: KeySourceMode) -> &'static str {
+    match mode {
+        KeySourceMode::Env => {
+            "not configured (KASEIFU_KEY_SOURCE=env); set JEV_API_KEY in the environment or in .env"
+        }
+        KeySourceMode::Keychain => {
+            "no API key stored in the macOS Keychain (run the release-build kaseifu setup)"
+        }
+        KeySourceMode::Auto => "no API key configured (run kaseifu setup)",
     }
 }
 
@@ -138,6 +156,47 @@ fn command_available(name: &str) -> bool {
         .arg(name)
         .output()
         .is_ok_and(|out| out.status.success())
+}
+
+/// zsh completion file state (installed / stale / missing) and its directory.
+fn check_completion() -> CheckResult {
+    let (status, dir) = completion::state();
+    match status {
+        Status::Installed => pass(
+            "Completion",
+            &format!(
+                "zsh completions installed ({})",
+                location_word(dir.as_deref())
+            ),
+        ),
+        Status::Stale => fail(
+            "Completion",
+            &format!(
+                "zsh completions stale ({}; {} -> v{}); run kaseifu completions zsh --install",
+                location_word(dir.as_deref()),
+                version_word(dir.as_deref()),
+                completion::current_version(),
+            ),
+        ),
+        Status::Missing => fail(
+            "Completion",
+            &format!(
+                "zsh completions missing ({}); run kaseifu completions zsh --install",
+                location_word(dir.as_deref()),
+            ),
+        ),
+    }
+}
+
+fn location_word(dir: Option<&Path>) -> String {
+    dir.map(|dir| dir.display().to_string())
+        .unwrap_or_else(|| format!("no writable directory; set {}", completion::ENV_DIR))
+}
+
+fn version_word(dir: Option<&Path>) -> String {
+    dir.and_then(completion::installed_version)
+        .map(|version| format!("v{version}"))
+        .unwrap_or_else(|| "unknown version".to_string())
 }
 
 async fn probe_connectivity(endpoint: &str, check_connection: bool) -> Connectivity {

@@ -1,6 +1,6 @@
 [package]
 name = "kaseifu"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2024"
 description = "Semantic file organizer for macOS — uses Spotlight, filesystem context, and Jev to decide where files belong."
 license = "MIT"
@@ -19,6 +19,7 @@ anyhow = "1"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 dirs = "6"
 dotenvy = "0.15.7"
 keyring = { version = "3", features = ["apple-native"] }
