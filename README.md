@@ -97,14 +97,6 @@ Print the `FileContext` JSON that forms the basis of candidate discovery and cla
 kaseifu inspect ~/Desktop/example.pdf
 ```
 
-### Discover candidates
-
-Search for similar files and list scored candidate destinations.
-
-```bash
-kaseifu discover ~/Desktop/example.pdf
-```
-
 ### Classify (dry run)
 
 Run the full decision pipeline — observe, normalize, discover, Jev — and print the decision without moving anything.
@@ -202,7 +194,7 @@ Add `--check-connection` to also probe endpoint reachability.
 Enable debug output with the `KASEIFU_DEBUG` environment variable:
 
 ```bash
-KASEIFU_DEBUG=1 kaseifu discover ~/Desktop/example.pdf
+KASEIFU_DEBUG=1 kaseifu classify ~/Desktop/example.pdf
 ```
 
 ## Configuration

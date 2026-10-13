@@ -77,10 +77,15 @@ enum Commands {
         last: usize,
     },
 
-    /// Discover candidate destination directories
+    /// Discover candidate destination directories (debug only).
     ///
     /// Searches for similar files using Spotlight and aggregates
     /// parent directories with scoring.
+    ///
+    /// Hidden from `--help`: this is a diagnostic view of the discovery
+    /// stage, not part of the supported workflow (`classify` runs the same
+    /// discovery internally). The command stays functional.
+    #[command(hide = true)]
     Discover {
         file: PathBuf,
         #[arg(long)]
