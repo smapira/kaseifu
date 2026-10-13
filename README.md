@@ -96,19 +96,38 @@ cargo install --path .
 
 ### Quick Start
 
-Run the setup wizard once:
+A bare `kaseifu` prints a short guide and does nothing else:
 
 ```bash
-kaseifu setup
+kaseifu
 ```
 
-Classify a file:
+Check that the environment is ready (configuration, API key, Spotlight,
+journal, completions):
+
+```bash
+kaseifu doctor
+```
+
+Classify a file. When no API key is configured yet and stdin is a terminal,
+kaseifu asks for it with hidden input and stores it where
+`KASEIFU_KEY_SOURCE` keeps keys (the macOS Keychain by default, `.env` in
+`env` mode):
 
 ```bash
 kaseifu classify ~/Desktop/example.pdf
 ```
 
-No environment variables or `.env` file are required.
+The setup wizard does the same up front:
+
+```bash
+kaseifu setup
+```
+
+No environment variables or `.env` file are required. Without a terminal
+(scripts, CI) a missing key fails immediately (non-zero exit) and names the
+commands that need no key (`kaseifu inspect`, `kaseifu doctor`) plus
+`kaseifu setup`.
 
 ### Inspect a file
 
@@ -229,15 +248,20 @@ Diagnose configuration and environment without touching the network:
 kaseifu doctor
 ```
 
-Add `--check-connection` to also probe endpoint reachability. The
-`API Key` check reports the resolved source
+Add `--check-connection` to also probe endpoint reachability. The first line
+is the verdict (`Ready: yes`, or `Ready: no (N check(s) failed: ...)`), and
+every `FAIL` row names the next action, e.g. `(next: kaseifu setup)` or
+`(next: kaseifu completions zsh --install)`, so a failure is never a dead
+end. The `API Key` check reports the resolved source
 (`provided via environment (JEV_API_KEY)` / `provided via .env` /
 `resolved from macOS Keychain` / a clear failure when nothing is configured).
 The `Journal` check prints the resolved journal path, the number of recorded
 operations and any `pending` rows (with the current state of the files they
 name); `Legacy Journal` reports a leftover `./data/kaseifu.db` from an older
-build.
-Both checks are read-only: `doctor` never creates or modifies a journal.
+build together with its recorded operation count — `0 operation(s) recorded;
+safe to delete` means the file holds nothing, anything else may be undo
+history. Both checks are read-only: `doctor` never creates, modifies or
+deletes a journal (the old one is reported, never migrated).
 
 ### Debug
 
@@ -321,11 +345,19 @@ project-local `.env`; unknown values are rejected with an error. In `env`
 mode `setup`, `auth set-key` and `auth remove-key` do not touch the
 Keychain and instead explain that development uses `JEV_API_KEY` in `.env`
 or the environment (register the Keychain entry with the release-build
-kaseifu, or with `KASEIFU_KEY_SOURCE=auto kaseifu setup`). Commands that
-call Jev (`classify`, `organize`, `watch`) fail fast with a clear
-"no API key configured" error when an explicit mode resolves no key,
-instead of attempting an unauthenticated request. `auto` keeps the
-historical behavior.
+kaseifu, or with `KASEIFU_KEY_SOURCE=auto kaseifu setup`).
+
+Commands that call Jev (`classify`, `organize`, `watch`) resolve the key
+first. When nothing is configured and stdin is a terminal, they prompt for
+it with hidden input and store it where the mode keeps keys: the macOS
+Keychain for `auto`/`keychain`, the project-local `.env` for `env` (created
+with mode 0600 when missing, an existing `JEV_API_KEY=` line is replaced and
+every other line is kept). In `env` mode the Keychain is still never read or
+written. Without a terminal the command fails with the usual
+"no API key configured" error and names the commands that need no key
+(`inspect`, `doctor`) plus `kaseifu setup`. The key value is never printed,
+logged or put into JSON, and an empty or interrupted entry stores nothing.
+`watch` asks before it starts watching, never while it runs.
 
 | Setting | Default | Description |
 

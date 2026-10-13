@@ -142,10 +142,19 @@ history) and is never written to TOML or logs.
 
 ## Local Jev mocks and the key check
 
-`classify` / `organize` / `watch` fail fast when an explicit source
-(`env` / `keychain`) resolves no key. When pointing kaseifu at a local mock
-that ignores authentication, set any dummy value, e.g.
+`classify` / `organize` / `watch` resolve the key first. With a terminal and
+no key configured they ask for it and store it where `KASEIFU_KEY_SOURCE`
+keeps keys (Keychain for `auto`/`keychain`, `.env` for `env`); without a
+terminal they fail fast with the commands that need no key (`inspect`,
+`doctor`) and `kaseifu setup`. When pointing kaseifu at a local mock that
+ignores authentication, set any dummy value, e.g.
 
 ```bash
 JEV_API_KEY=dummy cargo run -- --jev-endpoint http://127.0.0.1:8080 classify file.pdf
 ```
+
+The acquisition path is tested without a terminal: `auth::acquire` takes the
+secret reader and the `SecretStore` as arguments, so tests inject both and
+prove the storage location (`tests/v052_zero_config_key_test.rs`); the CLI
+level uses a real PTY (`libc::openpty`) and never touches the developer's
+`.env` or Keychain (`tests/v052_zero_config_cli_test.rs`).

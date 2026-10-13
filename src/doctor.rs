@@ -12,6 +12,12 @@
 //! name), never repaired. An interrupted move cannot be told apart from one
 //! still in flight without the filesystem, so automatic recovery could
 //! destroy a correct state — detection is the whole contract (R1/R2).
+//!
+//! Every failed check carries the next action (`CheckResult::next`, ZC-4), so
+//! the report answers "can I use kaseifu right now?" instead of ending in a
+//! dead end. The `Legacy Journal` check additionally reports how many
+//! operations the old CWD-relative journal holds (read-only, never migrated or
+//! deleted): zero rows is safe to delete, anything else may be undo history.
 
 use crate::completion::{self, Status};
 use crate::config::ResolvedConfig;
@@ -33,6 +39,12 @@ pub struct CheckResult {
     pub ok: bool,
     /// Human-readable detail (never contains secrets).
     pub detail: String,
+    /// Next action for a failed check (always `Some` when `!ok`, `None` when
+    /// the check passed). Most hints are a command to run; a condition no
+    /// command can fix (not macOS, an unreadable journal, a pending row that
+    /// needs a human decision) says what to do and names the command that
+    /// confirms the result afterwards, so a FAIL row is never a dead end.
+    pub next: Option<String>,
 }
 
 /// Connectivity outcome for the Jev endpoint.
@@ -102,14 +114,17 @@ fn pass(name: &'static str, detail: &str) -> CheckResult {
         name,
         ok: true,
         detail: detail.to_string(),
+        next: None,
     }
 }
 
-fn fail(name: &'static str, detail: &str) -> CheckResult {
+/// A failed check always carries the next action (ZC-4).
+fn fail(name: &'static str, detail: &str, next: &str) -> CheckResult {
     CheckResult {
         name,
         ok: false,
         detail: detail.to_string(),
+        next: Some(next.to_string()),
     }
 }
 
@@ -117,14 +132,22 @@ fn check_platform() -> CheckResult {
     if cfg!(target_os = "macos") {
         pass("Platform", "macOS supported")
     } else {
-        fail("Platform", "not macOS; Keychain and Spotlight need macOS")
+        fail(
+            "Platform",
+            "not macOS; Keychain and Spotlight need macOS",
+            "run kaseifu doctor on macOS",
+        )
     }
 }
 
 fn check_configuration() -> CheckResult {
     match crate::config::loader::load_user() {
         Ok(_) => pass("Configuration", "TOML loaded"),
-        Err(error) => fail("Configuration", &short_error(&error)),
+        Err(error) => fail(
+            "Configuration",
+            &short_error(&error),
+            "kaseifu setup (it writes a valid configuration file)",
+        ),
     }
 }
 
@@ -138,8 +161,16 @@ fn check_api_key(config: &ResolvedConfig) -> CheckResult {
         ApiKeyOrigin::Environment => pass("API Key", "provided via environment (JEV_API_KEY)"),
         ApiKeyOrigin::Dotenv => pass("API Key", "provided via .env"),
         ApiKeyOrigin::Keychain => pass("API Key", "resolved from macOS Keychain"),
-        ApiKeyOrigin::Missing => fail("API Key", missing_key_detail(config.key_source.mode)),
-        ApiKeyOrigin::Unavailable(message) => fail("API Key", message),
+        ApiKeyOrigin::Missing => fail(
+            "API Key",
+            missing_key_detail(config.key_source.mode),
+            "kaseifu setup (or enter the key when a Jev command asks)",
+        ),
+        ApiKeyOrigin::Unavailable(message) => fail(
+            "API Key",
+            message,
+            "kaseifu setup (check the Keychain access prompt)",
+        ),
     }
 }
 
@@ -161,7 +192,11 @@ fn check_endpoint(endpoint: &str) -> CheckResult {
         Ok(url) if url.scheme() == "https" || url.scheme() == "http" => {
             pass("Jev Endpoint", "URL form looks valid")
         }
-        _ => fail("Jev Endpoint", "URL form is invalid"),
+        _ => fail(
+            "Jev Endpoint",
+            "URL form is invalid",
+            "kaseifu setup (it validates and saves the endpoint)",
+        ),
     }
 }
 
@@ -171,7 +206,11 @@ fn check_spotlight() -> CheckResult {
     if mdls && mdfind {
         pass("Spotlight", "mdls and mdfind available")
     } else {
-        fail("Spotlight", "mdls or mdfind is missing")
+        fail(
+            "Spotlight",
+            "mdls or mdfind is missing",
+            "mdutil -i on / (Spotlight indexing must be enabled)",
+        )
     }
 }
 
@@ -179,7 +218,14 @@ fn check_storage() -> CheckResult {
     let dir = crate::config::storage::app_dir();
     match std::fs::create_dir_all(&dir) {
         Ok(()) => pass("Storage", "data directory is writable"),
-        Err(error) => fail("Storage", &short_io_error(&error)),
+        Err(error) => fail(
+            "Storage",
+            &short_io_error(&error),
+            &format!(
+                "fix the permissions of {} and run kaseifu doctor again",
+                dir.display()
+            ),
+        ),
     }
 }
 
@@ -194,7 +240,11 @@ fn check_journal(path: &Path) -> CheckResult {
         Ok(Some(inspection)) => {
             let detail = journal_detail(path, &inspection);
             if inspection.pending.iter().any(|pending| pending.stale) {
-                fail("Journal", &detail)
+                fail(
+                    "Journal",
+                    &detail,
+                    "check the listed files yourself, then run kaseifu doctor again (nothing is repaired automatically)",
+                )
             } else {
                 pass("Journal", &detail)
             }
@@ -202,6 +252,7 @@ fn check_journal(path: &Path) -> CheckResult {
         Err(error) => fail(
             "Journal",
             &format!("{}: {}", path.display(), short_error(&error)),
+            "move the unreadable file aside, then run kaseifu doctor again",
         ),
     }
 }
@@ -251,25 +302,73 @@ fn file_state(row: &PendingOperation) -> &'static str {
     }
 }
 
-/// Detect the old CWD-relative journal. The file is never read, migrated or
-/// deleted — it may hold a real user's undo history — so this check only
-/// makes its existence visible.
+/// Detect the old CWD-relative journal. The file is never migrated, moved,
+/// overwritten or deleted — it may hold a real user's undo history — so this
+/// check only makes its existence visible. The operation count is read
+/// through the same read-only inspection `Journal` uses: zero operations means
+/// the file holds nothing worth keeping, which is said out loud instead of
+/// leaving the user to guess.
 fn check_legacy_journal(legacy: &Path, current: &Path) -> CheckResult {
-    if legacy.exists() {
-        fail(
+    if !legacy.exists() {
+        return pass(
+            "Legacy Journal",
+            &format!("no {} in the current directory", legacy.display()),
+        );
+    }
+    match history::inspect_journal(legacy) {
+        Ok(Some(inspection)) => legacy_journal_result(legacy, current, inspection.total_operations),
+        Ok(None) => fail(
             "Legacy Journal",
             &format!(
-                "found {} (old CWD-relative journal; not read, not migrated; current journal: {})",
+                "found {} (old CWD-relative journal; it disappeared while checking; not migrated, not deleted; current journal: {})",
                 legacy.display(),
                 current.display()
             ),
+            "run kaseifu doctor again",
+        ),
+        Err(error) => fail(
+            "Legacy Journal",
+            &format!(
+                "found {} (old CWD-relative journal; could not read it: {}; not migrated, not deleted; current journal: {})",
+                legacy.display(),
+                short_error(&error),
+                current.display()
+            ),
+            &format!("check it yourself with: file {}", legacy.display()),
+        ),
+    }
+}
+
+/// Legacy journal verdict once its row count is known: 0 rows is safe to
+/// delete, anything else may be undo history. kaseifu never deletes it.
+fn legacy_journal_result(legacy: &Path, current: &Path, operations: u64) -> CheckResult {
+    let (count_word, next) = if operations == 0 {
+        (
+            "0 operation(s) recorded; safe to delete".to_string(),
+            format!(
+                "rm {} (safe: 0 operations; kaseifu never deletes it)",
+                legacy.display()
+            ),
         )
     } else {
-        pass(
-            "Legacy Journal",
-            &format!("no {} in the current directory", legacy.display()),
+        (
+            format!("{operations} operation(s) recorded; keep it if you still need undo history"),
+            format!(
+                "nothing to run: keep {} if you still need the undo history (kaseifu never migrates or deletes it)",
+                legacy.display()
+            ),
         )
-    }
+    };
+    fail(
+        "Legacy Journal",
+        &format!(
+            "found {} (old CWD-relative journal; {}; not migrated, not deleted; current journal: {})",
+            legacy.display(),
+            count_word,
+            current.display()
+        ),
+        &next,
+    )
 }
 
 fn command_available(name: &str) -> bool {
@@ -298,6 +397,7 @@ fn check_completion() -> CheckResult {
                 version_word(dir.as_deref()),
                 completion::current_version(),
             ),
+            &completion_next(dir.as_deref()),
         ),
         Status::Missing => fail(
             "Completion",
@@ -305,6 +405,19 @@ fn check_completion() -> CheckResult {
                 "zsh completions missing ({}); run kaseifu completions zsh --install",
                 location_word(dir.as_deref()),
             ),
+            &completion_next(dir.as_deref()),
+        ),
+    }
+}
+
+/// Install command for the completion FAIL hint; an explicit directory is
+/// only suggested when no writable one was detected.
+fn completion_next(dir: Option<&Path>) -> String {
+    match dir {
+        Some(_) => "kaseifu completions zsh --install".to_string(),
+        None => format!(
+            "kaseifu completions zsh --install --dir <PATH> (or set {})",
+            completion::ENV_DIR
         ),
     }
 }

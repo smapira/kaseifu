@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
+use kaseifu::auth::acquire;
 use kaseifu::auth::keychain::{AuthError, KeychainStore, SecretStore};
 use kaseifu::auth::prompt;
 use kaseifu::classifier::jev::{JevError, JevIntegration, JevResponse, RealJevIntegration};
@@ -23,7 +24,7 @@ use kaseifu::watch::coordinator::WatchConfig;
 use kaseifu::watch::runner;
 use kaseifu::{context, discovery, normalize};
 use std::future::Future;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
@@ -39,8 +40,9 @@ struct Cli {
     /// Override the Jev model alias (highest priority).
     #[arg(long, global = true)]
     jev_model: Option<String>,
+    /// Subcommand; omitted means print the guidance only (exit 0, no work).
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -208,47 +210,122 @@ async fn main() -> Result<()> {
     let format = cli.format;
     let overrides = cli_overrides(&cli);
     // Best-effort completion upkeep before dispatch: `completions` must stay
-    // free of side effects and `doctor` must report the state as it is.
+    // free of side effects, `doctor` must report the state as it is, and the
+    // no-subcommand guidance stays side-effect free as well (ZC-2).
     if !matches!(
         &cli.command,
-        Commands::Completions { .. } | Commands::Doctor { .. }
+        None | Some(Commands::Completions { .. }) | Some(Commands::Doctor { .. })
     ) {
         kaseifu::completion::refresh_if_stale(&mut Cli::command());
     }
     match cli.command {
-        Commands::Inspect { path, all, verbose } => handle_inspect(&path, all, verbose, format),
-        Commands::Scan { path } => {
+        None => handle_usage(format),
+        Some(Commands::Inspect { path, all, verbose }) => {
+            handle_inspect(&path, all, verbose, format)
+        }
+        Some(Commands::Scan { path }) => {
             handle_scan(&path, format);
             Ok(())
         }
-        Commands::Organize {
+        Some(Commands::Organize {
             file,
             execute,
             dry_run,
-        } => handle_organize(&file, execute, dry_run, format, &overrides).await,
-        Commands::Watch {
+        }) => handle_organize(&file, execute, dry_run, format, &overrides).await,
+        Some(Commands::Watch {
             paths,
             execute,
             dry_run,
-        } => handle_watch(&paths, execute, dry_run, format, &overrides).await,
-        Commands::Undo { last } => handle_undo(last, format),
-        Commands::Discover { file, all, verbose } => handle_discover(&file, all, verbose, format),
-        Commands::Classify { file, all, verbose } => {
+        }) => handle_watch(&paths, execute, dry_run, format, &overrides).await,
+        Some(Commands::Undo { last }) => handle_undo(last, format),
+        Some(Commands::Discover { file, all, verbose }) => {
+            handle_discover(&file, all, verbose, format)
+        }
+        Some(Commands::Classify { file, all, verbose }) => {
             handle_classify(&file, all, verbose, format, &overrides).await
         }
-        Commands::Setup { check_connection } => {
+        Some(Commands::Setup { check_connection }) => {
             handle_setup(&overrides, check_connection, format).await
         }
-        Commands::Auth { action } => handle_auth(action, format),
-        Commands::Config { action } => handle_config(action, format),
-        Commands::Doctor { check_connection } => {
+        Some(Commands::Auth { action }) => handle_auth(action, format),
+        Some(Commands::Config { action }) => handle_config(action, format),
+        Some(Commands::Doctor { check_connection }) => {
             handle_doctor(&overrides, check_connection, format).await
         }
-        Commands::Completions {
+        Some(Commands::Completions {
             shell,
             install,
             dir,
-        } => handle_completions(shell, install, dir, format),
+        }) => handle_completions(shell, install, dir, format),
+    }
+}
+
+/// `kaseifu` with no subcommand: guidance only (ZC-2).
+///
+/// Exit code 0, no usage error, and no side effects: no journal, no network,
+/// no completion refresh, nothing on stdin. The key state is read the same way
+/// `doctor` reads it (user TOML with a default fallback, Keychain through the
+/// resolver), so a broken configuration still prints guidance.
+fn handle_usage(format: OutputFormat) -> Result<()> {
+    let (key_line, key_configured) = usage_key_state();
+    let lines = vec![
+        "kaseifu organizes files into the folders they belong to (macOS).".to_string(),
+        String::new(),
+        "  kaseifu classify <file>   decide where a file belongs (nothing moves)".to_string(),
+        "  kaseifu organize <file>   plan the move; --execute performs it".to_string(),
+        "  kaseifu doctor            check whether kaseifu is ready to use".to_string(),
+        String::new(),
+        "Files are never moved unless you pass --execute.".to_string(),
+        format!("API key: {key_line}"),
+        "Run kaseifu --help for every command.".to_string(),
+    ];
+    let json = serde_json::json!({
+        "about": "Semantic file organization for macOS",
+        "commands": [
+            {"name": "classify", "purpose": "decide where a file belongs (nothing moves)"},
+            {"name": "organize", "purpose": "plan the move; --execute performs it"},
+            {"name": "doctor", "purpose": "check whether kaseifu is ready to use"},
+        ],
+        "execute_required": true,
+        "api_key_configured": key_configured,
+        "help": "kaseifu --help",
+    })
+    .to_string();
+    emit_report(format, "KASEIFU", &lines, &json);
+    Ok(())
+}
+
+/// Key state line for the no-subcommand guidance (never the key itself).
+fn usage_key_state() -> (String, bool) {
+    let store = keychain_store();
+    let file = load_user().unwrap_or_default();
+    match kaseifu::config::resolve_with_env(&CliOverrides::default(), &file, &store) {
+        Ok(resolved) if resolved.jev.api_key.is_some() => (
+            format!("configured ({})", resolved.api_key_origin.label()),
+            true,
+        ),
+        Ok(resolved) => (usage_missing_key_line(resolved.key_source.mode), false),
+        Err(_) => (
+            "could not be checked; run kaseifu doctor".to_string(),
+            false,
+        ),
+    }
+}
+
+/// What to do when no key is configured, per source mode.
+fn usage_missing_key_line(mode: KeySourceMode) -> String {
+    match mode {
+        KeySourceMode::Auto => {
+            "not configured; run kaseifu setup, or enter it when a Jev command asks".to_string()
+        }
+        KeySourceMode::Env => {
+            "not configured (KASEIFU_KEY_SOURCE=env); run kaseifu setup, set JEV_API_KEY in .env, or enter it when a Jev command asks"
+                .to_string()
+        }
+        KeySourceMode::Keychain => {
+            "not configured (KASEIFU_KEY_SOURCE=keychain); run kaseifu setup, or enter it when a Jev command asks"
+                .to_string()
+        }
     }
 }
 
@@ -322,8 +399,7 @@ async fn handle_organize(
 ) -> Result<()> {
     let actually_move = execute && !dry_run;
 
-    let resolved = resolve_for(overrides)?;
-    require_jev_api_key(&resolved)?;
+    let resolved = resolve_for_jev_command(overrides)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
     let jev = RealJevIntegration::from_resolved_full(&resolved);
     let history = OperationHistory::open(journal_path())?;
@@ -366,8 +442,7 @@ async fn handle_watch(
         }
     }
 
-    let resolved = resolve_for(overrides)?;
-    require_jev_api_key(&resolved)?;
+    let resolved = resolve_for_jev_command(overrides)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
     let jev = RealJevIntegration::from_resolved_full(&resolved);
     let history = OperationHistory::open(journal_path())?;
@@ -505,8 +580,7 @@ async fn handle_classify(
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
-    let resolved = resolve_for(overrides)?;
-    require_jev_api_key(&resolved)?;
+    let resolved = resolve_for_jev_command(overrides)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
     let jev = RealJevIntegration::from_resolved_full(&resolved);
     let observer = ObservingJevIntegration {
@@ -622,22 +696,45 @@ fn resolve_for(overrides: &CliOverrides) -> Result<ResolvedConfig> {
     resolve(overrides, &store)
 }
 
-/// Jev-calling commands must not run without a key when the source was pinned:
-/// `env` / `keychain` fail fast with the reason instead of attempting an
-/// unauthenticated request. `auto` keeps the historical behavior.
-fn require_jev_api_key(resolved: &ResolvedConfig) -> Result<()> {
+/// Resolve settings for a Jev-calling command, acquiring a missing key
+/// interactively when a terminal is available (ZC-1).
+///
+/// With a TTY the key is read through the existing masked prompt and stored
+/// where the selected `KASEIFU_KEY_SOURCE` mode keeps keys (the macOS Keychain
+/// for `auto`/`keychain`, the project-local `.env` for `env`), then resolved
+/// again from that location so the process never uses a second, unverified
+/// copy. Without a TTY the command fails before doing any work (non-zero exit)
+/// and names the commands that need no key (`inspect`, `doctor`) plus `setup`.
+/// An empty entry, or an interrupted read, stores nothing.
+fn resolve_for_jev_command(overrides: &CliOverrides) -> Result<ResolvedConfig> {
+    let resolved = resolve_for(overrides)?;
     if resolved.jev.api_key.is_some() {
-        return Ok(());
+        return Ok(resolved);
     }
-    match resolved.key_source.mode {
-        KeySourceMode::Auto => Ok(()),
-        KeySourceMode::Env => anyhow::bail!(
-            "no API key is configured (KASEIFU_KEY_SOURCE=env); set JEV_API_KEY in the environment or in .env"
-        ),
-        KeySourceMode::Keychain => anyhow::bail!(
-            "no API key is stored in the macOS Keychain (KASEIFU_KEY_SOURCE=keychain); run the release-build kaseifu setup to store it"
-        ),
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!("{}", acquire::non_tty_guidance(resolved.key_source.mode));
     }
+    let target = acquire::prompt_and_store_key(
+        resolved.key_source.mode,
+        &keychain_store(),
+        Path::new(acquire::DOTENV_FILE),
+        &|| prompt::prompt_secret("Jev API key"),
+    )?;
+    let refreshed = resolve_for(overrides)?;
+    if refreshed.jev.api_key.is_none() {
+        // Rare: the write succeeded but resolution still finds nothing (an
+        // empty JEV_API_KEY in the environment or .env masks a stored key, or
+        // the Keychain denied the read-back). Say what to check next instead
+        // of leaving a half-explained failure.
+        anyhow::bail!(
+            "the API key was saved to {} but did not resolve; check the source with kaseifu doctor \
+             (an empty JEV_API_KEY in the environment or .env can mask a stored key)",
+            target.label()
+        );
+    }
+    // stderr keeps stdout (including `--format json`) free of extra lines.
+    eprintln!("API key saved to {}", target.label());
+    Ok(refreshed)
 }
 
 /// Policy thresholds from resolved configuration (user TOML may tune them).
@@ -1159,27 +1256,66 @@ async fn handle_doctor(
     Ok(())
 }
 
+/// `doctor` report: one page answering "can I use kaseifu right now?".
+///
+/// The verdict comes first, each FAIL row carries the next action (ZC-4), and
+/// the JSON adds `ready` / `failing` / `checks[].next` without touching the
+/// existing keys.
 fn emit_doctor_report(report: &kaseifu::doctor::DoctorReport, format: OutputFormat) {
-    let mut lines: Vec<String> = report
+    let failing: Vec<&str> = report
         .checks
         .iter()
-        .map(|check| format!("{} {}: {}", check_word(check.ok), check.name, check.detail))
+        .filter(|check| !check.ok)
+        .map(|check| check.name)
         .collect();
+    let ready = failing.is_empty();
+    let mut lines: Vec<String> = vec![doctor_verdict_line(&failing)];
+    lines.extend(report.checks.iter().map(check_line));
     lines.push(format!(
         "Jev connectivity: {}",
         connectivity_word(&report.connectivity)
     ));
     let json = serde_json::json!({
+        "ready": ready,
+        "failing": failing,
         "checks": report.checks.iter().map(|check| serde_json::json!({
             "name": check.name,
             "ok": check.ok,
             "detail": check.detail,
+            "next": check.next,
         })).collect::<Vec<_>>(),
         "connectivity": connectivity_word(&report.connectivity),
         "endpoint": report.endpoint,
     })
     .to_string();
     emit_report(format, "KASEIFU / DOCTOR", &lines, &json);
+}
+
+/// First line of the report: whether every check passed.
+fn doctor_verdict_line(failing: &[&str]) -> String {
+    if failing.is_empty() {
+        "Ready: yes".to_string()
+    } else {
+        format!(
+            "Ready: no ({} check(s) failed: {})",
+            failing.len(),
+            failing.join(", ")
+        )
+    }
+}
+
+/// One check row; a FAIL row always carries its next action.
+fn check_line(check: &kaseifu::doctor::CheckResult) -> String {
+    match (&check.next, check.ok) {
+        (Some(next), false) => format!(
+            "{} {}: {} (next: {})",
+            check_word(check.ok),
+            check.name,
+            check.detail,
+            next
+        ),
+        _ => format!("{} {}: {}", check_word(check.ok), check.name, check.detail),
+    }
 }
 
 // --- completions -----------------------------------------------------------

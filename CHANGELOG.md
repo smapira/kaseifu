@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **First-time key entry without leaving the command (`classify` /
+  `organize` / `watch`)** — a Jev-calling command that finds no API key now
+  asks for it when stdin is a terminal: the existing masked prompt is reused,
+  the value is stored where `KASEIFU_KEY_SOURCE` keeps keys (the macOS
+  Keychain for `auto`/`keychain`, the project-local `.env` for `env` — created
+  with mode 0600 when missing, an existing `JEV_API_KEY=` line is replaced and
+  every other line is kept), and the command then continues from that
+  resolved key. `env` mode still never reads or writes the Keychain. Without a
+  terminal (scripts, CI) the command fails fast with a non-zero exit and names
+  the commands that need no key (`kaseifu inspect`, `kaseifu doctor`) plus
+  `kaseifu setup`. An empty or interrupted entry stores nothing, and the key
+  value never reaches stdout, stderr, logs or JSON. `watch` asks before the
+  watch starts, never while it runs.
+- **A bare `kaseifu` explains itself** — running kaseifu with no subcommand
+  no longer prints a usage error: it prints one line of purpose, the three
+  everyday commands (`classify`, `organize`, `doctor`), the rule that files
+  are never moved unless `--execute` is passed, and — when no key is
+  configured — `kaseifu setup` (or the key prompt above). Exit code 0, no
+  journal, no network, no completion refresh, nothing read from stdin.
+  `kaseifu --help` still lists every command.
+- **`doctor` answers "can I use it now?" in one page** — the report starts
+  with a verdict (`Ready: yes` / `Ready: no (N check(s) failed: ...)`) and
+  every `FAIL` row now ends with the next action, e.g. `(next: kaseifu
+  setup)`, `(next: kaseifu completions zsh --install)`, `(next: rm
+  data/kaseifu.db (safe: 0 operations; kaseifu never deletes it))`. The JSON
+  report adds `ready`, `failing` and `checks[].next`; existing keys and the
+  meaning of every check are unchanged.
+
+### Changed
+
+- **The leftover legacy journal now says what it contains** — `doctor`'s
+  `Legacy Journal` check reads the old CWD-relative `./data/kaseifu.db`
+  read-only to report its operation count: `0 operation(s) recorded; safe to
+  delete` means the file holds nothing worth keeping (the next action suggests
+  the `rm`), while any other count says to keep it if the undo history is
+  still needed. A file that cannot be read is reported as such. kaseifu still
+  never migrates, moves, overwrites or deletes that file.
 - **Interrupted-operation detection (`doctor`, `undo`, journal API)** — a move
   that is interrupted between the filesystem rename and its journal update
   leaves a `pending` row; the journal now makes those rows visible instead of
@@ -22,9 +59,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a human decision (this task deliberately implements detection only, per the
   debug-scenario design S05). The inspection is read-only (SQLite read-only
   connection): `doctor` never creates or modifies a journal.
-
-### Changed
-
 - **Journal location is now stable** — the default journal moved from the
   CWD-relative `data/kaseifu.db` (which silently created a different journal
   per working directory, so `undo` could not see moves recorded elsewhere) to
@@ -54,6 +88,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interlock was considered and rejected — its default `true` would stop every
   `--execute` move. `config set` validation (unknown keys, API keys) is
   unchanged.
+
+### Fixed
+
+- **Interactive prompts no longer write to stdout** — every prompt (`setup`,
+  `auth set-key` and the first-time key entry above) now goes to stderr. A
+  redirected or piped stdout therefore stays parseable (`kaseifu classify
+  --format json > out.json` writes nothing but JSON), and a prompt is still
+  visible when stdout is not a terminal instead of looking like a silent hang.
+  Echo suppression, the TTY requirement and the accepted answers are unchanged.
+
 ## [0.5.0] - 2026-10-13
 
 ### Added

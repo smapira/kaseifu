@@ -188,8 +188,12 @@ fn v051_doctor_detects_a_legacy_journal_without_touching_it() {
         "the leftover journal must be visible: {text}"
     );
     assert!(
-        text.contains("not read, not migrated"),
-        "the behavior must be spelled out: {text}"
+        text.contains("could not read it") && text.contains("not migrated, not deleted"),
+        "an unreadable leftover is reported as such and never touched: {text}"
+    );
+    assert!(
+        text.contains("(next: "),
+        "the FAIL row names the next action: {text}"
     );
     assert!(
         text.contains(&format!(
