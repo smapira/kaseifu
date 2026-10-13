@@ -9,13 +9,16 @@
 
 use crate::classifier::pipeline::ClassifyReport;
 use crate::models::decision::DecisionAction;
+use crate::policy::decision::Thresholds;
 use crate::presentation::components::display::{MISSING, format_bytes};
 use crate::presentation::components::panel::{self, Section};
 use crate::presentation::components::path::{paint_path, path_budget, relative_display};
 use crate::presentation::components::score_bar::{percent_label, render_probability_bar_auto};
+use crate::presentation::renderers::explain::{self, Explanation};
 use crate::presentation::renderers::generic;
 use crate::presentation::theme;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// Default ranking size; `--all` lifts the limit.
 pub const RANKING_LIMIT: usize = 5;
@@ -229,15 +232,22 @@ fn selected_directory_label(selected: &str, by_id: &HashMap<&str, String>, color
 }
 
 /// POLICY (Rust verdict; never Jev's `move_to`).
+///
+/// `near` (ZC-5) is the near-miss line that applies below the auto-move
+/// thresholds; the existing rows keep their wording and order.
 fn policy_lines(
     policy: &DecisionAction,
     by_id: &HashMap<&str, String>,
     color: bool,
+    near: Option<String>,
 ) -> Vec<String> {
     let mut lines = Vec::new();
     let (kind, reason) = generic::policy_view(policy);
     lines.push(generic::decision_line(kind, color));
     lines.push(reason);
+    if let Some(near) = near {
+        lines.push(near);
+    }
     if let Some(id) = policy_destination(policy) {
         let dir = resolve_directory(id, by_id)
             .map(|s| paint_path(s, path_budget(), color))
@@ -251,18 +261,36 @@ fn policy_lines(
     lines
 }
 
+/// The explanation for one classification, using the effective thresholds.
+pub fn decision_explanation(
+    report: &ClassifyReport,
+    policy: &DecisionAction,
+    thresholds: Thresholds,
+) -> Explanation {
+    let path: Option<PathBuf> = report
+        .candidates
+        .iter()
+        .find(|candidate| Some(&candidate.id) == report.decision.destination_id.as_ref())
+        .map(|candidate| candidate.path.clone());
+    explain::explain(&report.decision, policy, thresholds, path.as_deref())
+}
+
 fn body_sections(
     report: &ClassifyReport,
     policy: &DecisionAction,
     show_all: bool,
     verbose: bool,
     color: bool,
+    thresholds: Thresholds,
+    explain: bool,
 ) -> Vec<Section> {
     let by_id = candidate_paths(report);
     let ranked = rank_probabilities(&report.probabilities);
     let selected = report.decision.destination_id.as_deref().unwrap_or(MISSING);
+    let explanation = decision_explanation(report, policy, thresholds);
+    let near = explanation.near_line();
 
-    vec![
+    let mut sections = vec![
         Section::plain(target_head(report, color)),
         Section::headed(
             "JEV RANKING",
@@ -272,8 +300,24 @@ fn body_sections(
             "JEV DECISION",
             decision_lines(report, &by_id, selected, color),
         ),
-        Section::headed("POLICY", policy_lines(policy, &by_id, color)),
-    ]
+        Section::headed("POLICY", policy_lines(policy, &by_id, color, near)),
+    ];
+    if explain {
+        let destination = explain::destination_display(
+            report.decision.destination_id.as_deref(),
+            explanation
+                .destination_path
+                .as_deref()
+                .map(std::path::Path::new),
+            true,
+            color,
+        );
+        sections.push(Section::headed(
+            "EXPLANATION",
+            explanation.lines(&destination),
+        ));
+    }
+    sections
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -328,6 +372,9 @@ fn ranking_row(
 }
 
 /// Render the classify panel (Rich output).
+///
+/// Existing entry point: default thresholds and no `--explain` section, so
+/// callers that only need the historical view keep their exact output.
 pub fn render_panel(
     report: &ClassifyReport,
     policy: &DecisionAction,
@@ -335,19 +382,52 @@ pub fn render_panel(
     verbose: bool,
     color: bool,
 ) -> String {
+    render_panel_with(
+        report,
+        policy,
+        show_all,
+        verbose,
+        color,
+        Thresholds::default(),
+        false,
+    )
+}
+
+/// [`render_panel`] with the effective thresholds and the `--explain`
+/// section (ZC-5). The near-miss line is part of the POLICY section; the
+/// EXPLANATION section is appended only when requested.
+pub fn render_panel_with(
+    report: &ClassifyReport,
+    policy: &DecisionAction,
+    show_all: bool,
+    verbose: bool,
+    color: bool,
+    thresholds: Thresholds,
+    explain: bool,
+) -> String {
     panel::frame_with_sections(
         "KASEIFU / CLASSIFY",
-        &body_sections(report, policy, show_all, verbose, color),
+        &body_sections(
+            report, policy, show_all, verbose, color, thresholds, explain,
+        ),
         color,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn print_rich(
     report: &ClassifyReport,
     policy: &DecisionAction,
     show_all: bool,
     verbose: bool,
     color: bool,
+    thresholds: Thresholds,
+    explain: bool,
 ) {
-    print!("{}", render_panel(report, policy, show_all, verbose, color));
+    print!(
+        "{}",
+        render_panel_with(
+            report, policy, show_all, verbose, color, thresholds, explain
+        )
+    );
 }

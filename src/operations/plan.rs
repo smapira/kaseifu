@@ -30,6 +30,9 @@ pub enum PlanError {
     SourceMissing(PathBuf),
     SourceNotAFile(PathBuf),
     DestinationNotADirectory(PathBuf),
+    /// The destination directory is on the never-a-destination list
+    /// (`~/Library/**`, caches, system trees, machine-generated names).
+    DestinationExcluded(PathBuf),
     /// The destination already exists; Phase 5 never overwrites.
     Collision(PathBuf),
 }
@@ -75,18 +78,64 @@ pub fn build_move_plan_with(
         .find(|candidate| candidate.id == candidate_id)
         .ok_or_else(|| PlanError::UnknownCandidate(candidate_id.clone()))?;
 
-    // 3. Path safety for the source.
+    let destination_path = checked_destination_path(source, &candidate.path)?;
+
+    Ok(MovePlan {
+        source: source.to_path_buf(),
+        destination_directory: candidate.path.clone(),
+        destination_path,
+        candidate_id,
+        confidence: decision.confidence,
+        margin: decision.margin,
+    })
+}
+
+/// Build a plan for a destination the user picked by hand (ZC-13).
+///
+/// The policy gate is intentionally absent: a human decision replaces the
+/// automatic verdict. Everything else is identical to
+/// [`build_move_plan_with`]: the destination must be a usable directory
+/// (the never-a-destination rules are re-checked here, so even a candidate
+/// from an older list is refused) and a collision is never overwritten.
+///
+/// The resulting plan carries no Jev numbers (confidence/margin are 0.0);
+/// [`crate::operations::mover::execute_manual_move`] records the move with
+/// NULL journal columns so a human move stays distinguishable from a Jev
+/// move.
+pub fn build_manual_move_plan(
+    source: &Path,
+    candidate: &CandidateDestination,
+) -> Result<MovePlan, PlanError> {
+    if crate::discovery::is_excluded_destination(&candidate.path.to_string_lossy()) {
+        return Err(PlanError::DestinationExcluded(candidate.path.clone()));
+    }
+    let destination_path = checked_destination_path(source, &candidate.path)?;
+    Ok(MovePlan {
+        source: source.to_path_buf(),
+        destination_directory: candidate.path.clone(),
+        destination_path,
+        candidate_id: candidate.id.clone(),
+        confidence: 0.0,
+        margin: 0.0,
+    })
+}
+
+/// Source, destination-directory and collision checks shared by both plan
+/// builders (same order as the original `build_move_plan_with`).
+fn checked_destination_path(
+    source: &Path,
+    destination_directory: &Path,
+) -> Result<PathBuf, PlanError> {
     if !source.exists() {
         return Err(PlanError::SourceMissing(source.to_path_buf()));
     }
     if !source.is_file() {
         return Err(PlanError::SourceNotAFile(source.to_path_buf()));
     }
-
-    // 4. Path safety for the destination directory (from discovery only).
-    let destination_directory = candidate.path.clone();
     if !destination_directory.is_dir() {
-        return Err(PlanError::DestinationNotADirectory(destination_directory));
+        return Err(PlanError::DestinationNotADirectory(
+            destination_directory.to_path_buf(),
+        ));
     }
 
     let file_name = source
@@ -94,17 +143,8 @@ pub fn build_move_plan_with(
         .ok_or_else(|| PlanError::SourceMissing(source.to_path_buf()))?;
     let destination_path = destination_directory.join(file_name);
 
-    // 5. Collision: Phase 5 never overwrites.
     if destination_path.exists() {
         return Err(PlanError::Collision(destination_path));
     }
-
-    Ok(MovePlan {
-        source: source.to_path_buf(),
-        destination_directory,
-        destination_path,
-        candidate_id,
-        confidence: decision.confidence,
-        margin: decision.margin,
-    })
+    Ok(destination_path)
 }

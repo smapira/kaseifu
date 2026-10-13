@@ -194,6 +194,22 @@ where
     Ok(decision)
 }
 
+/// Observe -> Normalize -> Discover with the real Spotlight search.
+///
+/// Used by the interactive destination selection (ZC-13), which lists the
+/// candidates without consulting Jev; `classify`/`organize` reuse the same
+/// steps internally through [`classify_report_with_options`].
+pub fn discover_candidates(
+    file: &Path,
+    image_options: &MetadataOptions,
+) -> Result<(NormalizedFileContext, Vec<CandidateDestination>)> {
+    discover_candidates_with_options(
+        file,
+        crate::platform::macos::spotlight::search,
+        image_options,
+    )
+}
+
 /// Observe -> Normalize -> Discover with explicit image toggles (v3.2).
 ///
 /// Returns the normalized context together with the discovered candidates:
