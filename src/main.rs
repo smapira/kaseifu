@@ -15,10 +15,11 @@ use kaseifu::operations::{mover, organize, plan, select as select_ops, undo};
 use kaseifu::platform::macos::fsevents;
 use kaseifu::presentation::renderers::{
     classify as classify_view, discover as discover_view, generic, inspect as inspect_view,
-    organize as organize_view, select as select_view,
+    organize as organize_view, select as select_view, uninstall as uninstall_view,
 };
 use kaseifu::presentation::{OutputFormat, resolve_mode};
 use kaseifu::storage::history::{OperationHistory, journal_path};
+use kaseifu::uninstall;
 use kaseifu::watch::coordinator::WatchConfig;
 use kaseifu::watch::runner;
 use kaseifu::{context, discovery, normalize};
@@ -47,8 +48,8 @@ struct Cli {
     /// Output format for commands with structured output.
     ///
     /// `json` applies to inspect, classify, organize, doctor, setup, auth,
-    /// config and completions --install. `scan`, `undo` and `watch` always
-    /// render text.
+    /// config, completions --install and uninstall. `scan`, `undo` and
+    /// `watch` always render text.
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Auto)]
     format: OutputFormat,
     /// Override the Jev endpoint URL (highest priority).
@@ -206,6 +207,29 @@ enum Commands {
         check_connection: bool,
     },
 
+    /// Remove what kaseifu installed on this machine (dry run by default).
+    ///
+    /// Deletes the zsh completion script. `--purge` also deletes the user
+    /// configuration and the journal (deleting the journal loses the undo
+    /// history), and `--remove-key` (or `--purge`) deletes the API key from
+    /// the macOS Keychain after a confirmation (`--yes` skips it). Files
+    /// kaseifu moved are never touched and kaseifu itself stays installed:
+    /// run `cargo uninstall kaseifu` for the command itself.
+    Uninstall {
+        /// Delete the listed targets (the default is a dry run).
+        #[arg(long)]
+        execute: bool,
+        /// Also delete the user configuration and the journal (loses the undo history).
+        #[arg(long)]
+        purge: bool,
+        /// Also delete the API key from the macOS Keychain (asks first unless --yes).
+        #[arg(long)]
+        remove_key: bool,
+        /// Skip the Keychain confirmation (used with --remove-key or --purge).
+        #[arg(long)]
+        yes: bool,
+    },
+
     /// Print a shell completion script (only zsh can be installed).
     ///
     /// Without --install the script goes to stdout and nothing is written;
@@ -261,11 +285,15 @@ async fn main() -> Result<()> {
     let format = cli.format;
     let overrides = cli_overrides(&cli);
     // Best-effort completion upkeep before dispatch: `completions` must stay
-    // free of side effects, `doctor` must report the state as it is, and the
-    // no-subcommand guidance stays side-effect free as well (ZC-2).
+    // free of side effects, `doctor` must report the state as it is, the
+    // no-subcommand guidance stays side-effect free as well (ZC-2), and
+    // `uninstall` must see (and delete) the completion files as they are
+    // right now (ZC-11).
     if !matches!(
         &cli.command,
-        None | Some(Commands::Completions { .. }) | Some(Commands::Doctor { .. })
+        None | Some(Commands::Completions { .. })
+            | Some(Commands::Doctor { .. })
+            | Some(Commands::Uninstall { .. })
     ) {
         kaseifu::completion::refresh_if_stale(&mut Cli::command());
     }
@@ -328,6 +356,12 @@ async fn dispatch(
         Some(Commands::Doctor { check_connection }) => {
             handle_doctor(overrides, check_connection, format).await
         }
+        Some(Commands::Uninstall {
+            execute,
+            purge,
+            remove_key,
+            yes,
+        }) => handle_uninstall(execute, purge, remove_key, yes, format),
         Some(Commands::Completions {
             shell,
             install,
@@ -761,7 +795,7 @@ async fn handle_watch(
     Ok(())
 }
 
-/// `watch` start banner (dry-run state is always explicit).
+/// `watch` start banner (the mode is always stated, ZC-9).
 fn print_watch_start(paths: &[PathBuf], actually_move: bool, format: OutputFormat) {
     let roots = paths
         .iter()
@@ -769,14 +803,10 @@ fn print_watch_start(paths: &[PathBuf], actually_move: bool, format: OutputForma
         .collect::<Vec<_>>()
         .join(", ");
     let mode = resolve_mode(format);
-    if mode.rich {
-        println!(
-            "{}",
-            generic::watch_line("start", &roots, !actually_move, mode.color)
-        );
-    } else {
-        println!("watching {roots} (dry-run: {})", !actually_move);
-    }
+    println!(
+        "{}",
+        generic::watch_line("start", &roots, !actually_move, mode.color)
+    );
 }
 
 /// `undo`: restore up to `last` moves, newest first.
@@ -1681,3 +1711,80 @@ fn handle_completions(
     emit_report(format, "KASEIFU / COMPLETIONS", &[line], &json);
     Ok(())
 }
+
+// --- uninstall -----------------------------------------------------------
+
+/// `uninstall`: delete only what kaseifu installed, and nothing else (ZC-11).
+///
+/// Dry run by default: the plan only reads the filesystem, is printed, and
+/// `--execute` is required for any deletion. The Keychain is never touched in
+/// `KASEIFU_KEY_SOURCE=env`, and its confirmation prompt is checked for a
+/// terminal before the first deletion, so a non-TTY `--execute` with
+/// `--remove-key` (or `--purge`) and without `--yes` fails with nothing
+/// removed.
+fn handle_uninstall(
+    execute: bool,
+    purge: bool,
+    remove_key: bool,
+    yes: bool,
+    format: OutputFormat,
+) -> Result<()> {
+    let key_source = key_source_setting()?;
+    let mut plan = uninstall::plan(
+        &uninstall::UninstallOptions {
+            execute,
+            purge,
+            remove_key,
+        },
+        &uninstall_paths(),
+        key_source.mode,
+    );
+    if execute {
+        if key_prompt_needed(&plan, yes) && !std::io::stdin().is_terminal() {
+            anyhow::bail!(UNINSTALL_NON_TTY_KEY_GUIDANCE);
+        }
+        let store = keychain_store();
+        uninstall::execute(
+            &mut plan,
+            &store,
+            key_source.mode.keychain_allowed(),
+            &|| {
+                if yes {
+                    Ok(true)
+                } else {
+                    prompt::confirm("Delete the stored API key?", false)
+                }
+            },
+        );
+    }
+    emit_report(
+        format,
+        "KASEIFU / UNINSTALL",
+        &uninstall_view::report_lines(&plan, &key_source),
+        &uninstall_view::json_report(&plan, &key_source).to_string(),
+    );
+    Ok(())
+}
+
+/// Locations `uninstall` inspects: the completion override (or the detected
+/// directories), the user config, the journal and the legacy CWD journal.
+fn uninstall_paths() -> uninstall::UninstallPaths {
+    uninstall::UninstallPaths {
+        completion_dirs: kaseifu::completion::RefreshPlan::from_env().candidates,
+        config: kaseifu::config::user_config_path(),
+        journal: journal_path(),
+        legacy_journal: PathBuf::from(kaseifu::storage::history::LEGACY_DATABASE_PATH),
+    }
+}
+
+/// True when the Keychain step would ask for a confirmation.
+fn key_prompt_needed(plan: &uninstall::UninstallPlan, yes: bool) -> bool {
+    !yes && plan.entries.iter().any(|entry| {
+        entry.kind == uninstall::TargetKind::Keychain
+            && entry.action == uninstall::TargetAction::Remove
+    })
+}
+
+/// Non-TTY guidance for `uninstall --execute --remove-key` (ZC-11).
+const UNINSTALL_NON_TTY_KEY_GUIDANCE: &str = "deleting the Keychain API key asks for confirmation, and that needs a terminal (stdin is not a TTY)\n\
+pass --yes to delete it without asking, or drop --remove-key/--purge to keep it";

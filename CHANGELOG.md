@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`kaseifu uninstall`** - remove what kaseifu installed, and only that.
+  The default is a dry run: it lists every target (completion script, user
+  configuration, journal, old CWD journal, Keychain key, the binary) with its
+  size and deletes nothing. `--execute` deletes the zsh completion script;
+  `--purge` also deletes the configuration and the journal (the undo history
+  is lost, and the command says so); `--remove-key` (or `--purge`) deletes the
+  API key from the macOS Keychain after a confirmation (`--yes` skips it).
+  `KASEIFU_KEY_SOURCE=env` never touches the Keychain, an old
+  `./data/kaseifu.db` is only removed by `--execute --purge` and only when it
+  can be read as a journal (journals in other directories are never touched),
+  files kaseifu moved are out of scope, and the binary itself stays put
+  (`cargo uninstall kaseifu` is named for that). A second run reports
+  `nothing to remove` and exits 0. `--format json` prints the target list.
+
+### Changed
+
+- **`watch` speaks the same mode vocabulary as every other command** - the
+  start banner and the per-file log no longer print a raw `dry-run: true/false`
+  boolean. Both now say `dry run (no files moved)` or `execute mode`, e.g.
+  `watch ~/Downloads start (dry run (no files moved))` and
+  `would move a.txt -> ~/Downloads/a.txt (dry run (no files moved))`.
+- **README quick start** - installing and running one command now comes first;
+  the detailed sections (every command, configuration, safety) moved below it
+  unchanged.
+
 ## [0.7.0] - 2026-10-14
 
 ### Added

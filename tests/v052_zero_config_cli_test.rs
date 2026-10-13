@@ -188,6 +188,7 @@ fn v052_help_still_lists_every_command() {
             "completions",
             "watch",
             "undo",
+            "uninstall",
         ] {
             assert!(text.contains(command), "{flag} must list {command}: {text}");
         }

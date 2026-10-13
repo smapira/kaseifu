@@ -10,6 +10,42 @@ The goal is to answer:
 
 using the context already available on the user's Mac.
 
+## Quick Start
+
+Install, then run one command:
+
+```bash
+cargo install kaseifu
+kaseifu classify ~/Desktop/example.pdf
+```
+
+`classify` decides where the file belongs and moves nothing. When no API key
+is configured yet and stdin is a terminal, kaseifu asks for it with hidden
+input and stores it where `KASEIFU_KEY_SOURCE` keeps keys (the macOS Keychain
+by default, `.env` in `env` mode). No environment variables or `.env` file are
+required; without a terminal (scripts, CI) a missing key fails immediately
+(non-zero exit) and names the commands that need no key (`kaseifu inspect`,
+`kaseifu doctor`) plus `kaseifu setup`.
+
+```bash
+kaseifu                                            # a bare run prints a short guide and does nothing else
+kaseifu doctor                                     # check configuration, API key, Spotlight, journal, completions
+kaseifu setup                                      # the setup wizard does the same configuration up front
+kaseifu organize ~/Desktop/example.pdf --execute   # move a file (without --execute it is a dry run)
+```
+
+Building from source instead of installing from crates.io:
+
+```bash
+git clone https://github.com/smapira/kaseifu.git
+cd kaseifu
+cargo install --path .
+```
+
+Everything else is below: [How it works](#how-it-works) explains the
+pipeline, [Usage](#usage) lists every command with its options, and
+[Configuration](#configuration) covers the settings.
+
 ## How it works
 
 kaseifu observes a file, discovers candidate destinations from your existing directory structure and Spotlight index, asks a semantic classifier (Jev) which destination fits best, and — if confidence is high enough — moves the file. Every move is journaled and undoable.
@@ -93,55 +129,6 @@ Jev never receives unrestricted filesystem control. The local Rust application:
 Jev only chooses among those validated IDs. The Rust process owns all filesystem mutations.
 
 ## Usage
-
-### Install
-
-```bash
-cargo install kaseifu
-```
-
-Or build from source:
-
-```bash
-git clone https://github.com/smapira/kaseifu.git
-cd kaseifu
-cargo install --path .
-```
-
-### Quick Start
-
-A bare `kaseifu` prints a short guide and does nothing else:
-
-```bash
-kaseifu
-```
-
-Check that the environment is ready (configuration, API key, Spotlight,
-journal, completions):
-
-```bash
-kaseifu doctor
-```
-
-Classify a file. When no API key is configured yet and stdin is a terminal,
-kaseifu asks for it with hidden input and stores it where
-`KASEIFU_KEY_SOURCE` keeps keys (the macOS Keychain by default, `.env` in
-`env` mode):
-
-```bash
-kaseifu classify ~/Desktop/example.pdf
-```
-
-The setup wizard does the same up front:
-
-```bash
-kaseifu setup
-```
-
-No environment variables or `.env` file are required. Without a terminal
-(scripts, CI) a missing key fails immediately (non-zero exit) and names the
-commands that need no key (`kaseifu inspect`, `kaseifu doctor`) plus
-`kaseifu setup`.
 
 ### Inspect a file
 
@@ -309,6 +296,36 @@ build together with its recorded operation count — `0 operation(s) recorded;
 safe to delete` means the file holds nothing, anything else may be undo
 history. Both checks are read-only: `doctor` never creates, modifies or
 deletes a journal (the old one is reported, never migrated).
+
+### Uninstall
+
+Remove what kaseifu installed. The default is a dry run: it lists every
+target with its size and deletes nothing.
+
+```bash
+kaseifu uninstall
+kaseifu uninstall --execute
+```
+
+`--execute` deletes the zsh completion script. The user configuration and the
+journal are kept unless `--purge` is passed; purging the journal deletes the
+undo history with it, so the command says so before anything happens. The API
+key in the macOS Keychain is kept unless `--remove-key` (or `--purge`) is
+passed, which asks for confirmation (`--yes` skips the prompt). In `env` mode
+the Keychain is never read or deleted:
+
+```bash
+kaseifu uninstall --purge --execute
+kaseifu uninstall --remove-key --yes
+```
+
+An old `./data/kaseifu.db` in the current directory is only deleted by
+`--execute --purge`, and only when it can be read as a journal; journals in
+other directories are never touched. Files kaseifu moved are out of scope
+(restore them with `kaseifu undo` first), and the `kaseifu` command itself is
+left in place: remove it with `cargo uninstall kaseifu`, which also stops the
+completion script from being regenerated on the next run. `--format json`
+prints the same target list as structured output.
 
 ### Debug
 

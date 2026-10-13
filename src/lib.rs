@@ -33,4 +33,5 @@ pub mod platform;
 pub mod policy;
 pub mod presentation;
 pub mod storage;
+pub mod uninstall;
 pub mod watch;

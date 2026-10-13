@@ -67,15 +67,17 @@ pub fn policy_view(policy: &DecisionAction) -> (&'static str, String) {
     }
 }
 
+/// The `watch` mode line shared by the start banner and every event row.
+///
+/// The mode is always stated with the same vocabulary as the other commands
+/// (`dry run (no files moved)` / `execute mode`, ZC-9): the plain output
+/// never shows a raw Rust boolean or a backwards `dry-run` tag.
 pub fn watch_line(event: &str, path: &str, dry_run: bool, color: bool) -> String {
     format!(
-        "{} {} {}",
+        "{} {} {} ({})",
         theme::paint("watch", theme::ANSI_TEAL, color),
         path,
-        if dry_run {
-            format!("{} ({})", event, dry_run_banner(false, color))
-        } else {
-            event.to_string()
-        }
+        event,
+        dry_run_banner(!dry_run, color)
     )
 }

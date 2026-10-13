@@ -12,6 +12,7 @@ use crate::classifier::jev::JevIntegration;
 use crate::models::decision::DecisionAction;
 use crate::operations::organize::{OrganizeOutcome, organize_file_with_full};
 use crate::operations::plan::PlanError;
+use crate::presentation::renderers::generic;
 use crate::storage::history::OperationHistory;
 use crate::watch::coordinator::{
     Disposition, EventCoordinator, ProcessingRequest, RawEvent, SuppressReason, WatchConfig,
@@ -137,43 +138,49 @@ pub async fn process_request_with_full(
 
 /// Log one outcome (Review/Leave are surfaced in the log; no GUI in Phase 6).
 pub fn log_outcome(path: &Path, outcome: &ProcessOutcome) {
+    print!("{}", outcome_text(path, outcome));
+}
+
+/// The log line(s) for one outcome.
+///
+/// The mode vocabulary is shared with the other commands (ZC-9): a dry run
+/// says `dry run (no files moved)`, never a raw boolean or a backwards
+/// `dry-run` tag, and an executed move stays `moved`.
+pub fn outcome_text(path: &Path, outcome: &ProcessOutcome) -> String {
     match outcome {
         ProcessOutcome::Moved {
             operation_id,
             destination,
-        } => println!(
-            "moved   {} -> {}\n        operation: {operation_id}",
+        } => format!(
+            "moved   {} -> {}\n        operation: {operation_id}\n",
             path.display(),
             destination.display()
         ),
-        ProcessOutcome::WouldMove { destination } => println!(
-            "dry-run {} (would move to {})",
+        ProcessOutcome::WouldMove { destination } => format!(
+            "would move {} -> {} ({})\n",
             path.display(),
-            destination.display()
+            destination.display(),
+            generic::dry_run_banner(false, false)
         ),
         ProcessOutcome::Refused {
             policy,
             candidate_path,
             confidence,
             margin,
-        } => {
-            // Phase 6 surfaces Review for the user; no notification system yet.
-            println!("review  {}", path.display());
-            println!("        policy:     {policy:?}");
-            println!(
-                "        candidate:  {}",
-                candidate_path
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_else(|| "(none)".to_string())
-            );
-            println!("        confidence: {confidence:.3}");
-            println!("        margin:     {margin:.3}");
-        }
+        } => format!(
+            "review  {}\n        policy:     {policy:?}\n        candidate:  {}\n        confidence: {confidence:.3}\n        margin:     {margin:.3}\n",
+            path.display(),
+            candidate_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "(none)".to_string())
+        ),
         ProcessOutcome::Unplanable(error) => {
-            println!("no move {}\n        {error:?}", path.display())
+            format!("no move {}\n        {error:?}\n", path.display())
         }
-        ProcessOutcome::Failed(error) => println!("error   {}\n        {error}", path.display()),
+        ProcessOutcome::Failed(error) => {
+            format!("error   {}\n        {error}\n", path.display())
+        }
     }
 }
 
