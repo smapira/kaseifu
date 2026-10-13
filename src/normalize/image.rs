@@ -69,21 +69,3 @@ fn validate_dimensions(meta: &mut ImageMetadata) {
         meta.dimensions = None;
     }
 }
-
-/// Semantic signals describing image metadata availability.
-///
-/// Availability only (never coordinates or timestamps verbatim beyond the
-/// presence marker); the adapter forwards these verbatim to Jev.
-pub fn signals(meta: &ImageMetadata) -> Vec<String> {
-    let mut out = Vec::new();
-    if meta.has_capture_time() {
-        out.push("M:Capture date available".to_string());
-    }
-    if meta.has_location() {
-        out.push("M:GPS available".to_string());
-    }
-    if meta.camera.model.is_some() || meta.camera.make.is_some() {
-        out.push("M:Camera available".to_string());
-    }
-    out
-}

@@ -28,7 +28,7 @@ offline; no test touches the live API.
 | kaseifu | TypeSafe `/v1/systemone` |
 |---|---|
 | `DecisionContext.target` | `state.target` |
-| `DecisionContext.semantic_signals` | `state.semantic_signals` (verbatim) |
+| `DecisionContext.semantic_signals` | `state.semantic_signals` (content signals verbatim + availability markers derived by the adapter from `image_metadata`, v0.4.1) |
 | candidate `id` + `path` + `evidence_count` + `reasons` | `questions.destination.criteria[id]` description |
 | — (always added) | `criteria["NONE"]` |
 | `answers.destination.choice` | `JevResponse.destination_id` (verbatim; domain validates) |

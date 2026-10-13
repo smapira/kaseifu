@@ -25,7 +25,7 @@ use kaseifu::models::file_context::{
     CameraInfo, CaptureTime, Evidence, EvidenceSource, FileContext, ImageDimensions, ImageLocation,
     ImageMetadata, NormalizedFileContext,
 };
-use kaseifu::normalize::image::{signals, validate};
+use kaseifu::normalize::image::validate;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -432,10 +432,9 @@ fn v32_normalize_accepts_valid_gps_and_exif_datetime() {
         timezone_known: false,
     });
     let valid = validate(meta).expect("valid");
+    // v0.4.1: availability markers moved to the Jev adapter (derived from
+    // `image_metadata`); see tests/v0401_discovery_fix_test.rs.
     assert!(valid.location.is_some() && valid.capture_time.is_some());
-    let found = signals(&valid);
-    assert!(found.contains(&"M:Capture date available".to_string()));
-    assert!(found.contains(&"M:GPS available".to_string()));
 }
 
 #[test]
@@ -589,11 +588,7 @@ fn image_context() -> DecisionContext {
             extension: Some("heic".to_string()),
             ..Default::default()
         },
-        semantic_signals: vec![
-            "F:IMG".to_string(),
-            "M:Capture date available".to_string(),
-            "M:GPS available".to_string(),
-        ],
+        semantic_signals: vec!["F:IMG".to_string()],
         file_type: Some("public.heic".to_string()),
         image_metadata: Some(ImageMetadata {
             capture_time: Some(CaptureTime {

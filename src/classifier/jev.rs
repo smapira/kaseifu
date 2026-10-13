@@ -304,8 +304,9 @@ struct SystemOneRequest {
     questions: QuestionsDto,
 }
 
-/// The content all questions refer to: the target file plus its normalized
-/// semantic signals (verbatim; the adapter never re-derives them).
+/// The content all questions refer to: the target file plus the semantic
+/// signals sent to Jev (the domain's content signals plus availability
+/// markers the adapter derives from `image_metadata`).
 #[derive(Debug, Serialize)]
 struct StateDto {
     target: TargetDto,
@@ -386,9 +387,10 @@ impl SystemOneRequest {
     /// Build the request with explicit image privacy gating (v3.2).
     ///
     /// Mapping stays on real `/v1/systemone` fields only: image context
-    /// extends the free-form `state.target` object and the verbatim
-    /// `state.semantic_signals` list. No new top-level API fields are
-    /// introduced and no Rust-side fit score is computed.
+    /// extends the free-form `state.target` object and the
+    /// `state.semantic_signals` list (content signals plus availability
+    /// markers derived from `image_metadata`; v0.4.1). No new top-level API
+    /// fields are introduced and no Rust-side fit score is computed.
     fn from_context_with_privacy(
         context: &DecisionContext,
         model: &str,
@@ -416,7 +418,7 @@ impl SystemOneRequest {
                     location: location_for(image, send_gps),
                     dimensions: dimensions_for(image),
                 },
-                semantic_signals: filtered_signals(context, send_capture_time, send_gps),
+                semantic_signals: signals_for_jev(context, send_capture_time, send_gps),
             },
             model: model.to_string(),
             questions: QuestionsDto {
@@ -498,31 +500,65 @@ fn dimensions_for(
     })
 }
 
-/// Semantic signals with image presence markers filtered by privacy.
+/// Semantic signals sent to Jev: the domain's content signals plus the image
+/// availability markers derived here from `image_metadata`.
 ///
-/// A withheld field leaves no trace: neither its value nor an
+/// `image_metadata` is the single source for markers: stale marker strings in
+/// the incoming list are dropped, and every emitted marker is backed by a
+/// present field. A withheld field leaves no trace: neither its value nor an
 /// "available" marker is forwarded when its flag is off.
-fn filtered_signals(
+fn signals_for_jev(
     context: &DecisionContext,
     send_capture_time: bool,
     send_gps: bool,
 ) -> Vec<String> {
-    context
+    let mut signals: Vec<String> = context
         .semantic_signals()
         .iter()
-        .filter(|signal| keep_signal(signal, send_capture_time, send_gps))
+        .filter(|signal| !is_availability_marker(signal))
         .cloned()
-        .collect()
+        .collect();
+    signals.extend(image_availability_signals(
+        context.image_metadata(),
+        send_capture_time,
+        send_gps,
+    ));
+    signals
 }
 
-fn keep_signal(signal: &str, send_capture_time: bool, send_gps: bool) -> bool {
-    if !send_capture_time && signal == "M:Capture date available" {
-        return false;
+/// True for the three image availability markers (v3.2 wording).
+fn is_availability_marker(signal: &str) -> bool {
+    matches!(
+        signal,
+        "M:Capture date available" | "M:GPS available" | "M:Camera available"
+    )
+}
+
+/// Availability markers for `state.semantic_signals`, in the v3.2 wording and
+/// order (capture, GPS, camera; previously appended by `normalize`).
+///
+/// Capture/GPS are privacy-gated; camera presence is not location-sensitive.
+/// Availability only: no coordinates or timestamps are derived from the
+/// metadata here (the values themselves ride in `state.target`).
+fn image_availability_signals(
+    image: Option<&crate::models::file_context::ImageMetadata>,
+    send_capture_time: bool,
+    send_gps: bool,
+) -> Vec<String> {
+    let Some(meta) = image else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if send_capture_time && meta.has_capture_time() {
+        out.push("M:Capture date available".to_string());
     }
-    if !send_gps && signal == "M:GPS available" {
-        return false;
+    if send_gps && meta.has_location() {
+        out.push("M:GPS available".to_string());
     }
-    true
+    if meta.camera.model.is_some() || meta.camera.make.is_some() {
+        out.push("M:Camera available".to_string());
+    }
+    out
 }
 
 impl SystemOneResponse {

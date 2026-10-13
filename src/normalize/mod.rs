@@ -104,15 +104,15 @@ pub fn normalize_with_options(
     // Create normalized context
     // v3.2: image metadata rides along (Spotlight first, EXIF fallback).
     // File mtime is never treated as capture time; zones are never guessed.
+    // v0.4.1: image availability markers are NOT semantic signals here —
+    // Discovery would consume them as mdfind search terms. The Jev adapter
+    // derives them from `image_metadata` instead (single source of truth).
     let image_metadata = crate::context::image_metadata::collect(
         &context.target.path,
         &context.evidence,
         image_options,
     )
     .and_then(crate::normalize::image::validate);
-    if let Some(ref meta) = image_metadata {
-        semantic_signals.extend(crate::normalize::image::signals(meta));
-    }
     let target = context.target;
     Ok(NormalizedFileContext {
         target: target.clone(),

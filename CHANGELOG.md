@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-14
+
+### Fixed
+
+- **Discovery search terms** — image availability markers
+  (`M:Capture date available` / `M:GPS available` / `M:Camera available`) no
+  longer leak into mdfind queries; the Jev adapter derives them from
+  `image_metadata` at request time instead of storing them as semantic
+  signals. The Jev wire output is unchanged for every privacy combination;
+  Rich `inspect` no longer repeats the markers next to the capture/location
+  panels
+
 ## [0.4.0] - 2026-10-14
 
 ### Added
