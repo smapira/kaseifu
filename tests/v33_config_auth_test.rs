@@ -493,24 +493,58 @@ fn v33_keychain_service_ids_do_not_collide() {
 // Doctor (T16)
 // ---------------------------------------------------------------------------
 
+/// `doctor` with temporary journal paths: these tests never read the
+/// developer's real journal. The default resolution is covered by the CLI
+/// tests with an isolated HOME (`tests/v051_journal_path_test.rs`).
+async fn diagnose_local(
+    resolved: &kaseifu::config::ResolvedConfig,
+) -> kaseifu::doctor::DoctorReport {
+    let missing = std::env::temp_dir()
+        .join(format!("kaseifu-doctor-v33-{}", std::process::id()))
+        .join("no-journal.db");
+    kaseifu::doctor::diagnose_with(resolved, false, &missing, &missing).await
+}
+
 #[tokio::test]
 async fn v33_doctor_local_checks_without_network() {
     let store = MemoryStore::new();
     let file = UserConfig::default();
     let resolved = resolve_with_map(&empty_cli(), &lookup_of(&[]), &file, &store);
-    let report = kaseifu::doctor::diagnose(&resolved, false).await;
+    let report = diagnose_local(&resolved).await;
 
     assert!(matches!(
         report.connectivity,
         kaseifu::doctor::Connectivity::NotTested
     ));
-    assert_eq!(report.checks.len(), 7);
+    // Seven pre-existing checks plus the two journal checks (R5/R1/R2).
+    assert_eq!(report.checks.len(), 9);
     let api_key = report
         .checks
         .iter()
         .find(|check| check.name == "API Key")
         .expect("API key check exists");
     assert!(!api_key.ok, "missing key must fail the API key check");
+    let journal = report
+        .checks
+        .iter()
+        .find(|check| check.name == "Journal")
+        .expect("journal check exists");
+    assert!(
+        journal.ok,
+        "no journal file is not a failure: {}",
+        journal.detail
+    );
+    assert!(
+        journal.detail.contains("no journal yet"),
+        "{}",
+        journal.detail
+    );
+    let legacy = report
+        .checks
+        .iter()
+        .find(|check| check.name == "Legacy Journal")
+        .expect("legacy journal check exists");
+    assert!(legacy.ok, "{}", legacy.detail);
     let debug = format!("{:?}", report);
     assert!(!debug.contains(SECRET));
 }
@@ -520,7 +554,7 @@ async fn v33_doctor_api_key_check_passes_with_a_key() {
     let store = MemoryStore::with_secret(SECRET);
     let file = UserConfig::default();
     let resolved = resolve_with_map(&empty_cli(), &lookup_of(&[]), &file, &store);
-    let report = kaseifu::doctor::diagnose(&resolved, false).await;
+    let report = diagnose_local(&resolved).await;
     let api_key = report
         .checks
         .iter()
@@ -540,7 +574,7 @@ async fn v33_doctor_endpoint_check_catches_bad_urls() {
     let mut file = UserConfig::default();
     file.jev.endpoint = Some("not a url".to_string());
     let resolved = resolve_with_map(&empty_cli(), &lookup_of(&[]), &file, &store);
-    let report = kaseifu::doctor::diagnose(&resolved, false).await;
+    let report = diagnose_local(&resolved).await;
     let endpoint = report
         .checks
         .iter()

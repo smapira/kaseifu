@@ -1,13 +1,14 @@
-[scanner]
-max_directory_entries = 100
-parent_depth = 1
-child_depth = 1
-
-[context]
-use_spotlight_metadata = true
-use_spotlight_search = true
-use_xattr = true
-extract_content = true
+# Built-in application defaults (documentation).
+#
+# This file is NOT read at runtime: the effective defaults live in
+# src/config/defaults.rs, and user overrides go to
+# ~/Library/Application Support/kaseifu/config.toml (`kaseifu config set`).
+# It mirrors those defaults and nothing else.
+#
+# The `[scanner]`, `[context]` and `[storage]` sections were removed: no
+# code ever read them, and the `[storage] database` path named a file the
+# journal never used. The journal lives at
+# ~/Library/Application Support/kaseifu/kaseifu.db (`kaseifu doctor` shows it).
 
 [classifier]
 provider = "jev"
@@ -18,6 +19,10 @@ auto_move_margin = 0.40
 review_confidence = 0.60
 
 [operations]
+# Accepted for compatibility only (existing user TOML files must keep
+# loading) and inactive: moves are controlled by `--execute`, and every
+# executed move is journaled so it can be undone. `kaseifu config show`
+# marks both keys as inactive.
 dry_run = true
 enable_undo = true
 
@@ -32,6 +37,3 @@ send_gps_to_jev = false
 
 [metadata.weather]
 enabled = false
-
-[storage]
-database = "data/semantic-file-organizer.db"

@@ -8,6 +8,10 @@
 //! one image per hash-named folder) scored 0.88 filename similarity against
 //! `IMG_3020.jpeg` and filled 38 of the 50 candidate slots.
 //!
+//! This module is the single authority for destination eligibility: the hit
+//! filter in `similarity` and the aggregation gate in `candidates` both call
+//! [`is_excluded_destination`], so a rule lives here and nowhere else.
+//!
 //! The rules below describe *path shapes* that cannot be a destination
 //! rather than a list of banned paths, so they hold for folders that were
 //! never measured. Every rule was chosen against a real population: a scan
@@ -47,6 +51,15 @@ const SYSTEM_AREA_COMPONENT_NAMES: [&str; 6] = [
     ".temporaryitems",
 ];
 
+/// Names of the root-level directories macOS reserves for itself. Only the
+/// **first** component of an absolute path is matched (R8): macOS system
+/// trees live at the volume root, while `/Users/me/var`, `/Users/me/tmp`,
+/// `/Users/me/system-backup` or `/Users/me/private-docs` are folders the
+/// user made. Matching any component (or a substring, as an earlier version
+/// did with `contains`) silently dropped those user folders from the
+/// candidate list.
+const SYSTEM_ROOT_COMPONENTS: [&str; 7] = ["system", "private", "usr", "bin", "sbin", "var", "tmp"];
+
 /// Shortest hex token treated as a content hash or storage id.
 const HEX_TOKEN_MIN_LENGTH: usize = 16;
 
@@ -70,6 +83,7 @@ pub fn is_excluded_destination(dir: &str) -> bool {
     };
     is_inside_bundle(&components)
         || is_macos_library_tree(&components)
+        || is_system_root_tree(dir, &components)
         || is_hidden_destination(name)
         || is_cache_or_temp(&components)
         || is_system_area(&components)
@@ -100,6 +114,22 @@ fn is_macos_library_tree(components: &[&str]) -> bool {
         .iter()
         .take(LIBRARY_ROOT_MAX_DEPTH + 1)
         .any(|name| name.eq_ignore_ascii_case("Library"))
+}
+
+/// True for the macOS system trees that sit at the volume root: `/System`,
+/// `/usr`, `/bin`, `/sbin`, `/var`, `/tmp` and `/private` (the real location
+/// behind macOS's `/var` and `/tmp` symlinks).
+///
+/// Only a path *starting* with one of these names is a system tree; a folder
+/// deeper in a user tree that merely reuses a system name stays, and a
+/// relative path is never treated as one.
+fn is_system_root_tree(dir: &str, components: &[&str]) -> bool {
+    if !dir.starts_with('/') {
+        return false;
+    }
+    components
+        .first()
+        .is_some_and(|name| SYSTEM_ROOT_COMPONENTS.contains(&name.to_lowercase().as_str()))
 }
 
 /// True when the destination directory itself is hidden (`.Trash`,
@@ -208,6 +238,58 @@ mod tests {
             assert!(
                 is_excluded_destination(dir),
                 "library tree must be excluded: {dir}"
+            );
+        }
+    }
+
+    #[test]
+    fn excludes_macos_system_root_trees() {
+        for dir in [
+            "/System/Library/CoreServices",
+            "/System/Volumes/Data",
+            "/usr/share/icons",
+            "/usr/local/bin",
+            "/bin",
+            "/sbin",
+            "/var/log",
+            "/var/folders/xx/yy/T",
+            "/tmp/downloads",
+            "/private/var/folders/xx/yy/T",
+            "/private/tmp",
+        ] {
+            assert!(
+                is_excluded_destination(dir),
+                "macOS system tree must be excluded: {dir}"
+            );
+        }
+        assert!(
+            is_excluded_destination("/SYSTEM/Library"),
+            "the root comparison is case-insensitive"
+        );
+    }
+
+    #[test]
+    fn keeps_user_folders_that_reuse_system_root_names() {
+        // R8 regression: the earlier substring check (`contains("/var")`,
+        // `contains("/tmp")`, `contains("/system")`, ...) dropped user
+        // folders whose path merely contained a system name. Only the first
+        // component of an absolute path may mark a system tree.
+        for dir in [
+            "/Users/test/var/photos",
+            "/Users/test/tmp/mail",
+            "/Users/test/system-backup",
+            "/Users/test/system-backup/2024",
+            "/Users/test/private-docs",
+            "/Users/test/private",
+            "/Users/test/bin",
+            "/Volumes/Work/usr/manuals",
+            "/Volumes/Archive/System",
+            "var/photos",
+            "tmp/mail",
+        ] {
+            assert!(
+                !is_excluded_destination(dir),
+                "user folder must stay a destination: {dir}"
             );
         }
     }

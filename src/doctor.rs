@@ -6,12 +6,23 @@
 //! (environment / `.env` / Keychain) from the already-resolved configuration;
 //! `doctor` itself never touches the Keychain, so it can never trigger an
 //! access-approval dialog.
+//!
+//! The journal checks are read-only: the journal's resolved location and any
+//! `pending` rows are *reported* (with the current state of the files they
+//! name), never repaired. An interrupted move cannot be told apart from one
+//! still in flight without the filesystem, so automatic recovery could
+//! destroy a correct state — detection is the whole contract (R1/R2).
 
 use crate::completion::{self, Status};
 use crate::config::ResolvedConfig;
 use crate::config::key_source::{ApiKeyOrigin, KeySourceMode};
+use crate::storage::history::{self, JournalInspection, PendingOperation};
 use std::path::Path;
 use std::time::Duration;
+
+/// Maximum number of pending rows whose file state is spelled out in the
+/// journal check detail; further rows are counted only.
+const MAX_PENDING_DETAILS: usize = 3;
 
 /// Outcome of one diagnostic check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +59,25 @@ pub struct DoctorReport {
 
 /// Run local diagnostics; probe the network only when `check_connection`.
 pub async fn diagnose(config: &ResolvedConfig, check_connection: bool) -> DoctorReport {
+    diagnose_with(
+        config,
+        check_connection,
+        &history::journal_path(),
+        Path::new(history::LEGACY_DATABASE_PATH),
+    )
+    .await
+}
+
+/// [`diagnose`] with explicit journal locations.
+///
+/// Tests pass temporary paths here so they never read (or depend on) the
+/// developer's real journal; production resolves the defaults in [`diagnose`].
+pub async fn diagnose_with(
+    config: &ResolvedConfig,
+    check_connection: bool,
+    journal_path: &Path,
+    legacy_journal: &Path,
+) -> DoctorReport {
     let checks = vec![
         check_platform(),
         check_configuration(),
@@ -55,6 +85,8 @@ pub async fn diagnose(config: &ResolvedConfig, check_connection: bool) -> Doctor
         check_endpoint(&config.jev.endpoint),
         check_spotlight(),
         check_storage(),
+        check_journal(journal_path),
+        check_legacy_journal(legacy_journal, journal_path),
         check_completion(),
     ];
     let connectivity = probe_connectivity(&config.jev.endpoint, check_connection).await;
@@ -148,6 +180,95 @@ fn check_storage() -> CheckResult {
     match std::fs::create_dir_all(&dir) {
         Ok(()) => pass("Storage", "data directory is writable"),
         Err(error) => fail("Storage", &short_io_error(&error)),
+    }
+}
+
+/// Read-only journal check: resolved path, operation count, pending rows.
+///
+/// Reports `FAIL` only when a pending row is old enough to be an interrupted
+/// operation (or the file is not a readable journal). A fresh pending row may
+/// belong to a concurrent process and passes with the count in the detail.
+fn check_journal(path: &Path) -> CheckResult {
+    match history::inspect_journal(path) {
+        Ok(None) => pass("Journal", &format!("{} (no journal yet)", path.display())),
+        Ok(Some(inspection)) => {
+            let detail = journal_detail(path, &inspection);
+            if inspection.pending.iter().any(|pending| pending.stale) {
+                fail("Journal", &detail)
+            } else {
+                pass("Journal", &detail)
+            }
+        }
+        Err(error) => fail(
+            "Journal",
+            &format!("{}: {}", path.display(), short_error(&error)),
+        ),
+    }
+}
+
+/// One-line journal summary: path, operation count, pending count with ages
+/// and the current state of the pending files.
+fn journal_detail(path: &Path, inspection: &JournalInspection) -> String {
+    let mut detail = format!(
+        "{} ({} operation(s)",
+        path.display(),
+        inspection.total_operations
+    );
+    if inspection.pending.is_empty() {
+        detail.push_str("; no pending)");
+        return detail;
+    }
+    let stale = inspection.pending.iter().filter(|row| row.stale).count();
+    detail.push_str(&format!(
+        "; {} pending, {} possibly interrupted; pending file state: ",
+        inspection.pending.len(),
+        stale
+    ));
+    let states: Vec<String> = inspection
+        .pending
+        .iter()
+        .take(MAX_PENDING_DETAILS)
+        .map(|row| format!("{}: {}", row.entry.operation, file_state(row)))
+        .collect();
+    detail.push_str(&states.join("; "));
+    if inspection.pending.len() > MAX_PENDING_DETAILS {
+        detail.push_str(&format!(
+            " (+{} more)",
+            inspection.pending.len() - MAX_PENDING_DETAILS
+        ));
+    }
+    detail.push(')');
+    detail
+}
+
+/// Where a pending row's file currently is.
+fn file_state(row: &PendingOperation) -> &'static str {
+    match (row.source_exists, row.destination_exists) {
+        (true, false) => "source present, destination absent",
+        (false, true) => "source absent, destination present",
+        (true, true) => "source and destination present",
+        (false, false) => "source and destination absent",
+    }
+}
+
+/// Detect the old CWD-relative journal. The file is never read, migrated or
+/// deleted — it may hold a real user's undo history — so this check only
+/// makes its existence visible.
+fn check_legacy_journal(legacy: &Path, current: &Path) -> CheckResult {
+    if legacy.exists() {
+        fail(
+            "Legacy Journal",
+            &format!(
+                "found {} (old CWD-relative journal; not read, not migrated; current journal: {})",
+                legacy.display(),
+                current.display()
+            ),
+        )
+    } else {
+        pass(
+            "Legacy Journal",
+            &format!("no {} in the current directory", legacy.display()),
+        )
     }
 }
 

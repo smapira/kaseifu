@@ -47,6 +47,27 @@ Undo                     (restore from journal)
 | Content extraction | optional content analysis |
 | Semantic classification | Jev API |
 
+### Spotlight indexing
+
+Discovery uses the macOS Spotlight index, which macOS updates in the
+background, so results depend on its current state:
+
+- A file that was just created, copied or moved appears in search after a few
+  seconds (about 4 s measured on an idle machine), and later under load or
+  after bulk copies. A very recent file may not be found yet.
+- Attributes come from per-type importers. Names and sizes are immediate, but
+  content-derived values (EXIF capture time, GPS, camera, pixel size) can be
+  missing for a given file. Missing means missing: kaseifu never guesses, and
+  reads EXIF from the file as a fallback for images.
+- Search does not return hidden paths (any `.`-prefixed path component, such
+  as a `.delta/` worktree) or excluded areas (`/tmp`, the Spotlight privacy
+  list). `mdls` can still print values for those files, so "`mdls` shows it"
+  does not mean "search finds it".
+
+If a run finds no candidates, the file is probably not indexed yet: run
+`KASEIFU_DEBUG=1 kaseifu classify <file>` to see the search terms and hit
+count, wait for the index, or force an import with `mdimport <file>`.
+
 ### Trust boundary
 
 Jev never receives unrestricted filesystem control. The local Rust application:
@@ -133,6 +154,18 @@ Restore the last N moves:
 kaseifu undo --last 3
 ```
 
+The journal lives at `~/Library/Application Support/kaseifu/kaseifu.db`
+(absolute, independent of the working directory; `doctor` prints the resolved
+path). If a move was interrupted before its result could be written — for
+example killed between the rename and the journal update — the journal keeps
+a `pending` row: `undo` reports it before restoring, and `doctor` shows the
+count with the age and the current location of each pending file. Pending
+rows are never repaired, deleted or undone automatically: the journal cannot
+tell an interrupted move apart from one still in flight, so only you can
+judge the on-disk state. The old CWD-relative journal (`./data/kaseifu.db`,
+used by earlier builds) is not migrated or deleted; `doctor` reports it when
+it is still there.
+
 ### Watch
 
 Watch directories and automatically organize new or changed files. Dry run by default.
@@ -200,6 +233,11 @@ Add `--check-connection` to also probe endpoint reachability. The
 `API Key` check reports the resolved source
 (`provided via environment (JEV_API_KEY)` / `provided via .env` /
 `resolved from macOS Keychain` / a clear failure when nothing is configured).
+The `Journal` check prints the resolved journal path, the number of recorded
+operations and any `pending` rows (with the current state of the files they
+name); `Legacy Journal` reports a leftover `./data/kaseifu.db` from an older
+build.
+Both checks are read-only: `doctor` never creates or modifies a journal.
 
 ### Debug
 
@@ -298,8 +336,13 @@ historical behavior.
 | `classifier.thresholds.auto_move_confidence` | 0.85 | Minimum confidence for automatic moves |
 | `classifier.thresholds.auto_move_margin` | 0.40 | Minimum margin over second-best candidate |
 | `classifier.thresholds.review_confidence` | 0.60 | Below this, the file is left in place |
-| `operations.dry_run` | `true` | Default to dry run unless `--execute` is passed |
-| `operations.enable_undo` | `true` | Record moves in the journal so they can be undone |
+| `operations.dry_run` | `true` | **Inactive** — accepted so existing files keep loading; moves are controlled by `--execute` |
+| `operations.enable_undo` | `true` | **Inactive** — every executed move is journaled and undoable regardless |
+
+The two `operations.*` settings are accepted for compatibility but have no
+effect: `organize` and `watch` move files only with `--execute`, and every
+executed move is journaled so `undo` can reverse it. `config show` marks both
+keys as inactive (`inactive_settings` in `--format json`).
 
 Developer setup (`.env` files, environment variables, local builds, tests,
 CI, API mocks, resolution order) lives in `documents/development.md`.
@@ -326,7 +369,7 @@ src/
 └── watch/               # FSEvents watcher + coordinator (Phase 6)
 
 config/
-└── default.toml         # Runtime configuration
+└── default.toml         # Built-in defaults (documentation; not read at runtime)
 
 schemas/
 ├── file-context-v1.json

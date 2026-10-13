@@ -8,12 +8,39 @@
 //! candidate_id, confidence, margin, result, error, undone_at.
 
 use anyhow::{Context, Result};
-use chrono::Utc;
-use rusqlite::Connection;
-use std::path::Path;
+use chrono::{DateTime, Utc};
+use rusqlite::{Connection, OpenFlags};
+use std::path::{Path, PathBuf};
 
-/// Default journal location (see config/default.toml; git-ignored).
-pub const DEFAULT_DATABASE_PATH: &str = "data/kaseifu.db";
+/// File name of the journal inside the user data directory.
+pub const JOURNAL_FILE_NAME: &str = "kaseifu.db";
+
+/// Legacy journal location: the CWD-relative default used before the journal
+/// moved to the user data directory.
+///
+/// Kept only so `doctor` can point out a leftover journal from an older
+/// build. Nothing reads, migrates, overwrites or deletes it: the file may
+/// hold a real user's undo history, and silently moving or merging it could
+/// lose or misattribute moves (a CWD-relative name can exist once per
+/// working directory).
+pub const LEGACY_DATABASE_PATH: &str = "data/kaseifu.db";
+
+/// Default journal location: `<app_dir>/kaseifu.db`
+/// (`~/Library/Application Support/kaseifu/kaseifu.db` on macOS).
+///
+/// Absolute and independent of the current working directory: the previous
+/// default (`data/kaseifu.db`) silently created a different journal per
+/// working directory, so `undo` could not see moves recorded elsewhere and a
+/// changed working directory looked like an empty history.
+pub fn journal_path() -> PathBuf {
+    crate::config::storage::app_dir().join(JOURNAL_FILE_NAME)
+}
+
+/// A `pending` row is treated as an interrupted operation after this long.
+///
+/// A shorter-lived pending row may belong to a move another process is
+/// performing right now; it is reported with its file state either way.
+pub const PENDING_STALE_AFTER_SECS: i64 = 3600;
 
 /// One journal row.
 #[derive(Debug, Clone, PartialEq)]
@@ -153,6 +180,20 @@ impl OperationHistory {
         }
     }
 
+    /// Every row still marked `pending`, in insertion order.
+    ///
+    /// A pending row means a mutation was recorded but its result was never
+    /// written: the process was interrupted (between `record_pending` and the
+    /// rename, or between the rename and `mark_success`), or another process
+    /// is performing the operation right now. Callers **report** these rows;
+    /// nothing repairs, rewrites or deletes them: this journal cannot tell an
+    /// interrupted move from one that is still in flight, and silently
+    /// rewriting the row (or moving the file back) could destroy a state that
+    /// is actually correct.
+    pub fn pending_entries(&self) -> Result<Vec<HistoryEntry>> {
+        query_pending(&self.conn)
+    }
+
     /// All rows in insertion order.
     pub fn entries(&self) -> Result<Vec<HistoryEntry>> {
         let mut statement = self.conn.prepare(
@@ -183,6 +224,113 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
         result: row.get(8)?,
         error: row.get(9)?,
         undone_at: row.get(10)?,
+    })
+}
+
+/// Every `pending` row of a connection, in insertion order.
+fn query_pending(conn: &Connection) -> Result<Vec<HistoryEntry>> {
+    let mut statement = conn.prepare(
+        "SELECT id, timestamp, operation, source_path, destination_path,
+                candidate_id, confidence, margin, result, error, undone_at
+         FROM operations
+         WHERE result = 'pending'
+         ORDER BY rowid ASC",
+    )?;
+    let mut rows = statement.query([])?;
+    let mut entries = Vec::new();
+    while let Some(row) = rows.next()? {
+        entries.push(row_to_entry(row)?);
+    }
+    Ok(entries)
+}
+
+// ---------------------------------------------------------------------------
+// Read-only inspection (diagnostics)
+// ---------------------------------------------------------------------------
+
+/// One `pending` row with the filesystem state it refers to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingOperation {
+    /// The pending row itself.
+    pub entry: HistoryEntry,
+    /// Age in seconds, when the row timestamp parses as RFC 3339.
+    pub age_seconds: Option<i64>,
+    /// True when the row is old enough to be an interrupted operation (an
+    /// unparseable timestamp counts as stale).
+    pub stale: bool,
+    /// The recorded source path still exists on disk.
+    pub source_exists: bool,
+    /// The recorded destination path exists on disk.
+    pub destination_exists: bool,
+}
+
+/// Read-only journal snapshot for diagnostics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JournalInspection {
+    /// Total number of recorded operations.
+    pub total_operations: u64,
+    /// Rows still marked `pending`, in insertion order.
+    pub pending: Vec<PendingOperation>,
+}
+
+/// Inspect a journal without writing anything.
+///
+/// `Ok(None)` means no journal file exists yet (it is created on first use).
+/// `doctor` must never create, initialize or lock the journal for writing, so
+/// this opens a read-only connection and never runs the schema setup.
+pub fn inspect_journal(path: &Path) -> Result<Option<JournalInspection>> {
+    inspect_journal_at(path, Utc::now())
+}
+
+/// [`inspect_journal`] with an explicit clock, so tests can age a pending row
+/// without faking its timestamp.
+pub fn inspect_journal_at(path: &Path, now: DateTime<Utc>) -> Result<Option<JournalInspection>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("open journal {} (read-only)", path.display()))?;
+    inspect_connection(&conn, now).map(Some)
+}
+
+/// Read the journal contents of an already-open connection.
+fn inspect_connection(conn: &Connection, now: DateTime<Utc>) -> Result<JournalInspection> {
+    let table_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'operations'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_count == 0 {
+        anyhow::bail!("not an initialized kaseifu journal (no operations table)");
+    }
+    let total: i64 = conn.query_row("SELECT COUNT(*) FROM operations", [], |row| row.get(0))?;
+    let pending = query_pending(conn)?
+        .into_iter()
+        .map(|entry| to_pending_operation(entry, now))
+        .collect();
+    Ok(JournalInspection {
+        total_operations: total.max(0) as u64,
+        pending,
+    })
+}
+
+/// Pair a pending row with its age and the current filesystem state.
+fn to_pending_operation(entry: HistoryEntry, now: DateTime<Utc>) -> PendingOperation {
+    let age_seconds = parse_age_seconds(&entry.timestamp, now);
+    PendingOperation {
+        stale: age_seconds.is_none_or(|age| age >= PENDING_STALE_AFTER_SECS),
+        age_seconds,
+        source_exists: Path::new(&entry.source_path).exists(),
+        destination_exists: Path::new(&entry.destination_path).exists(),
+        entry,
+    }
+}
+
+/// Age of a journal timestamp in seconds (RFC 3339, UTC).
+fn parse_age_seconds(timestamp: &str, now: DateTime<Utc>) -> Option<i64> {
+    DateTime::parse_from_rfc3339(timestamp).ok().map(|at| {
+        now.signed_duration_since(at.with_timezone(&Utc))
+            .num_seconds()
     })
 }
 

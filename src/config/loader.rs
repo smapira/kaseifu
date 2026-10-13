@@ -58,13 +58,23 @@ pub struct ThresholdSection {
 }
 
 /// `[operations]` section of the user configuration.
+///
+/// Both fields are accepted for compatibility only and have **no effect on
+/// behavior**: moves are controlled by `--execute` on the CLI, and every
+/// executed move is journaled so it can be undone. The fields stay in the
+/// schema (and in `config show`, marked inactive) because removing them would
+/// make `deny_unknown_fields` reject existing user files.
+///
+/// Wiring `dry_run` as a safety interlock was considered and rejected: its
+/// default is `true`, so it would stop every `--execute` move unless the user
+/// changed the setting first — a silent trap rather than a safety net.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OperationsSection {
-    /// Default to dry run unless `--execute` is passed.
+    /// Accepted for compatibility; inactive (`--execute` controls moves).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_run: Option<bool>,
-    /// Record moves in the journal so they can be undone.
+    /// Accepted for compatibility; inactive (journaling is always on).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_undo: Option<bool>,
 }

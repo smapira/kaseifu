@@ -57,16 +57,15 @@ where
         }
         seen_paths.insert(path_str.clone());
 
-        if is_system_directory(path_str) {
-            continue;
-        }
-
         let path_obj = Path::new(path_str.as_str());
         // Decided before the filesystem calls below: a hit inside a
-        // destination the user could not have picked (app store, cache,
-        // hidden tree, generated name) is not evidence, and rejecting it
-        // here skips `exists`/`canonicalize`/`metadata` for it. Measured on
-        // a real photo: 2276 of 3526 hits live in such folders.
+        // destination the user could not have picked (system tree, app
+        // store, cache, hidden tree, generated name) is not evidence, and
+        // rejecting it here skips `exists`/`canonicalize`/`metadata` for it.
+        // Measured on a real photo: 2276 of 3526 hits live in such folders.
+        // The rules (including the macOS system roots) live in
+        // `discovery::destinations` only — this is a delegation, not a
+        // second copy.
         let parent = parent_directory(path_obj, path_str);
         if is_excluded_destination(&parent) {
             skipped_destinations += 1;
@@ -194,14 +193,4 @@ fn is_query_safe(term: &str) -> bool {
         && term
             .chars()
             .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '@' | '#' | '+'))
-}
-
-/// Check if path is a system directory that should be excluded
-fn is_system_directory(path: &str) -> bool {
-    let path_lower = path.to_lowercase();
-    let system_paths = [
-        "/system", "/private", "/usr", "/bin", "/sbin", "/var", "/tmp",
-    ];
-
-    system_paths.iter().any(|p| path_lower.contains(*p))
 }

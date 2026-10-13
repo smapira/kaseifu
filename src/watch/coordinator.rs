@@ -35,9 +35,7 @@ impl Default for WatchConfig {
             debounce: Duration::from_millis(500),
             stability: Duration::from_secs(1),
             self_suppression: Duration::from_secs(10),
-            managed_paths: vec![PathBuf::from(
-                crate::storage::history::DEFAULT_DATABASE_PATH,
-            )],
+            managed_paths: vec![crate::storage::history::journal_path()],
         }
     }
 }
