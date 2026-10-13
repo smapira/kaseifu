@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-14
+
+### Added
+
+- **Image metadata observation** — capture date/time, GPS location, camera make/model, and pixel dimensions via Spotlight (single `mdls` call) with EXIF fallback for JPEG/TIFF (best-effort for HEIC); no new dependencies
+- **Context-aware Jev requests** — `state.target` carries `capture_date` / `camera` / `dimensions` and `location` (only when explicitly allowed), plus availability signals in `semantic_signals`; no Rust-side scoring of dates or coordinates
+- **Image privacy controls** — `[metadata.image]` / `[metadata.privacy]` settings (`send_gps_to_jev = false` by default), unknown-key rejection, no position persistence or log leakage
+- **`inspect` capture sections** — CAPTURE METADATA and LOCATION panels (ASCII, `-` for missing values), JSON-compatible (`image_metadata` omitted for non-images)
+
 ## [0.3.0] - 2026-10-13
 
 ### Added
