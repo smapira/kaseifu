@@ -257,38 +257,13 @@ fn env_or_dotenv(name: &str, dotenv: &std::collections::HashMap<String, String>)
 }
 
 fn dotenv_map() -> std::collections::HashMap<String, String> {
-    let mut map = std::collections::HashMap::new();
-    let Ok(contents) = std::fs::read_to_string(".env") else {
-        return map;
-    };
-    for (key, value) in parse_dotenv(&contents) {
-        map.insert(key, value);
+    // Parsed with `dotenvy` (the maintained fork of `dotenv`) so quoting,
+    // comments, `export` prefixes and escapes behave the way the file format
+    // defines. The values are deliberately *not* written into the process
+    // environment: the resolver treats them as a fallback that real
+    // environment variables win over, which is the documented precedence.
+    match dotenvy::from_path_iter(".env") {
+        Ok(pairs) => pairs.filter_map(Result::ok).collect(),
+        Err(_) => std::collections::HashMap::new(),
     }
-    map
-}
-
-fn parse_dotenv(contents: &str) -> Vec<(String, String)> {
-    let mut pairs = Vec::new();
-    for line in contents.lines() {
-        if let Some(pair) = parse_dotenv_line(line) {
-            pairs.push(pair);
-        }
-    }
-    pairs
-}
-
-fn parse_dotenv_line(line: &str) -> Option<(String, String)> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with('#') {
-        return None;
-    }
-    let (key, value) = line.split_once('=')?;
-    if key.trim().is_empty() {
-        return None;
-    }
-    Some((key.trim().to_string(), unquote(value.trim())))
-}
-
-fn unquote(value: &str) -> String {
-    value.trim_matches('"').trim_matches('\'').to_string()
 }

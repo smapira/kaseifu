@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-14
+
+### Fixed
+
+- **Discovery candidate quality for images** — image targets now search with
+  the Spotlight content type scope (`public.image`) and file-name terms inside
+  the mdfind query itself, so photos and photo folders reach the candidate
+  ranking instead of being crowded out by unrelated file types; the result
+  window is applied after aggregation and ranking instead of truncating
+  mdfind's raw hit order (non-image queries are unchanged)
+- **Unusable destinations are never offered** — discovery drops directories
+  that cannot be a move destination as a rule of path shape rather than a
+  list of paths: app-managed containers (`*.library`, `*.app`,
+  `*.photoslibrary`, …), the macOS library trees (`/Library`,
+  `~/Library`, `/Volumes/<volume>/Library`), hidden destinations, cache and
+  OS-reserved areas (`Caches`, `TemporaryItems`, `*.cache`, `.Trash`), and
+  machine-generated folder names (UUIDs, hashes, Eagle-style `<hash>.info`
+  serials). On a real photo this removes the 38 app-store folders that filled
+  the candidate list and scores 17% faster by not scoring their files;
+  user folders (`~/Pictures`, `~/Documents`, external volumes) are untouched.
+  All-uppercase separator-free names (`PHOTOS2024BACKUP`) count as generated
+  and are not offered either; a scan of 171,428 real folders found no such
+  hand-made name
+
+### Changed
+
+- **`.env` is parsed with `dotenvy`** instead of a hand-rolled parser, so the
+  developer/CI fallback honours `export`, quotes and trailing comments the way
+  the format defines; environment variables still win over `.env`, and `.env`
+  still wins over the Keychain (nothing is written into the process
+  environment). The `discover` command is now hidden from `--help`: it stays
+  available as a diagnostic view, while `classify` remains the supported path
+
 ## [0.4.1] - 2026-10-14
 
 ### Fixed

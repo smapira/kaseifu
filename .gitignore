@@ -3,7 +3,6 @@
 .env
 .DS_Store
 *.log
-/.opencode/
 /.serena
 /.opencode
 /opencode.json
