@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-13
+
+### Added
+
+- **First-run setup** — `kaseifu setup` interactively stores the Jev API key in the macOS Keychain and general settings in `~/Library/Application Support/kaseifu/config.toml`; no `.env` or `export` needed
+- **`kaseifu auth`** — `set-key` / `status` / `remove-key` for Keychain-backed API key management (never shown, never logged, never passed as a CLI argument)
+- **`kaseifu config`** — `show` / `set` for validated TOML settings with atomic saves and unknown-key rejection
+- **`kaseifu doctor`** — local environment diagnostics (platform, config, Keychain state, endpoint form, Spotlight, storage) with opt-in connectivity check
+- **Setting resolution order** — CLI flags > environment variables (`JEV_API_URL` > legacy `JEV_API_BASE_URL`, `JEV_MODEL`, `JEV_API_KEY`) > user TOML + Keychain > application defaults
+- **Quality gates** — `scripts/quality_check.sh` (rustfmt, Clippy `-D warnings`, tests, complexity, baseline comparison) wired into `.github/workflows/rust-quality.yml` (macOS runner) with `reports/quality/baseline.json` tracking
+- **Developer docs** — `documents/development.md` (env files, mocks, resolution order, CI)
+
+### Changed
+
+- **Endpoint no longer required upfront** — missing endpoint/model resolve to defaults instead of erroring (`JEV_API_URL is not set` is gone; `setup` is the recommended path)
+- **Complexity refactor** — max cyclomatic complexity 44 -> 12, CC 16+ functions 3 -> 0, CC<=10 ratio 96.6% -> 99.6%; behavior-preserving splits only
+- **README** — Quick Start rewritten around `kaseifu setup`; `.env` instructions moved to developer docs
+
 ## [0.2.0] - 2026-10-12
 
 ### Changed
