@@ -128,7 +128,20 @@ canonicalize()
 /usr
 ```
 
-など。
+など。加えて `src/discovery/destinations.rs` の規則で、
+「移動先になれないディレクトリ」をパスの形状で除外する:
+
+```text
+*.library / *.app / *.photoslibrary など   アプリ管理コンテナ
+/Library, ~/Library, /Volumes/<v>/Library  macOS ライブラリツリー
+<name> が . 始まり                          隠しディレクトリ（~/.Trash 等）
+Caches / TemporaryItems / *.cache          キャッシュ・一時領域
+.Trash / .Spotlight-V100 などの OS 領域
+UUID・ハッシュ・<HASH>.info などの機械生成名
+```
+
+`~/Pictures`・`~/Documents`・外部ボリュームなどの通常フォルダは除外しない
+（隠しディレクトリの**配下**にある可視フォルダは維持する）。
 
 ---
 

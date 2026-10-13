@@ -2,6 +2,7 @@ use crate::models::{SimilarFile, file_context::NormalizedFileContext};
 
 // Internal functions have placeholder mode disabled for now
 mod candidates;
+mod destinations;
 mod scoring;
 mod search_terms;
 mod similarity;
@@ -10,12 +11,32 @@ mod similarity;
 pub use candidates::{
     aggregate_by_directory, aggregate_by_directory_with_exclusions, breakdown_line,
 };
+pub use destinations::is_excluded_destination;
 pub use scoring::{
     aggregate_directory_score, extension_match, filename_similarity, normalize_name, score_file,
     token_jaccard,
 };
 pub use search_terms::{extract_terms, normalize_terms};
 pub use similarity::find_similar_files;
+
+/// Maximum number of raw Spotlight hits fetched and scored per run.
+///
+/// `mdfind` has no result-limit option and returns every match in index
+/// order, so truncating *before* ranking made the candidate set depend on
+/// that arbitrary order (image hits were crowded out by unrelated files).
+/// The measured image-scale query for one photo series returns ~3.5k paths
+/// (~0.5 MB of text), so 10k leaves headroom while bounding memory and the
+/// per-hit scoring cost (`exists` + `canonicalize` + `metadata` per path)
+/// for pathological word queries.
+pub const MAX_SPOTLIGHT_HITS: usize = 10_000;
+
+/// Maximum number of ranked destinations returned by [`discover`].
+///
+/// Applied after aggregation and ranking, so the cut follows the scores
+/// rather than `mdfind`'s hit order. 50 keeps the `classify` payload sent
+/// to Jev and the `discover` listing bounded; it matches the raw hit window
+/// this pipeline used before (50 hits), so consumers do not grow.
+pub const MAX_CANDIDATE_DESTINATIONS: usize = 50;
 
 /// Main discovery function: NormalizedFileContext -> CandidateDestination[]
 ///
@@ -77,11 +98,23 @@ where
     }
 
     // Step 3: Aggregate similar files by parent directory
-    // The target's own parent directory is never a move destination.
-    let candidates =
+    // The target's own parent directory is never a move destination, and a
+    // directory the user could not have picked (app store, cache, hidden
+    // tree, generated name) is dropped by the aggregation itself — see
+    // `destinations` for the rules.
+    let mut candidates =
         candidates::aggregate_by_directory_with_exclusions(similar_files, &[target_parent])?;
 
-    crate::debug!("Candidate destinations: {}", candidates.len());
+    // Step 4: Keep the ranked head. Truncation lives here (and not in the
+    // search) so the ranking, not the raw hit order, decides the cut.
+    let ranked_count = candidates.len();
+    candidates.truncate(MAX_CANDIDATE_DESTINATIONS);
+
+    crate::debug!(
+        "Candidate destinations: {} (returned {})",
+        ranked_count,
+        candidates.len()
+    );
     for c in &candidates {
         crate::debug!(
             "  {} path={} score={:.1} evidence={}",

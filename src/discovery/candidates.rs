@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::discovery::SimilarFile;
+use crate::discovery::destinations::is_excluded_destination;
 use crate::discovery::scoring::{adjust_for_age, aggregate_directory_score, median_timestamp};
 use crate::models::candidate::CandidateDestination;
 
@@ -21,12 +22,27 @@ pub fn aggregate_by_directory_with_exclusions(
     let mut dir_files: std::collections::HashMap<String, Vec<SimilarFile>> =
         std::collections::HashMap::new();
 
+    let mut excluded_evidence = 0usize;
     for file in similar_files {
         let dir = file.parent_directory.clone();
         if excluded_dirs.iter().any(|e| e == &dir) {
             continue;
         }
+        // Aggregation is the authoritative gate: the candidate list this
+        // function returns feeds Jev's criteria, the `discover` listing and
+        // the move planning alike.
+        if is_excluded_destination(&dir) {
+            excluded_evidence += 1;
+            continue;
+        }
         dir_files.entry(dir).or_default().push(file);
+    }
+
+    if excluded_evidence > 0 {
+        crate::debug!(
+            "Evidence dropped (unusable destination directories): {}",
+            excluded_evidence
+        );
     }
 
     let mut dirs: Vec<_> = dir_files.keys().cloned().collect();
