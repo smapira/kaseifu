@@ -30,57 +30,61 @@ pub fn normalize_xattr(evidence: &[crate::models::file_context::Evidence]) -> Xa
 
     // Filter to only process allowlisted xattr attributes
     for item in evidence.iter() {
-        // Only process Xattr source items
-        if item.source != crate::models::file_context::EvidenceSource::Xattr {
-            continue;
-        }
-
-        // Allowlist check: only process known-safe attribute names
-        // `is_xattr_allowed` returns true only for explicitly whitelisted attrs
-        if !is_xattr_allowed(&item.key) {
-            // Unknown/forbidden xattr attributes are silently skipped
-            // This prevents binary data from malicious attributes from polluting semantic context
-            continue;
-        }
-
-        // Process allowed xattr attributes
-        let key = item.key.as_str();
-
-        let value = match &item.value {
-            Value::String(v) => Some(v.as_str()),
-            _ => {
-                // Skip xattr with non-string values
-                continue;
-            }
-        };
-        let value_ref = value.unwrap_or_default();
-
-        if key == "com.apple.FinderInfo" {
-            // Parse FinderInfo value
-            // Basic sanity check to skip obviously corrupted data
-            if value_ref.is_empty()
-                || value_ref.contains("Malformed")
-                || value_ref.contains("invalid")
-            {
-                // Invalid content - skip processing
-                continue;
-            }
-
-            // Extract downloader agent
-            if let Some(agent) = parse_agent(value_ref) {
-                result.downloader = Some(agent);
-            }
-
-            // Extract URLs if present
-            for url in parse_url(value_ref) {
-                if !url.is_empty() {
-                    result.urls.push(url);
-                }
-            }
-        }
+        apply_xattr_item(item, &mut result);
     }
 
     result
+}
+
+/// Single-item pipeline: source filter -> allowlist -> type filter -> parse.
+fn apply_xattr_item(item: &crate::models::file_context::Evidence, result: &mut XattrResult) {
+    // Only process Xattr source items
+    if item.source != crate::models::file_context::EvidenceSource::Xattr {
+        return;
+    }
+
+    // Allowlist check: only process known-safe attribute names
+    // `is_xattr_allowed` returns true only for explicitly whitelisted attrs
+    if !is_xattr_allowed(&item.key) {
+        // Unknown/forbidden xattr attributes are silently skipped
+        // This prevents binary data from malicious attributes from polluting semantic context
+        return;
+    }
+
+    let Value::String(value_ref) = &item.value else {
+        // Skip xattr with non-string values
+        return;
+    };
+
+    if item.key.as_str() == "com.apple.FinderInfo" {
+        apply_finder_info(value_ref, result);
+    }
+}
+
+/// Parse an allowlisted FinderInfo value (sanity filter + agent/URL extraction).
+fn apply_finder_info(value_ref: &str, result: &mut XattrResult) {
+    // Basic sanity check to skip obviously corrupted data
+    if is_corrupted_finder_value(value_ref) {
+        // Invalid content - skip processing
+        return;
+    }
+
+    // Extract downloader agent
+    if let Some(agent) = parse_agent(value_ref) {
+        result.downloader = Some(agent);
+    }
+
+    // Extract URLs if present
+    for url in parse_url(value_ref) {
+        if !url.is_empty() {
+            result.urls.push(url);
+        }
+    }
+}
+
+/// Obviously corrupted FinderInfo payloads carry no semantic value.
+fn is_corrupted_finder_value(value: &str) -> bool {
+    value.is_empty() || value.contains("Malformed") || value.contains("invalid")
 }
 
 /// Allowlist of safe xattr attributes to process.

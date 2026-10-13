@@ -4,40 +4,71 @@ pub fn normalize_metadata(evidence: &[crate::models::file_context::Evidence]) ->
     let mut result = MetadataResult::default();
 
     for item in evidence {
-        let key = item.key.as_str();
-        let value = &item.value;
-
-        if matches!(key, "kMDItemContentType") {
-            if let Value::String(v) = value {
-                result.file_type = Some(v.clone());
-            }
-        } else if let Some(_v) = key.strip_prefix("kMDItemTitle") {
-            if let Value::String(title_value) = value {
-                for term in extract_terms(title_value) {
-                    if !term.is_empty() {
-                        result.semantic_signals.push(format!("M:{}", term));
-                    }
-                }
-            }
-        } else if let Some(_v) = key.strip_prefix("kMDItemKind") {
-            if let Value::String(kind_value) = value {
-                for term in extract_terms(kind_value) {
-                    if !term.is_empty() {
-                        result.semantic_signals.push(format!("K:{}", term));
-                    }
-                }
-            }
-        } else if matches!(key, "kMDItemAuthors") {
-            if let Value::String(v) = value {
-                result.authors = Some(format!("A:{}", v));
-            }
-        } else if matches!(key, "kMDItemFSCreationDate" | "kMDItemFSContentChangeDate")
-            && let Value::String(v) = value
-        {
-            result.created_date = Some(v.clone());
+        match classify_metadata_key(item.key.as_str()) {
+            MetadataKey::ContentType => apply_content_type(&item.value, &mut result),
+            MetadataKey::Title => push_prefixed_terms(&item.value, "M", &mut result),
+            MetadataKey::Kind => push_prefixed_terms(&item.value, "K", &mut result),
+            MetadataKey::Authors => apply_authors(&item.value, &mut result),
+            MetadataKey::CreatedDate => apply_created_date(&item.value, &mut result),
+            MetadataKey::Ignored => {}
         }
     }
     result
+}
+
+/// Spotlight key classification: dispatch is data-driven, behavior unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetadataKey {
+    ContentType,
+    Title,
+    Kind,
+    Authors,
+    CreatedDate,
+    Ignored,
+}
+
+fn classify_metadata_key(key: &str) -> MetadataKey {
+    if key == "kMDItemContentType" {
+        MetadataKey::ContentType
+    } else if key.starts_with("kMDItemTitle") {
+        MetadataKey::Title
+    } else if key.starts_with("kMDItemKind") {
+        MetadataKey::Kind
+    } else if key == "kMDItemAuthors" {
+        MetadataKey::Authors
+    } else if key == "kMDItemFSCreationDate" || key == "kMDItemFSContentChangeDate" {
+        MetadataKey::CreatedDate
+    } else {
+        MetadataKey::Ignored
+    }
+}
+
+fn apply_content_type(value: &Value, result: &mut MetadataResult) {
+    if let Value::String(v) = value {
+        result.file_type = Some(v.clone());
+    }
+}
+
+fn push_prefixed_terms(value: &Value, prefix: &str, result: &mut MetadataResult) {
+    if let Value::String(text) = value {
+        for term in extract_terms(text) {
+            if !term.is_empty() {
+                result.semantic_signals.push(format!("{prefix}:{term}"));
+            }
+        }
+    }
+}
+
+fn apply_authors(value: &Value, result: &mut MetadataResult) {
+    if let Value::String(v) = value {
+        result.authors = Some(format!("A:{v}"));
+    }
+}
+
+fn apply_created_date(value: &Value, result: &mut MetadataResult) {
+    if let Value::String(v) = value {
+        result.created_date = Some(v.clone());
+    }
 }
 
 fn extract_terms(title: &str) -> Vec<String> {

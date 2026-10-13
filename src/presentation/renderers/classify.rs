@@ -82,6 +82,199 @@ fn policy_destination(policy: &DecisionAction) -> Option<&str> {
     }
 }
 
+fn target_head(report: &ClassifyReport, color: bool) -> Vec<String> {
+    let found = report.candidates.len();
+    vec![
+        theme::paint("TARGET", theme::ANSI_TEAL, color),
+        report.target_filename.clone(),
+        theme::paint(&target_summary(report), theme::ANSI_DIM, color),
+        String::new(),
+        theme::paint("DISCOVERY", theme::ANSI_TEAL, color),
+        if found == 1 {
+            "1 destination found".to_string()
+        } else {
+            format!("{} destinations found", found)
+        },
+    ]
+}
+
+fn ranking_limit(ranked_len: usize, show_all: bool) -> usize {
+    if show_all {
+        ranked_len
+    } else {
+        ranked_len.min(RANKING_LIMIT)
+    }
+}
+
+/// Shared rendering context for the JEV ranking block.
+struct RankingContext<'a, 'b> {
+    by_id: &'a HashMap<&'b str, String>,
+    report: &'a ClassifyReport,
+    selected: &'a str,
+    verbose: bool,
+    color: bool,
+}
+
+fn push_visible_ranking_rows(
+    ranking: &mut Vec<String>,
+    ranked: &[(String, f64)],
+    limit: usize,
+    ctx: &RankingContext<'_, '_>,
+    shown_ids: &mut std::collections::HashSet<String>,
+) {
+    for (index, (id, prob)) in ranked.iter().take(limit).enumerate() {
+        shown_ids.insert(id.clone());
+        ranking.extend(ranking_row(
+            index + 1,
+            id,
+            *prob,
+            ctx.selected == *id,
+            ctx.by_id,
+            ctx.report,
+            ctx.verbose,
+            ctx.color,
+        ));
+        ranking.push(String::new());
+    }
+}
+
+/// The selection is always shown, even outside the top 5.
+fn push_selected_outside_top(
+    ranking: &mut Vec<String>,
+    ranked: &[(String, f64)],
+    shown_ids: &std::collections::HashSet<String>,
+    ctx: &RankingContext<'_, '_>,
+) {
+    if shown_ids.contains(ctx.selected) {
+        return;
+    }
+    let Some((pos, (id, prob))) = ranked
+        .iter()
+        .enumerate()
+        .find(|(_, (id, _))| id == ctx.selected)
+    else {
+        return;
+    };
+    ranking.push(theme::paint(
+        &format!("Selected candidate is ranked #{}:", pos + 1),
+        theme::ANSI_AMBER,
+        ctx.color,
+    ));
+    ranking.extend(ranking_row(
+        pos + 1,
+        id,
+        *prob,
+        true,
+        ctx.by_id,
+        ctx.report,
+        ctx.verbose,
+        ctx.color,
+    ));
+    ranking.push(String::new());
+}
+
+fn push_ranking_footer(
+    ranking: &mut Vec<String>,
+    ranked: &[(String, f64)],
+    limit: usize,
+    show_all: bool,
+) {
+    if show_all || ranked.len() <= limit {
+        return;
+    }
+    // The ranked distribution includes NONE, which is not a
+    // destination: say so to avoid confusion with the DISCOVERY
+    // count above.
+    let scope = if ranked.iter().any(|(id, _)| id == "NONE") {
+        format!("{} (incl. NONE)", ranked.len())
+    } else {
+        ranked.len().to_string()
+    };
+    ranking.push(format!(
+        "Showing {} of {} destinations (use --all)",
+        limit, scope
+    ));
+}
+
+fn ranking_lines(
+    report: &ClassifyReport,
+    ranked: &[(String, f64)],
+    by_id: &HashMap<&str, String>,
+    selected: &str,
+    show_all: bool,
+    verbose: bool,
+    color: bool,
+) -> Vec<String> {
+    let mut ranking = Vec::new();
+    if ranked.is_empty() {
+        ranking.push("No probability distribution (no candidates).".to_string());
+        return ranking;
+    }
+    let limit = ranking_limit(ranked.len(), show_all);
+    let mut shown_ids = std::collections::HashSet::new();
+    let ctx = RankingContext {
+        by_id,
+        report,
+        selected,
+        verbose,
+        color,
+    };
+    push_visible_ranking_rows(&mut ranking, ranked, limit, &ctx, &mut shown_ids);
+    push_selected_outside_top(&mut ranking, ranked, &shown_ids, &ctx);
+    push_ranking_footer(&mut ranking, ranked, limit, show_all);
+    ranking
+}
+
+fn decision_lines(
+    report: &ClassifyReport,
+    by_id: &HashMap<&str, String>,
+    selected: &str,
+    color: bool,
+) -> Vec<String> {
+    let mut decision = Vec::new();
+    decision.push(format!(
+        "Selected     {} - {}",
+        theme::paint(selected, theme::ANSI_VIOLET, color),
+        selected_directory_label(selected, by_id, color)
+    ));
+    decision.push(format!("Confidence   {:.2}", report.decision.confidence));
+    decision.push(format!("Margin       {:.2}", report.decision.margin));
+    decision
+}
+
+fn selected_directory_label(selected: &str, by_id: &HashMap<&str, String>, color: bool) -> String {
+    if selected == "NONE" {
+        "no destination".to_string()
+    } else {
+        resolve_directory(selected, by_id)
+            .map(|s| paint_path(s, path_budget(), color))
+            .unwrap_or_else(|| "unresolved candidate".to_string())
+    }
+}
+
+/// POLICY (Rust verdict; never Jev's `move_to`).
+fn policy_lines(
+    policy: &DecisionAction,
+    by_id: &HashMap<&str, String>,
+    color: bool,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let (kind, reason) = policy_view(policy);
+    lines.push(generic::decision_line(kind, color));
+    lines.push(reason);
+    if let Some(id) = policy_destination(policy) {
+        let dir = resolve_directory(id, by_id)
+            .map(|s| paint_path(s, path_budget(), color))
+            .unwrap_or_else(|| "unresolved candidate".to_string());
+        lines.push(format!(
+            "{} - {}",
+            theme::paint(id, theme::ANSI_VIOLET, color),
+            dir
+        ));
+    }
+    lines
+}
+
 fn body_sections(
     report: &ClassifyReport,
     policy: &DecisionAction,
@@ -93,124 +286,17 @@ fn body_sections(
     let ranked = rank_probabilities(&report.probabilities);
     let selected = report.decision.destination_id.as_deref().unwrap_or(MISSING);
 
-    // TARGET + DISCOVERY (leading block, no divider).
-    let found = report.candidates.len();
-    let head = vec![
-        theme::paint("TARGET", theme::ANSI_TEAL, color),
-        report.target_filename.clone(),
-        theme::paint(&target_summary(report), theme::ANSI_DIM, color),
-        String::new(),
-        theme::paint("DISCOVERY", theme::ANSI_TEAL, color),
-        if found == 1 {
-            "1 destination found".to_string()
-        } else {
-            format!("{} destinations found", found)
-        },
-    ];
-
-    // JEV RANKING.
-    let mut ranking = Vec::new();
-    if ranked.is_empty() {
-        ranking.push("No probability distribution (no candidates).".to_string());
-    } else {
-        let limit = if show_all {
-            ranked.len()
-        } else {
-            ranked.len().min(RANKING_LIMIT)
-        };
-        let mut shown_ids = std::collections::HashSet::new();
-        for (index, (id, prob)) in ranked.iter().take(limit).enumerate() {
-            shown_ids.insert(id.as_str());
-            ranking.extend(ranking_row(
-                index + 1,
-                id,
-                *prob,
-                selected == *id,
-                &by_id,
-                report,
-                verbose,
-                color,
-            ));
-            ranking.push(String::new());
-        }
-        // The selection is always shown, even outside the top 5.
-        if !shown_ids.contains(selected)
-            && let Some((pos, (id, prob))) = ranked
-                .iter()
-                .enumerate()
-                .find(|(_, (id, _))| id == selected)
-        {
-            ranking.push(theme::paint(
-                &format!("Selected candidate is ranked #{}:", pos + 1),
-                theme::ANSI_AMBER,
-                color,
-            ));
-            ranking.extend(ranking_row(
-                pos + 1,
-                id,
-                *prob,
-                true,
-                &by_id,
-                report,
-                verbose,
-                color,
-            ));
-            ranking.push(String::new());
-        }
-        if !show_all && ranked.len() > limit {
-            // The ranked distribution includes NONE, which is not a
-            // destination: say so to avoid confusion with the DISCOVERY
-            // count above.
-            let scope = if ranked.iter().any(|(id, _)| id == "NONE") {
-                format!("{} (incl. NONE)", ranked.len())
-            } else {
-                ranked.len().to_string()
-            };
-            ranking.push(format!(
-                "Showing {} of {} destinations (use --all)",
-                limit, scope
-            ));
-        }
-    }
-
-    // JEV DECISION.
-    let mut decision = Vec::new();
-    let selected_dir = if selected == "NONE" {
-        "no destination".to_string()
-    } else {
-        resolve_directory(selected, &by_id)
-            .map(|s| paint_path(s, path_budget(), color))
-            .unwrap_or_else(|| "unresolved candidate".to_string())
-    };
-    decision.push(format!(
-        "Selected     {} - {}",
-        theme::paint(selected, theme::ANSI_VIOLET, color),
-        selected_dir
-    ));
-    decision.push(format!("Confidence   {:.2}", report.decision.confidence));
-    decision.push(format!("Margin       {:.2}", report.decision.margin));
-
-    // POLICY (Rust verdict; never Jev's `move_to`).
-    let mut policy_lines = Vec::new();
-    let (kind, reason) = policy_view(policy);
-    policy_lines.push(generic::decision_line(kind, color));
-    policy_lines.push(reason);
-    if let Some(id) = policy_destination(policy) {
-        let dir = resolve_directory(id, &by_id)
-            .map(|s| paint_path(s, path_budget(), color))
-            .unwrap_or_else(|| "unresolved candidate".to_string());
-        policy_lines.push(format!(
-            "{} - {}",
-            theme::paint(id, theme::ANSI_VIOLET, color),
-            dir
-        ));
-    }
-
     vec![
-        Section::plain(head),
-        Section::headed("JEV RANKING", ranking),
-        Section::headed("JEV DECISION", decision),
-        Section::headed("POLICY", policy_lines),
+        Section::plain(target_head(report, color)),
+        Section::headed(
+            "JEV RANKING",
+            ranking_lines(report, &ranked, &by_id, selected, show_all, verbose, color),
+        ),
+        Section::headed(
+            "JEV DECISION",
+            decision_lines(report, &by_id, selected, color),
+        ),
+        Section::headed("POLICY", policy_lines(policy, &by_id, color)),
     ]
 }
 

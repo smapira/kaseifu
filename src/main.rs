@@ -18,7 +18,7 @@ use kaseifu::watch::coordinator::WatchConfig;
 use kaseifu::watch::runner;
 use kaseifu::{context, discovery, normalize};
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 #[derive(Parser)]
@@ -115,198 +115,256 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-
+    let format = cli.format;
     match cli.command {
-        Commands::Inspect { path, all, verbose } => {
-            let mode = resolve_mode(cli.format);
-            let ctx = context::builder::build(&path)?;
-            if mode.rich {
-                let normalized = normalize::normalize(ctx.clone())?;
-                inspect_view::print_rich(&ctx, &normalized, all, verbose, mode.color);
-            } else {
-                println!("{}", serde_json::to_string_pretty(&ctx)?);
-            }
-        }
-
+        Commands::Inspect { path, all, verbose } => handle_inspect(&path, all, verbose, format),
         Commands::Scan { path } => {
-            let mode = resolve_mode(cli.format);
-            if mode.rich {
-                println!(
-                    "{} {}",
-                    generic::header("KASEIFU / SCAN", mode.color),
-                    generic::status_line("target", &path.display().to_string(), mode.color)
-                );
-            } else {
-                println!("Scanning: {}", path.display());
-            }
+            handle_scan(&path, format);
+            Ok(())
         }
-
         Commands::Organize {
             file,
             execute,
             dry_run,
-        } => {
-            let actually_move = execute && !dry_run;
-
-            let jev = build_jev_integration()?;
-            let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
-
-            let report = organize::organize_file(&file, &jev, &history, actually_move).await?;
-
-            println!("== Decision ==");
-            println!("  destination: {:?}", report.decision.destination_id);
-            println!("  confidence:  {:.3}", report.decision.confidence);
-            println!("  margin:      {:.3}", report.decision.margin);
-            let mode = resolve_mode(cli.format);
-            if mode.rich {
-                println!(
-                    "{} {}",
-                    generic::header("KASEIFU / ORGANIZE", mode.color),
-                    generic::dry_run_banner(actually_move, mode.color)
-                );
-            }
-            println!("== Policy ==\n  {:?}", report.policy);
-
-            match report.outcome {
-                OrganizeOutcome::Moved {
-                    operation_id,
-                    destination,
-                } => {
-                    println!("== Moved ==");
-                    println!("  {}", destination.display());
-                    println!("  operation: {operation_id}");
-                }
-                OrganizeOutcome::WouldMove { destination } => {
-                    println!("== Dry run ==");
-                    println!(
-                        "  would move {} -> {}",
-                        file.display(),
-                        destination.display()
-                    );
-                }
-                OrganizeOutcome::Refused => {
-                    println!("== No move ==\n  policy refused");
-                }
-                OrganizeOutcome::Unplanable(PlanError::Collision(path)) => {
-                    // docs/design/05-execute.md: a collision goes to REVIEW.
-                    println!(
-                        "== REVIEW ==\n  destination already exists: {}",
-                        path.display()
-                    );
-                }
-                OrganizeOutcome::Unplanable(error) => {
-                    println!("== No move ==\n  {error:?}");
-                }
-                OrganizeOutcome::MoveFailed(error) => {
-                    println!("== Move failed ==\n  {error}");
-                }
-            }
-        }
-
+        } => handle_organize(&file, execute, dry_run, format).await,
         Commands::Watch {
             paths,
             execute,
             dry_run,
-        } => {
-            let actually_move = execute && !dry_run;
-
-            for path in &paths {
-                if !path.is_dir() {
-                    anyhow::bail!("watch path is not a directory: {}", path.display());
-                }
-            }
-
-            let jev = build_jev_integration()?;
-            let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
-
-            let (sender, receiver) = std::sync::mpsc::channel();
-            let _watcher = fsevents::spawn(&paths, sender)?;
-
-            let roots = paths
-                .iter()
-                .map(|path| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let mode = resolve_mode(cli.format);
-            if mode.rich {
-                println!(
-                    "{}",
-                    generic::watch_line("start", &roots, !actually_move, mode.color)
-                );
-            } else {
-                println!("watching {roots} (dry-run: {})", !actually_move);
-            }
-
-            runner::run_loop(
-                receiver,
-                &jev,
-                &history,
-                actually_move,
-                WatchConfig::default(),
-            )
-            .await?;
-        }
-
-        Commands::Undo { last } => {
-            let mode = resolve_mode(cli.format);
-            if mode.rich {
-                println!("{}", generic::header("KASEIFU / UNDO", mode.color));
-            }
-            let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
-
-            for _ in 0..last {
-                match undo::undo_last_move(&history) {
-                    Ok(outcome) => println!(
-                        "restored: {}\n  (undid {})",
-                        outcome.restored_to.display(),
-                        outcome.undone_move_id
-                    ),
-                    Err(undo::UndoError::NothingToUndo) => {
-                        println!("nothing left to undo");
-                        break;
-                    }
-                    Err(error) => {
-                        println!("undo failed: {error:?}");
-                        break;
-                    }
-                }
-            }
-        }
-
-        Commands::Discover { file, all, verbose } => {
-            let mode = resolve_mode(cli.format);
-            let ctx = context::builder::build(&file)?;
-            let target_name = ctx.target.filename.clone();
-            let normalized = normalize::normalize(ctx)?;
-            let candidates = discovery::discover(normalized)?;
-
-            if mode.rich {
-                discover_view::print_rich(&target_name, &candidates, all, verbose, mode.color);
-            } else {
-                println!("{}", serde_json::to_string_pretty(&candidates)?);
-            }
-        }
-
+        } => handle_watch(&paths, execute, dry_run, format).await,
+        Commands::Undo { last } => handle_undo(last, format),
+        Commands::Discover { file, all, verbose } => handle_discover(&file, all, verbose, format),
         Commands::Classify { file, all, verbose } => {
-            let jev = build_jev_integration()?;
-            let observer = ObservingJevIntegration {
-                inner: &jev,
-                verbose,
-            };
+            handle_classify(&file, all, verbose, format).await
+        }
+    }
+}
 
-            let report = pipeline::classify_report(&file, &observer).await?;
-            // Rust Policy verdict: Jev's `move_to` selection is never shown
-            // as a move permission; AutoMove/Review/Leave comes from here.
-            let policy = kaseifu::policy::decision::evaluate(&report.decision);
-            let mode = resolve_mode(cli.format);
-            if mode.rich {
-                classify_view::print_rich(&report, &policy, all, verbose, mode.color);
-            } else {
-                println!("{}", serde_json::to_string_pretty(&report.decision)?);
-            }
+/// `inspect`: one observation pass, Rich or JSON (read-only).
+fn handle_inspect(path: &Path, all: bool, verbose: bool, format: OutputFormat) -> Result<()> {
+    let mode = resolve_mode(format);
+    let ctx = context::builder::build(path)?;
+    if mode.rich {
+        let normalized = normalize::normalize(ctx.clone())?;
+        inspect_view::print_rich(&ctx, &normalized, all, verbose, mode.color);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&ctx)?);
+    }
+    Ok(())
+}
+
+/// `scan`: target banner only (no mutation, no discovery).
+fn handle_scan(path: &Path, format: OutputFormat) {
+    let mode = resolve_mode(format);
+    if mode.rich {
+        println!(
+            "{} {}",
+            generic::header("KASEIFU / SCAN", mode.color),
+            generic::status_line("target", &path.display().to_string(), mode.color)
+        );
+    } else {
+        println!("Scanning: {}", path.display());
+    }
+}
+
+/// `organize`: decision -> policy -> plan -> dry-run or move (journaled).
+async fn handle_organize(
+    file: &Path,
+    execute: bool,
+    dry_run: bool,
+    format: OutputFormat,
+) -> Result<()> {
+    let actually_move = execute && !dry_run;
+
+    let jev = build_jev_integration()?;
+    let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
+
+    let report = organize::organize_file(file, &jev, &history, actually_move).await?;
+
+    println!("== Decision ==");
+    println!("  destination: {:?}", report.decision.destination_id);
+    println!("  confidence:  {:.3}", report.decision.confidence);
+    println!("  margin:      {:.3}", report.decision.margin);
+    let mode = resolve_mode(format);
+    if mode.rich {
+        println!(
+            "{} {}",
+            generic::header("KASEIFU / ORGANIZE", mode.color),
+            generic::dry_run_banner(actually_move, mode.color)
+        );
+    }
+    println!("== Policy ==\n  {:?}", report.policy);
+
+    print_organize_outcome(&report, file);
+    Ok(())
+}
+
+/// Outcome banner for `organize` (pure display over the report).
+fn print_organize_outcome(report: &organize::OrganizeReport, file: &Path) {
+    match &report.outcome {
+        OrganizeOutcome::Moved {
+            operation_id,
+            destination,
+        } => {
+            println!("== Moved ==");
+            println!("  {}", destination.display());
+            println!("  operation: {operation_id}");
+        }
+        OrganizeOutcome::WouldMove { destination } => {
+            println!("== Dry run ==");
+            println!(
+                "  would move {} -> {}",
+                file.display(),
+                destination.display()
+            );
+        }
+        OrganizeOutcome::Refused => {
+            println!("== No move ==\n  policy refused");
+        }
+        OrganizeOutcome::Unplanable(PlanError::Collision(path)) => {
+            // docs/design/05-execute.md: a collision goes to REVIEW.
+            println!(
+                "== REVIEW ==\n  destination already exists: {}",
+                path.display()
+            );
+        }
+        OrganizeOutcome::Unplanable(error) => {
+            println!("== No move ==\n  {error:?}");
+        }
+        OrganizeOutcome::MoveFailed(error) => {
+            println!("== Move failed ==\n  {error}");
+        }
+    }
+}
+
+/// `watch`: validate roots, then run the debounced FSEvents loop.
+async fn handle_watch(
+    paths: &[PathBuf],
+    execute: bool,
+    dry_run: bool,
+    format: OutputFormat,
+) -> Result<()> {
+    let actually_move = execute && !dry_run;
+
+    for path in paths {
+        if !path.is_dir() {
+            anyhow::bail!("watch path is not a directory: {}", path.display());
         }
     }
 
+    let jev = build_jev_integration()?;
+    let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let _watcher = fsevents::spawn(paths, sender)?;
+
+    print_watch_start(paths, actually_move, format);
+    runner::run_loop(
+        receiver,
+        &jev,
+        &history,
+        actually_move,
+        WatchConfig::default(),
+    )
+    .await?;
+    Ok(())
+}
+
+/// `watch` start banner (dry-run state is always explicit).
+fn print_watch_start(paths: &[PathBuf], actually_move: bool, format: OutputFormat) {
+    let roots = paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mode = resolve_mode(format);
+    if mode.rich {
+        println!(
+            "{}",
+            generic::watch_line("start", &roots, !actually_move, mode.color)
+        );
+    } else {
+        println!("watching {roots} (dry-run: {})", !actually_move);
+    }
+}
+
+/// `undo`: restore up to `last` moves, newest first.
+fn handle_undo(last: usize, format: OutputFormat) -> Result<()> {
+    let mode = resolve_mode(format);
+    if mode.rich {
+        println!("{}", generic::header("KASEIFU / UNDO", mode.color));
+    }
+    let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
+
+    for _ in 0..last {
+        if !apply_single_undo(&history) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// One undo step; returns false when the loop must stop.
+fn apply_single_undo(history: &OperationHistory) -> bool {
+    match undo::undo_last_move(history) {
+        Ok(outcome) => {
+            println!(
+                "restored: {}\n  (undid {})",
+                outcome.restored_to.display(),
+                outcome.undone_move_id
+            );
+            true
+        }
+        Err(undo::UndoError::NothingToUndo) => {
+            println!("nothing left to undo");
+            false
+        }
+        Err(error) => {
+            println!("undo failed: {error:?}");
+            false
+        }
+    }
+}
+
+/// `discover`: similar-file search plus scored directory aggregation.
+fn handle_discover(file: &Path, all: bool, verbose: bool, format: OutputFormat) -> Result<()> {
+    let mode = resolve_mode(format);
+    let ctx = context::builder::build(file)?;
+    let target_name = ctx.target.filename.clone();
+    let normalized = normalize::normalize(ctx)?;
+    let candidates = discovery::discover(normalized)?;
+
+    if mode.rich {
+        discover_view::print_rich(&target_name, &candidates, all, verbose, mode.color);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&candidates)?);
+    }
+    Ok(())
+}
+
+/// `classify`: full pipeline without any move (execution is a later phase).
+async fn handle_classify(
+    file: &Path,
+    all: bool,
+    verbose: bool,
+    format: OutputFormat,
+) -> Result<()> {
+    let jev = build_jev_integration()?;
+    let observer = ObservingJevIntegration {
+        inner: &jev,
+        verbose,
+    };
+
+    let report = pipeline::classify_report(file, &observer).await?;
+    // Rust Policy verdict: Jev's `move_to` selection is never shown
+    // as a move permission; AutoMove/Review/Leave comes from here.
+    let policy = kaseifu::policy::decision::evaluate(&report.decision);
+    let mode = resolve_mode(format);
+    if mode.rich {
+        classify_view::print_rich(&report, &policy, all, verbose, mode.color);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&report.decision)?);
+    }
     Ok(())
 }
 

@@ -32,15 +32,8 @@ fn file_type_of(ctx: &FileContext, normalized: &NormalizedFileContext) -> String
     }
 }
 
-fn body_sections(
-    ctx: &FileContext,
-    normalized: &NormalizedFileContext,
-    show_all: bool,
-    verbose: bool,
-    color: bool,
-) -> Vec<Section> {
-    // FILE (leading block, no divider).
-    let head = vec![
+fn file_head(ctx: &FileContext, normalized: &NormalizedFileContext, color: bool) -> Vec<String> {
+    vec![
         theme::paint("FILE", theme::ANSI_TEAL, color),
         ctx.target.filename.clone(),
         String::new(),
@@ -58,9 +51,10 @@ fn body_sections(
                 color,
             ),
         ),
-    ];
+    ]
+}
 
-    // SEMANTIC SIGNALS.
+fn signals_lines(normalized: &NormalizedFileContext, color: bool) -> Vec<String> {
     let mut signals = Vec::new();
     if normalized.semantic_signals.is_empty() {
         signals.push(MISSING.to_string());
@@ -74,8 +68,10 @@ fn body_sections(
             ));
         }
     }
+    signals
+}
 
-    // DIRECTORY CONTEXT.
+fn directory_lines(ctx: &FileContext, show_all: bool, verbose: bool, color: bool) -> Vec<String> {
     let mut dir = Vec::new();
     dir.push(label(
         "Current",
@@ -95,81 +91,127 @@ fn body_sections(
     ));
     dir.push(String::new());
     let total = ctx.directory_context.entries.len();
-    let shown = if show_all {
-        total
-    } else {
-        total.min(NEARBY_LIMIT)
-    };
-    dir.push(if show_all || total <= NEARBY_LIMIT {
-        format!("Nearby entries ({})", total)
-    } else {
-        format!("Nearby entries ({} of {})", shown, total)
-    });
+    let shown = nearby_shown(total, show_all);
+    dir.push(nearby_title(total, shown, show_all));
     for entry in ctx.directory_context.entries.iter().take(shown) {
-        let name = if verbose {
-            format!(
-                "{}{}",
-                relative_display(
-                    &ctx.directory_context
-                        .current
-                        .join(&entry.name)
-                        .to_string_lossy()
-                ),
-                entry_suffix(&entry.kind)
-            )
-        } else {
-            format!(
-                "{}{}",
-                paint_path(&entry.name, path_budget(), color),
-                entry_suffix(&entry.kind)
-            )
-        };
-        dir.push(format!("  {}", name));
+        dir.push(format!(
+            "  {}",
+            nearby_entry_label(ctx, entry, verbose, color)
+        ));
     }
     if !show_all && total > shown {
         dir.push(format!("Showing {} of {} (use --all)", shown, total));
     }
+    dir
+}
 
+fn nearby_shown(total: usize, show_all: bool) -> usize {
+    if show_all {
+        total
+    } else {
+        total.min(NEARBY_LIMIT)
+    }
+}
+
+fn nearby_title(total: usize, shown: usize, show_all: bool) -> String {
+    if show_all || total <= NEARBY_LIMIT {
+        format!("Nearby entries ({})", total)
+    } else {
+        format!("Nearby entries ({} of {})", shown, total)
+    }
+}
+
+fn nearby_entry_label(
+    ctx: &FileContext,
+    entry: &crate::models::file_context::DirectoryEntry,
+    verbose: bool,
+    color: bool,
+) -> String {
+    if verbose {
+        format!(
+            "{}{}",
+            relative_display(
+                &ctx.directory_context
+                    .current
+                    .join(&entry.name)
+                    .to_string_lossy()
+            ),
+            entry_suffix(&entry.kind)
+        )
+    } else {
+        format!(
+            "{}{}",
+            paint_path(&entry.name, path_budget(), color),
+            entry_suffix(&entry.kind)
+        )
+    }
+}
+
+fn details_lines(ctx: &FileContext, show_all: bool, color: bool) -> Vec<String> {
+    let mut details = Vec::new();
+    details.push(label("Schema", &ctx.schema_version));
+    details.push(label("Target", &ctx.target.path.to_string_lossy()));
+    let evidence_total = ctx.evidence.len();
+    let evidence_shown = if show_all {
+        evidence_total
+    } else {
+        evidence_total.min(EVIDENCE_LIMIT)
+    };
+    details.push(label("Evidence", &format!("{} entries", evidence_total)));
+    for item in ctx.evidence.iter().take(evidence_shown) {
+        details.push(evidence_line(item, show_all, color));
+    }
+    if !show_all && evidence_total > evidence_shown {
+        details.push(format!(
+            "Showing {} of {} evidence entries (use --all)",
+            evidence_shown, evidence_total
+        ));
+    }
+    details
+}
+
+fn evidence_line(
+    item: &crate::models::file_context::Evidence,
+    show_all: bool,
+    color: bool,
+) -> String {
+    let value = item.value.to_string();
+    let short = if show_all || value.len() <= 160 {
+        value
+    } else {
+        format!("{}...", &value[..160])
+    };
+    let source = format!("{:?}", item.source);
+    format!(
+        "  [{}] {} = {}",
+        source,
+        item.key,
+        theme::paint(&short, theme::ANSI_DIM, color)
+    )
+}
+
+fn body_sections(
+    ctx: &FileContext,
+    normalized: &NormalizedFileContext,
+    show_all: bool,
+    verbose: bool,
+    color: bool,
+) -> Vec<Section> {
     let mut sections = vec![
-        Section::plain(head),
-        Section::headed("SEMANTIC SIGNALS", signals),
-        Section::headed("DIRECTORY CONTEXT", dir),
+        Section::plain(file_head(ctx, normalized, color)),
+        Section::headed("SEMANTIC SIGNALS", signals_lines(normalized, color)),
+        Section::headed(
+            "DIRECTORY CONTEXT",
+            directory_lines(ctx, show_all, verbose, color),
+        ),
     ];
 
     // DETAILS: third layer, verbose only (JSON always carries everything).
     if verbose {
-        let mut details = Vec::new();
-        details.push(label("Schema", &ctx.schema_version));
-        details.push(label("Target", &ctx.target.path.to_string_lossy()));
-        let evidence_total = ctx.evidence.len();
-        let evidence_shown = if show_all {
-            evidence_total
-        } else {
-            evidence_total.min(EVIDENCE_LIMIT)
-        };
-        details.push(label("Evidence", &format!("{} entries", evidence_total)));
-        for item in ctx.evidence.iter().take(evidence_shown) {
-            let value = item.value.to_string();
-            let short = if show_all || value.len() <= 160 {
-                value
-            } else {
-                format!("{}...", &value[..160])
-            };
-            let source = format!("{:?}", item.source);
-            details.push(format!(
-                "  [{}] {} = {}",
-                source,
-                item.key,
-                theme::paint(&short, theme::ANSI_DIM, color)
-            ));
-        }
-        if !show_all && evidence_total > evidence_shown {
-            details.push(format!(
-                "Showing {} of {} evidence entries (use --all)",
-                evidence_shown, evidence_total
-            ));
-        }
-        sections.push(Section::headed("DETAILS", details));
+        sections.push(Section::headed(
+            "DETAILS",
+            details_lines(ctx, show_all, color),
+        ));
     }
 
     sections

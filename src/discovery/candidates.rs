@@ -122,21 +122,38 @@ fn build_reasons(
 ) -> Vec<String> {
     let mut reasons = Vec::new();
     reasons.push(format!("found {} items", evidence_count));
+    push_age_reason(age_days, bonus, &mut reasons);
+    push_filename_reason(files, &mut reasons);
+    push_extension_reason(files, &mut reasons);
+    push_term_reasons(files, &mut reasons);
+    reasons
+}
+
+/// Established-directory note: only when the age bonus actually applied.
+fn push_age_reason(age_days: Option<f64>, bonus: f64, reasons: &mut Vec<String>) {
     if bonus > 0.0
         && let Some(days) = age_days
     {
         reasons.push(format!("established: ~{} days", days.round() as i64));
     }
+}
+
+/// Strongest filename signal wins: exact match outranks a similarity score.
+fn push_filename_reason(files: &[SimilarFile], reasons: &mut Vec<String>) {
     let best_filename = files
         .iter()
         .map(|f| f.filename_similarity)
         .fold(0.0, f64::max);
-    let best_ext = files.iter().map(|f| f.extension_match).fold(0.0, f64::max);
     if best_filename >= 1.0 {
         reasons.push("exact normalized filename".to_string());
     } else if best_filename >= 0.5 {
         reasons.push(format!("filename similarity {:.2}", best_filename));
     }
+}
+
+/// Extension match is reported with the representative extension.
+fn push_extension_reason(files: &[SimilarFile], reasons: &mut Vec<String>) {
+    let best_ext = files.iter().map(|f| f.extension_match).fold(0.0, f64::max);
     if best_ext >= 1.0
         && let Some(ext) = files.iter().find_map(|f| {
             std::path::Path::new(&f.path)
@@ -144,8 +161,12 @@ fn build_reasons(
                 .map(|s| s.to_string_lossy().to_lowercase())
         })
     {
-        reasons.push(format!("extension: {}", ext));
+        reasons.push(format!("extension: {ext}"));
     }
+}
+
+/// Up to five deduplicated search-term matches, sorted for determinism.
+fn push_term_reasons(files: &[SimilarFile], reasons: &mut Vec<String>) {
     let mut terms: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for f in files {
         for t in &f.matched_terms {
@@ -155,9 +176,8 @@ fn build_reasons(
         }
     }
     for t in terms.into_iter().take(5) {
-        reasons.push(format!("match: {}", t));
+        reasons.push(format!("match: {t}"));
     }
-    reasons
 }
 
 pub fn breakdown_line(id: &str, dir: &str, files: &[SimilarFile], score: f64) -> String {
