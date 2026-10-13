@@ -1,7 +1,7 @@
 //! Phase 4 Decision Context - the semantic question offered to Jev.
 
 use crate::models::candidate::CandidateDestination;
-use crate::models::file_context::NormalizedFileContext;
+use crate::models::file_context::{ImageMetadata, NormalizedFileContext};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,6 +12,12 @@ pub struct DecisionContext {
     semantic_signals: Vec<String>,
     #[serde(default, skip_serializing)]
     candidates: Vec<DecisionCandidate>,
+    /// Normalized image metadata for Jev (v3.2; `None` for non-images).
+    ///
+    /// Skipped in this struct's own serialization (the adapter maps it onto
+    /// the real `/v1/systemone` `state` fields with privacy gating).
+    #[serde(default, skip_serializing)]
+    image_metadata: Option<ImageMetadata>,
 }
 
 impl DecisionContext {
@@ -42,7 +48,9 @@ impl DecisionContext {
             })
             .collect();
 
-        Self::from_parts(target, normalized.semantic_signals.clone(), candidates)
+        let mut context = Self::from_parts(target, normalized.semantic_signals.clone(), candidates);
+        context.image_metadata = normalized.image_metadata.clone();
+        context
     }
 
     /// Build a decision context from discovered candidate IDs alone.
@@ -89,7 +97,14 @@ impl DecisionContext {
             target,
             semantic_signals,
             candidates: decision_candidates,
+            image_metadata: None,
         }
+    }
+
+    /// Attach image metadata (v3.2; builder for tests and redaction checks).
+    pub fn with_image_metadata(mut self, meta: Option<ImageMetadata>) -> Self {
+        self.image_metadata = meta;
+        self
     }
 
     /// Validate that a selected ID refers to an existing candidate.
@@ -129,6 +144,11 @@ impl DecisionContext {
     /// The offered candidates; Jev may select one of these or `NONE`.
     pub fn candidates(&self) -> &[DecisionCandidate] {
         &self.candidates
+    }
+
+    /// Normalized image metadata, if the target is an image with any.
+    pub fn image_metadata(&self) -> Option<&ImageMetadata> {
+        self.image_metadata.as_ref()
     }
 }
 

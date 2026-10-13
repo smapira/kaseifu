@@ -21,3 +21,16 @@ pub const DEFAULT_DRY_RUN: bool = true;
 
 /// Default undo availability.
 pub const DEFAULT_ENABLE_UNDO: bool = true;
+
+/// Default image metadata extraction (v3.2 `[metadata.image]`).
+pub const DEFAULT_METADATA_IMAGE_ENABLED: bool = true;
+/// Default Spotlight first-source toggle.
+pub const DEFAULT_METADATA_SPOTLIGHT: bool = true;
+/// Default EXIF fallback toggle.
+pub const DEFAULT_METADATA_EXIF_FALLBACK: bool = true;
+/// Default capture-time transmission to Jev (`[metadata.privacy]`).
+pub const DEFAULT_SEND_CAPTURE_TIME_TO_JEV: bool = true;
+/// Default GPS transmission to Jev: disabled (privacy-first).
+pub const DEFAULT_SEND_GPS_TO_JEV: bool = false;
+/// Default weather enrichment (Phase 8 reserved; stays disabled).
+pub const DEFAULT_WEATHER_ENABLED: bool = false;

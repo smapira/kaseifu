@@ -76,6 +76,86 @@ pub struct NormalizedFileContext {
     pub size_bytes: u64,
     pub parent_directory: String,
     pub candidate_destinations: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub image_metadata: Option<ImageMetadata>,
+}
+
+/// Capture time with its origin (v3.2 image metadata).
+///
+/// `timezone` is only set when the source actually carries one (e.g. mdls).
+/// EXIF datetimes have no zone: `timezone` stays `None` and
+/// `timezone_known` is false. Never guess a zone.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct CaptureTime {
+    pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub timezone: Option<String>,
+    pub source: String,
+    pub timezone_known: bool,
+}
+
+/// GPS location in numeric form (v3.2 image metadata).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ImageLocation {
+    pub latitude: f64,
+    pub longitude: f64,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub altitude_m: Option<f64>,
+    pub source: String,
+}
+
+/// Camera identification (v3.2 image metadata).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct CameraInfo {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub make: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source: Option<String>,
+}
+
+/// Pixel dimensions (v3.2 image metadata).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ImageDimensions {
+    pub width: u32,
+    pub height: u32,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source: Option<String>,
+}
+
+/// Normalized image metadata (v3.2). Omitted for non-image files.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct ImageMetadata {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub capture_time: Option<CaptureTime>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub location: Option<ImageLocation>,
+    #[serde(default)]
+    pub camera: CameraInfo,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub dimensions: Option<ImageDimensions>,
+}
+
+impl ImageMetadata {
+    /// True when at least one informative field is present.
+    pub fn is_empty(&self) -> bool {
+        self.capture_time.is_none()
+            && self.location.is_none()
+            && self.camera.make.is_none()
+            && self.camera.model.is_none()
+            && self.dimensions.is_none()
+    }
+
+    /// True when GPS coordinates are present.
+    pub fn has_location(&self) -> bool {
+        self.location.is_some()
+    }
+
+    /// True when a capture time is present.
+    pub fn has_capture_time(&self) -> bool {
+        self.capture_time.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

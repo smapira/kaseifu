@@ -68,8 +68,27 @@ pub struct ResolvedConfig {
     pub dry_run: bool,
     /// Effective undo availability.
     pub enable_undo: bool,
+    /// Effective image metadata and privacy settings (v3.2).
+    pub metadata: ResolvedMetadata,
     /// Whether the API key came from the process environment.
     pub api_key_from_env: bool,
+}
+
+/// Fully resolved image metadata and privacy settings (v3.2).
+#[derive(Debug, Clone)]
+pub struct ResolvedMetadata {
+    /// Master switch for image metadata extraction.
+    pub image_enabled: bool,
+    /// Use Spotlight as the first source.
+    pub spotlight: bool,
+    /// Use embedded EXIF as a fallback for missing values.
+    pub exif_fallback: bool,
+    /// Send capture time to Jev.
+    pub send_capture_time_to_jev: bool,
+    /// Send GPS coordinates to Jev (default false).
+    pub send_gps_to_jev: bool,
+    /// Weather enrichment (Phase 8 reserved; no behavior).
+    pub weather_enabled: bool,
 }
 
 /// Resolve from the live process: env, project `.env`, user TOML, Keychain.
@@ -128,8 +147,45 @@ pub fn resolve_with(
             .operations
             .enable_undo
             .unwrap_or(defaults::DEFAULT_ENABLE_UNDO),
+        metadata: resolve_metadata(file),
         api_key_from_env: from_env,
     })
+}
+
+/// Resolve `[metadata.*]` settings (user TOML over application defaults).
+fn resolve_metadata(file: &UserConfig) -> ResolvedMetadata {
+    ResolvedMetadata {
+        image_enabled: file
+            .metadata
+            .image
+            .enabled
+            .unwrap_or(defaults::DEFAULT_METADATA_IMAGE_ENABLED),
+        spotlight: file
+            .metadata
+            .image
+            .spotlight
+            .unwrap_or(defaults::DEFAULT_METADATA_SPOTLIGHT),
+        exif_fallback: file
+            .metadata
+            .image
+            .exif_fallback
+            .unwrap_or(defaults::DEFAULT_METADATA_EXIF_FALLBACK),
+        send_capture_time_to_jev: file
+            .metadata
+            .privacy
+            .send_capture_time_to_jev
+            .unwrap_or(defaults::DEFAULT_SEND_CAPTURE_TIME_TO_JEV),
+        send_gps_to_jev: file
+            .metadata
+            .privacy
+            .send_gps_to_jev
+            .unwrap_or(defaults::DEFAULT_SEND_GPS_TO_JEV),
+        weather_enabled: file
+            .metadata
+            .weather
+            .enabled
+            .unwrap_or(defaults::DEFAULT_WEATHER_ENABLED),
+    }
 }
 
 fn pick_endpoint(

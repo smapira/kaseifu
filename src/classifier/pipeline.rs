@@ -26,6 +26,7 @@ use anyhow::{Result, anyhow};
 use std::path::Path;
 
 use super::jev::JevIntegration;
+use crate::context::image_metadata::MetadataOptions;
 use crate::models::candidate::CandidateDestination;
 use crate::models::decision::{DecisionContext, JevDecision, validate_probabilities};
 use crate::models::file_context::NormalizedFileContext;
@@ -33,9 +34,23 @@ use crate::{context, discovery, normalize};
 
 /// Run the full decision pipeline using the real Spotlight (mdfind) search.
 pub async fn classify(file: &Path, jev: &dyn JevIntegration) -> Result<JevDecision> {
-    let (normalized, candidates) = discover_candidates(file, |query, limit| {
-        crate::platform::macos::spotlight::search(query, limit)
-    })?;
+    classify_with_options(file, jev, &MetadataOptions::default()).await
+}
+
+/// Run the full decision pipeline with explicit image toggles (v3.2).
+///
+/// Honors `[metadata.image]` without re-reading configuration inside the
+/// pipeline; callers pass the already-resolved toggles.
+pub async fn classify_with_options(
+    file: &Path,
+    jev: &dyn JevIntegration,
+    image_options: &MetadataOptions,
+) -> Result<JevDecision> {
+    let (normalized, candidates) = discover_candidates_with_options(
+        file,
+        crate::platform::macos::spotlight::search,
+        image_options,
+    )?;
 
     let (decision, _) = decide_from_candidates(&normalized, &candidates, jev).await?;
 
@@ -50,9 +65,20 @@ pub async fn classify_with_candidates(
     file: &Path,
     jev: &dyn JevIntegration,
 ) -> Result<(JevDecision, Vec<CandidateDestination>)> {
-    let (normalized, candidates) = discover_candidates(file, |query, limit| {
-        crate::platform::macos::spotlight::search(query, limit)
-    })?;
+    classify_with_candidates_with_options(file, jev, &MetadataOptions::default()).await
+}
+
+/// [`classify_with_candidates`] with explicit image toggles (v3.2).
+pub async fn classify_with_candidates_with_options(
+    file: &Path,
+    jev: &dyn JevIntegration,
+    image_options: &MetadataOptions,
+) -> Result<(JevDecision, Vec<CandidateDestination>)> {
+    let (normalized, candidates) = discover_candidates_with_options(
+        file,
+        crate::platform::macos::spotlight::search,
+        image_options,
+    )?;
 
     let (decision, _) = decide_from_candidates(&normalized, &candidates, jev).await?;
 
@@ -83,9 +109,21 @@ pub struct ClassifyReport {
 /// validated probability distribution and the candidate list so renderers
 /// never re-run Discovery or Jev (v3.1 section 9).
 pub async fn classify_report(file: &Path, jev: &dyn JevIntegration) -> Result<ClassifyReport> {
-    classify_report_with_search(file, jev, |query, limit| {
-        crate::platform::macos::spotlight::search(query, limit)
-    })
+    classify_report_with_options(file, jev, &MetadataOptions::default()).await
+}
+
+/// [`classify_report`] with explicit image toggles (v3.2).
+pub async fn classify_report_with_options(
+    file: &Path,
+    jev: &dyn JevIntegration,
+    image_options: &MetadataOptions,
+) -> Result<ClassifyReport> {
+    classify_report_with_search_and_options(
+        file,
+        jev,
+        crate::platform::macos::spotlight::search,
+        image_options,
+    )
     .await
 }
 
@@ -98,7 +136,20 @@ pub async fn classify_report_with_search<F>(
 where
     F: Fn(&str, usize) -> Result<Vec<String>>,
 {
-    let (normalized, candidates) = discover_candidates(file, search)?;
+    classify_report_with_search_and_options(file, jev, search, &MetadataOptions::default()).await
+}
+
+/// [`classify_report_with_search`] with explicit image toggles (v3.2).
+pub async fn classify_report_with_search_and_options<F>(
+    file: &Path,
+    jev: &dyn JevIntegration,
+    search: F,
+    image_options: &MetadataOptions,
+) -> Result<ClassifyReport>
+where
+    F: Fn(&str, usize) -> Result<Vec<String>>,
+{
+    let (normalized, candidates) = discover_candidates_with_options(file, search, image_options)?;
     let (decision, probabilities) = decide_from_candidates(&normalized, &candidates, jev).await?;
 
     Ok(ClassifyReport {
@@ -123,27 +174,41 @@ pub async fn classify_with_search<F>(
 where
     F: Fn(&str, usize) -> Result<Vec<String>>,
 {
-    let (normalized, candidates) = discover_candidates(file, search)?;
+    classify_with_search_and_options(file, jev, search, &MetadataOptions::default()).await
+}
+
+/// [`classify_with_search`] with explicit image toggles (v3.2).
+pub async fn classify_with_search_and_options<F>(
+    file: &Path,
+    jev: &dyn JevIntegration,
+    search: F,
+    image_options: &MetadataOptions,
+) -> Result<JevDecision>
+where
+    F: Fn(&str, usize) -> Result<Vec<String>>,
+{
+    let (normalized, candidates) = discover_candidates_with_options(file, search, image_options)?;
 
     let (decision, _) = decide_from_candidates(&normalized, &candidates, jev).await?;
 
     Ok(decision)
 }
 
-/// Observe -> Normalize -> Discover.
+/// Observe -> Normalize -> Discover with explicit image toggles (v3.2).
 ///
 /// Returns the normalized context together with the discovered candidates:
 /// both are needed to build the `DecisionContext` without losing
 /// information or re-deriving it.
-fn discover_candidates<F>(
+fn discover_candidates_with_options<F>(
     file: &Path,
     search: F,
+    image_options: &MetadataOptions,
 ) -> Result<(NormalizedFileContext, Vec<CandidateDestination>)>
 where
     F: Fn(&str, usize) -> Result<Vec<String>>,
 {
     let raw = context::builder::build(file)?; // Observe
-    let normalized = normalize::normalize(raw)?; // Normalize
+    let normalized = normalize::normalize_with_options(raw, image_options)?; // Normalize
     let candidates = discovery::discover_with(normalized.clone(), search)?; // Discover
 
     Ok((normalized, candidates))

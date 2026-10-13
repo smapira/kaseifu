@@ -1,6 +1,7 @@
 // Normalize raw evidence into clean semantic signals.
 
 mod filename;
+pub mod image;
 mod metadata;
 pub mod noise;
 pub mod provenance;
@@ -12,6 +13,22 @@ use crate::models::file_context::{
 
 /// Normalize a file context from Phase 1 to Phase 2 normalized format
 pub fn normalize(context: FileContext) -> anyhow::Result<NormalizedFileContext> {
+    normalize_with_options(
+        context,
+        &crate::context::image_metadata::MetadataOptions::default(),
+    )
+}
+
+/// Normalize with explicit image extraction toggles (v3.2 `[metadata.image]`).
+///
+/// Default [`normalize`] enables both Spotlight and EXIF fallback; callers
+/// with resolved user configuration pass the user's toggles here so
+/// `enabled = false` / `spotlight = false` / `exif_fallback = false` are
+/// honored without re-reading config inside the pipeline.
+pub fn normalize_with_options(
+    context: FileContext,
+    image_options: &crate::context::image_metadata::MetadataOptions,
+) -> anyhow::Result<NormalizedFileContext> {
     // Extract semantic signals from metadata (M:, K:, etc. labels)
     let metadata_result = metadata::normalize_metadata(&context.evidence);
 
@@ -85,6 +102,17 @@ pub fn normalize(context: FileContext) -> anyhow::Result<NormalizedFileContext> 
     let downloader = downloader_opt;
 
     // Create normalized context
+    // v3.2: image metadata rides along (Spotlight first, EXIF fallback).
+    // File mtime is never treated as capture time; zones are never guessed.
+    let image_metadata = crate::context::image_metadata::collect(
+        &context.target.path,
+        &context.evidence,
+        image_options,
+    )
+    .and_then(crate::normalize::image::validate);
+    if let Some(ref meta) = image_metadata {
+        semantic_signals.extend(crate::normalize::image::signals(meta));
+    }
     let target = context.target;
     Ok(NormalizedFileContext {
         target: target.clone(),
@@ -100,6 +128,7 @@ pub fn normalize(context: FileContext) -> anyhow::Result<NormalizedFileContext> 
         size_bytes: target.size_bytes,
         parent_directory,
         candidate_destinations: vec![],
+        image_metadata,
     })
 }
 

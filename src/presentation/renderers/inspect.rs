@@ -190,6 +190,94 @@ fn evidence_line(
     )
 }
 
+/// v3.2 capture metadata rows (ASCII only; missing renders as `-`).
+fn capture_lines(normalized: &NormalizedFileContext) -> Vec<String> {
+    let meta = normalized.image_metadata.as_ref();
+    vec![
+        label("Captured", &capture_display(meta)),
+        label("Camera", &camera_display(meta)),
+        label("Resol.", &resolution_display(meta)),
+        label("Source", &capture_source(meta)),
+    ]
+}
+
+fn capture_display(meta: Option<&crate::models::file_context::ImageMetadata>) -> String {
+    let Some(meta) = meta else {
+        return MISSING.to_string();
+    };
+    let Some(capture) = meta.capture_time.as_ref() else {
+        return MISSING.to_string();
+    };
+    let mut shown = capture.value.replace('T', " ");
+    if shown.len() > 16 {
+        shown.truncate(16);
+    }
+    match &capture.timezone {
+        Some(zone) if capture.timezone_known => format!("{shown} {zone}"),
+        _ => shown,
+    }
+}
+
+fn camera_display(meta: Option<&crate::models::file_context::ImageMetadata>) -> String {
+    let Some(meta) = meta else {
+        return MISSING.to_string();
+    };
+    match (&meta.camera.make, &meta.camera.model) {
+        (Some(make), Some(model)) if make != model => format!("{make} {model}"),
+        (Some(make), _) => make.clone(),
+        (None, Some(model)) => model.clone(),
+        (None, None) => MISSING.to_string(),
+    }
+}
+
+fn resolution_display(meta: Option<&crate::models::file_context::ImageMetadata>) -> String {
+    let dims = meta.and_then(|meta| meta.dimensions.as_ref());
+    match dims {
+        Some(dims) => format!("{} x {}", dims.width, dims.height),
+        None => MISSING.to_string(),
+    }
+}
+
+fn capture_source(meta: Option<&crate::models::file_context::ImageMetadata>) -> String {
+    let source = meta
+        .and_then(|meta| meta.capture_time.as_ref())
+        .map(|capture| capture.source.as_str());
+    match source {
+        Some(source) => source.to_string(),
+        None => MISSING.to_string(),
+    }
+}
+
+/// v3.2 location rows (ASCII only; coordinates never fabricated).
+fn location_lines(normalized: &NormalizedFileContext) -> Vec<String> {
+    let location = normalized
+        .image_metadata
+        .as_ref()
+        .and_then(|meta| meta.location.as_ref());
+    vec![
+        label("Lat.", &coord_display(location.map(|loc| loc.latitude))),
+        label("Lon.", &coord_display(location.map(|loc| loc.longitude))),
+        label(
+            "Alt.",
+            &altitude_display(location.and_then(|loc| loc.altitude_m)),
+        ),
+    ]
+}
+
+fn coord_display(value: Option<f64>) -> String {
+    match value {
+        Some(value) => format!("{value:.6}"),
+        None => MISSING.to_string(),
+    }
+}
+
+fn altitude_display(value: Option<f64>) -> String {
+    match value {
+        Some(value) => format!("{value:.1} m"),
+        None => MISSING.to_string(),
+    }
+}
+
 fn body_sections(
     ctx: &FileContext,
     normalized: &NormalizedFileContext,
@@ -200,6 +288,8 @@ fn body_sections(
     let mut sections = vec![
         Section::plain(file_head(ctx, normalized, color)),
         Section::headed("SEMANTIC SIGNALS", signals_lines(normalized, color)),
+        Section::headed("CAPTURE METADATA", capture_lines(normalized)),
+        Section::headed("LOCATION", location_lines(normalized)),
         Section::headed(
             "DIRECTORY CONTEXT",
             directory_lines(ctx, show_all, verbose, color),

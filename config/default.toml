@@ -21,5 +21,17 @@ review_confidence = 0.60
 dry_run = true
 enable_undo = true
 
+[metadata.image]
+enabled = true
+spotlight = true
+exif_fallback = true
+
+[metadata.privacy]
+send_capture_time_to_jev = true
+send_gps_to_jev = false
+
+[metadata.weather]
+enabled = false
+
 [storage]
 database = "data/semantic-file-organizer.db"

@@ -129,6 +129,7 @@ mod tests {
             size_bytes: 0,
             candidate_destinations: Default::default(),
             directory_summary: DirectorySummary::default(),
+            image_metadata: None,
         };
 
         let terms = extract_terms(&normalized);
@@ -151,6 +152,7 @@ mod tests {
             size_bytes: 0,
             candidate_destinations: Default::default(),
             directory_summary: DirectorySummary::default(),
+            image_metadata: None,
         };
 
         let terms = extract_terms(&normalized);

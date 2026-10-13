@@ -18,6 +18,8 @@ pub struct UserConfig {
     pub classifier: ClassifierSection,
     /// Local operation flags section.
     pub operations: OperationsSection,
+    /// Image metadata and privacy section (v3.2).
+    pub metadata: MetadataSection,
 }
 
 /// `[jev]` section of the user configuration.
@@ -65,6 +67,57 @@ pub struct OperationsSection {
     /// Record moves in the journal so they can be undone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_undo: Option<bool>,
+}
+
+/// `[metadata]` section of the user configuration (v3.2).
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MetadataSection {
+    /// Image extraction toggles.
+    #[serde(default)]
+    pub image: MetadataImageSection,
+    /// Privacy gates for Jev transmission.
+    #[serde(default)]
+    pub privacy: MetadataPrivacySection,
+    /// Weather extension (Phase 8, reserved; stays disabled).
+    #[serde(default)]
+    pub weather: MetadataWeatherSection,
+}
+
+/// `[metadata.image]` section of the user configuration.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MetadataImageSection {
+    /// Master switch for image metadata extraction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Use Spotlight as the first source.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spotlight: Option<bool>,
+    /// Use embedded EXIF as a fallback for missing values.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exif_fallback: Option<bool>,
+}
+
+/// `[metadata.privacy]` section of the user configuration.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MetadataPrivacySection {
+    /// Send capture time to Jev (default true).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_capture_time_to_jev: Option<bool>,
+    /// Send GPS coordinates to Jev (default false).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub send_gps_to_jev: Option<bool>,
+}
+
+/// `[metadata.weather]` section (Phase 8 reserved; no behavior yet).
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MetadataWeatherSection {
+    /// Weather enrichment master switch (not implemented; keep false).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
 }
 
 /// Load the user configuration from its standard location.
@@ -190,6 +243,12 @@ pub const SUPPORTED_KEYS: &[&str] = &[
     "classifier.thresholds.review_confidence",
     "operations.dry_run",
     "operations.enable_undo",
+    "metadata.image.enabled",
+    "metadata.image.spotlight",
+    "metadata.image.exif_fallback",
+    "metadata.privacy.send_capture_time_to_jev",
+    "metadata.privacy.send_gps_to_jev",
+    "metadata.weather.enabled",
 ];
 
 /// Apply one `config set` update (typed parsing plus validation).
@@ -214,6 +273,20 @@ pub fn apply_setting(config: &mut UserConfig, key: &str, value: &str) -> Result<
         ),
         "operations.dry_run" => set_flag(&mut config.operations.dry_run, key, value),
         "operations.enable_undo" => set_flag(&mut config.operations.enable_undo, key, value),
+        "metadata.image.enabled" => set_flag(&mut config.metadata.image.enabled, key, value),
+        "metadata.image.spotlight" => set_flag(&mut config.metadata.image.spotlight, key, value),
+        "metadata.image.exif_fallback" => {
+            set_flag(&mut config.metadata.image.exif_fallback, key, value)
+        }
+        "metadata.privacy.send_capture_time_to_jev" => set_flag(
+            &mut config.metadata.privacy.send_capture_time_to_jev,
+            key,
+            value,
+        ),
+        "metadata.privacy.send_gps_to_jev" => {
+            set_flag(&mut config.metadata.privacy.send_gps_to_jev, key, value)
+        }
+        "metadata.weather.enabled" => set_flag(&mut config.metadata.weather.enabled, key, value),
         _ => reject_unknown_key(key),
     }
 }

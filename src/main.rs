@@ -219,12 +219,45 @@ fn handle_inspect(path: &Path, all: bool, verbose: bool, format: OutputFormat) -
     let mode = resolve_mode(format);
     let ctx = context::builder::build(path)?;
     if mode.rich {
-        let normalized = normalize::normalize(ctx.clone())?;
+        let normalized = normalize::normalize_with_options(ctx.clone(), &inspect_image_options())?;
         inspect_view::print_rich(&ctx, &normalized, all, verbose, mode.color);
     } else {
         println!("{}", serde_json::to_string_pretty(&ctx)?);
     }
     Ok(())
+}
+
+/// Image extraction toggles for read-only commands.
+///
+/// Best-effort user TOML (falls back to defaults so `inspect` never fails
+/// on configuration); honors `[metadata.image]` without touching secrets.
+fn inspect_image_options() -> kaseifu::context::image_metadata::MetadataOptions {
+    load_user()
+        .ok()
+        .map(|file| {
+            kaseifu::context::image_metadata::MetadataOptions::from_resolved(
+                &kaseifu::config::resolve_with_env(
+                    &CliOverrides::default(),
+                    &file,
+                    &KeychainStore::production(),
+                )
+                .map(|resolved| resolved.metadata)
+                .unwrap_or(fallback_metadata()),
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// Resolved metadata defaults when configuration cannot load.
+fn fallback_metadata() -> kaseifu::config::ResolvedMetadata {
+    kaseifu::config::ResolvedMetadata {
+        image_enabled: kaseifu::config::defaults::DEFAULT_METADATA_IMAGE_ENABLED,
+        spotlight: kaseifu::config::defaults::DEFAULT_METADATA_SPOTLIGHT,
+        exif_fallback: kaseifu::config::defaults::DEFAULT_METADATA_EXIF_FALLBACK,
+        send_capture_time_to_jev: kaseifu::config::defaults::DEFAULT_SEND_CAPTURE_TIME_TO_JEV,
+        send_gps_to_jev: kaseifu::config::defaults::DEFAULT_SEND_GPS_TO_JEV,
+        weather_enabled: kaseifu::config::defaults::DEFAULT_WEATHER_ENABLED,
+    }
 }
 
 /// `scan`: target banner only (no mutation, no discovery).
@@ -253,15 +286,16 @@ async fn handle_organize(
 
     let resolved = resolve_for(overrides)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
-    let jev = RealJevIntegration::from_resolved(&resolved.jev);
+    let jev = RealJevIntegration::from_resolved_full(&resolved);
     let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
 
-    let report = organize::organize_file_with(
+    let report = organize::organize_file_with_full(
         file,
         &jev,
         &history,
         actually_move,
         policy_thresholds(&resolved),
+        &kaseifu::context::image_metadata::MetadataOptions::from_resolved(&resolved.metadata),
     )
     .await?;
 
@@ -339,20 +373,21 @@ async fn handle_watch(
 
     let resolved = resolve_for(overrides)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
-    let jev = RealJevIntegration::from_resolved(&resolved.jev);
+    let jev = RealJevIntegration::from_resolved_full(&resolved);
     let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
 
     let (sender, receiver) = std::sync::mpsc::channel();
     let _watcher = fsevents::spawn(paths, sender)?;
 
     print_watch_start(paths, actually_move, format);
-    runner::run_loop(
+    runner::run_loop_with(
         receiver,
         &jev,
         &history,
         actually_move,
         WatchConfig::default(),
         policy_thresholds(&resolved),
+        &kaseifu::context::image_metadata::MetadataOptions::from_resolved(&resolved.metadata),
     )
     .await?;
     Ok(())
@@ -419,7 +454,7 @@ fn handle_discover(file: &Path, all: bool, verbose: bool, format: OutputFormat) 
     let mode = resolve_mode(format);
     let ctx = context::builder::build(file)?;
     let target_name = ctx.target.filename.clone();
-    let normalized = normalize::normalize(ctx)?;
+    let normalized = normalize::normalize_with_options(ctx, &inspect_image_options())?;
     let candidates = discovery::discover(normalized)?;
 
     if mode.rich {
@@ -440,13 +475,18 @@ async fn handle_classify(
 ) -> Result<()> {
     let resolved = resolve_for(overrides)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
-    let jev = RealJevIntegration::from_resolved(&resolved.jev);
+    let jev = RealJevIntegration::from_resolved_full(&resolved);
     let observer = ObservingJevIntegration {
         inner: &jev,
         verbose,
     };
 
-    let report = pipeline::classify_report(file, &observer).await?;
+    let report = pipeline::classify_report_with_options(
+        file,
+        &observer,
+        &kaseifu::context::image_metadata::MetadataOptions::from_resolved(&resolved.metadata),
+    )
+    .await?;
     // Rust Policy verdict: Jev's `move_to` selection is never shown
     // as a move permission; AutoMove/Review/Leave comes from here.
     let policy =
@@ -479,6 +519,19 @@ impl JevIntegration for ObservingJevIntegration<'_> {
             eprintln!("  filename:  {}", context.target().filename);
             eprintln!("  extension: {:?}", context.target().extension);
             eprintln!("  file_type: {:?}", context.target().file_type);
+            // Privacy: coordinates never reach stderr; only a masked summary.
+            if let Some(meta) = context.image_metadata() {
+                let capture = if meta.has_capture_time() {
+                    "available"
+                } else {
+                    "not available"
+                };
+                eprintln!("  capture:   {capture}");
+                eprintln!(
+                    "  location:  {}",
+                    kaseifu::context::image_metadata::masked_location(meta)
+                );
+            }
 
             eprintln!("== Semantic signals ==");
             for signal in context.semantic_signals() {
@@ -892,6 +945,16 @@ fn handle_config_show(format: OutputFormat) -> Result<()> {
         "[operations]".to_string(),
         format!("dry_run = {}", resolved.dry_run),
         format!("enable_undo = {}", resolved.enable_undo),
+        "[metadata.image]".to_string(),
+        format!("enabled = {}", resolved.metadata.image_enabled),
+        format!("spotlight = {}", resolved.metadata.spotlight),
+        format!("exif_fallback = {}", resolved.metadata.exif_fallback),
+        "[metadata.privacy]".to_string(),
+        format!(
+            "send_capture_time_to_jev = {}",
+            resolved.metadata.send_capture_time_to_jev
+        ),
+        format!("send_gps_to_jev = {}", resolved.metadata.send_gps_to_jev),
         format!("API key: {state}"),
     ];
     let json = serde_json::json!({
@@ -902,6 +965,18 @@ fn handle_config_show(format: OutputFormat) -> Result<()> {
             "review_confidence": resolved.review_confidence,
         }},
         "operations": {"dry_run": resolved.dry_run, "enable_undo": resolved.enable_undo},
+        "metadata": {
+            "image": {
+                "enabled": resolved.metadata.image_enabled,
+                "spotlight": resolved.metadata.spotlight,
+                "exif_fallback": resolved.metadata.exif_fallback,
+            },
+            "privacy": {
+                "send_capture_time_to_jev": resolved.metadata.send_capture_time_to_jev,
+                "send_gps_to_jev": resolved.metadata.send_gps_to_jev,
+            },
+            "weather": {"enabled": resolved.metadata.weather_enabled},
+        },
         "api_key_configured": resolved.jev.api_key.is_some(),
     })
     .to_string();

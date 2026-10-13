@@ -70,8 +70,32 @@ pub async fn organize_file_with(
     execute: bool,
     thresholds: policy::decision::Thresholds,
 ) -> Result<OrganizeReport> {
+    organize_file_with_full(
+        file,
+        jev,
+        history,
+        execute,
+        thresholds,
+        &crate::context::image_metadata::MetadataOptions::default(),
+    )
+    .await
+}
+
+/// [`organize_file_with`] with explicit image toggles (v3.2).
+///
+/// Honors `[metadata.image]` without re-reading configuration inside the
+/// pipeline; callers pass the already-resolved toggles.
+pub async fn organize_file_with_full(
+    file: &Path,
+    jev: &dyn JevIntegration,
+    history: &OperationHistory,
+    execute: bool,
+    thresholds: policy::decision::Thresholds,
+    image_options: &crate::context::image_metadata::MetadataOptions,
+) -> Result<OrganizeReport> {
     // Phase 4: decision (the candidate list is needed to resolve the path).
-    let (decision, candidates) = pipeline::classify_with_candidates(file, jev).await?;
+    let (decision, candidates) =
+        pipeline::classify_with_candidates_with_options(file, jev, image_options).await?;
 
     // Phase 5: policy.
     let action = policy::decision::evaluate_with(&decision, thresholds);

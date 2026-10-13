@@ -131,6 +131,8 @@ pub struct RealJevIntegration {
     api_key: Option<String>,
     model: String,
     client: reqwest::Client,
+    send_capture_time_to_jev: bool,
+    send_gps_to_jev: bool,
 }
 
 /// Request timeout for the Jev API.
@@ -153,12 +155,23 @@ impl RealJevIntegration {
             api_key,
             model: DEFAULT_JEV_MODEL.to_string(),
             client,
+            send_capture_time_to_jev: crate::config::defaults::DEFAULT_SEND_CAPTURE_TIME_TO_JEV,
+            send_gps_to_jev: crate::config::defaults::DEFAULT_SEND_GPS_TO_JEV,
         }
     }
 
     /// Override the model alias sent to the API.
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
+        self
+    }
+
+    /// Override image privacy gating (tests and explicit wiring).
+    ///
+    /// GPS stays disabled unless explicitly enabled.
+    pub fn with_privacy(mut self, send_capture_time: bool, send_gps: bool) -> Self {
+        self.send_capture_time_to_jev = send_capture_time;
+        self.send_gps_to_jev = send_gps;
         self
     }
 
@@ -173,6 +186,17 @@ impl RealJevIntegration {
             config.api_key.as_ref().map(|key| key.expose().to_string()),
         )
         .with_model(config.model.clone())
+    }
+
+    /// Create an adapter from resolved configuration (preferred entry point).
+    ///
+    /// Privacy flags come from `[metadata.privacy]`; GPS stays disabled
+    /// unless the user explicitly enables it.
+    pub fn from_resolved_full(resolved: &crate::config::ResolvedConfig) -> Self {
+        Self::from_resolved(&resolved.jev).with_privacy(
+            resolved.metadata.send_capture_time_to_jev,
+            resolved.metadata.send_gps_to_jev,
+        )
     }
 
     /// Create an adapter from the environment (`JEV_API_URL`,
@@ -230,7 +254,12 @@ impl JevIntegration for RealJevIntegration {
     ) -> Pin<Box<dyn Future<Output = Result<JevResponse, JevError>> + Send + '_>> {
         // The request DTO owns its data, so the returned future borrows only
         // `self`; the JevIntegration contract stays unchanged.
-        let request = SystemOneRequest::from_context(context, &self.model);
+        let request = SystemOneRequest::from_context_with_privacy(
+            context,
+            &self.model,
+            self.send_capture_time_to_jev,
+            self.send_gps_to_jev,
+        );
         let url = self.request_url();
 
         Box::pin(async move {
@@ -290,6 +319,35 @@ struct TargetDto {
     extension: Option<String>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     file_type: Option<String>,
+    /// Capture time (`YYYY-MM-DDTHH:MM:SS[ zone]`); sent only when the
+    /// privacy flags allow it. Never a guessed value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capture_date: Option<String>,
+    /// Camera make/model joined (`Apple iPhone`); not location-sensitive.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    camera: Option<String>,
+    /// GPS coordinates; present only when `send_gps_to_jev` is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    location: Option<LocationDto>,
+    /// Pixel dimensions, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dimensions: Option<DimensionsDto>,
+}
+
+/// GPS coordinates inside `state.target` (v3.2; gated by privacy).
+#[derive(Debug, Serialize)]
+struct LocationDto {
+    latitude: f64,
+    longitude: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    altitude_m: Option<f64>,
+}
+
+/// Pixel dimensions inside `state.target` (v3.2).
+#[derive(Debug, Serialize)]
+struct DimensionsDto {
+    width: u32,
+    height: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -325,8 +383,20 @@ struct ChoiceAnswerDto {
 }
 
 impl SystemOneRequest {
-    fn from_context(context: &DecisionContext, model: &str) -> Self {
+    /// Build the request with explicit image privacy gating (v3.2).
+    ///
+    /// Mapping stays on real `/v1/systemone` fields only: image context
+    /// extends the free-form `state.target` object and the verbatim
+    /// `state.semantic_signals` list. No new top-level API fields are
+    /// introduced and no Rust-side fit score is computed.
+    fn from_context_with_privacy(
+        context: &DecisionContext,
+        model: &str,
+        send_capture_time: bool,
+        send_gps: bool,
+    ) -> Self {
         let target = context.target();
+        let image = context.image_metadata();
 
         let mut criteria: BTreeMap<String, String> = context
             .candidates()
@@ -341,8 +411,12 @@ impl SystemOneRequest {
                     filename: target.filename.clone(),
                     extension: target.extension.clone(),
                     file_type: target.file_type.clone(),
+                    capture_date: capture_date_for(image, send_capture_time),
+                    camera: camera_for(image),
+                    location: location_for(image, send_gps),
+                    dimensions: dimensions_for(image),
                 },
-                semantic_signals: context.semantic_signals().to_vec(),
+                semantic_signals: filtered_signals(context, send_capture_time, send_gps),
             },
             model: model.to_string(),
             questions: QuestionsDto {
@@ -367,6 +441,88 @@ fn describe_candidate(candidate: &DecisionCandidate) -> String {
         description.push_str(&format!("; evidence: {}", candidate.reasons.join("; ")));
     }
     description
+}
+
+/// Capture date for `state.target` (v3.2; gated by privacy).
+fn capture_date_for(
+    image: Option<&crate::models::file_context::ImageMetadata>,
+    send_capture_time: bool,
+) -> Option<String> {
+    if !send_capture_time {
+        return None;
+    }
+    image?
+        .capture_time
+        .as_ref()
+        .map(|capture| match &capture.timezone {
+            Some(zone) => format!("{} {}", capture.value, zone),
+            None => capture.value.clone(),
+        })
+}
+
+/// Camera summary for `state.target` (v3.2; not location-sensitive).
+fn camera_for(image: Option<&crate::models::file_context::ImageMetadata>) -> Option<String> {
+    let camera = &image?.camera;
+    match (&camera.make, &camera.model) {
+        (Some(make), Some(model)) if make != model => Some(format!("{make} {model}")),
+        (Some(make), _) => Some(make.clone()),
+        (None, Some(model)) => Some(model.clone()),
+        (None, None) => None,
+    }
+}
+
+/// GPS coordinates for `state.target` (v3.2; sent only when enabled).
+fn location_for(
+    image: Option<&crate::models::file_context::ImageMetadata>,
+    send_gps: bool,
+) -> Option<LocationDto> {
+    if !send_gps {
+        return None;
+    }
+    let location = image?.location.as_ref()?;
+    Some(LocationDto {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        altitude_m: location.altitude_m,
+    })
+}
+
+/// Pixel dimensions for `state.target` (v3.2).
+fn dimensions_for(
+    image: Option<&crate::models::file_context::ImageMetadata>,
+) -> Option<DimensionsDto> {
+    let dims = image?.dimensions.as_ref()?;
+    Some(DimensionsDto {
+        width: dims.width,
+        height: dims.height,
+    })
+}
+
+/// Semantic signals with image presence markers filtered by privacy.
+///
+/// A withheld field leaves no trace: neither its value nor an
+/// "available" marker is forwarded when its flag is off.
+fn filtered_signals(
+    context: &DecisionContext,
+    send_capture_time: bool,
+    send_gps: bool,
+) -> Vec<String> {
+    context
+        .semantic_signals()
+        .iter()
+        .filter(|signal| keep_signal(signal, send_capture_time, send_gps))
+        .cloned()
+        .collect()
+}
+
+fn keep_signal(signal: &str, send_capture_time: bool, send_gps: bool) -> bool {
+    if !send_capture_time && signal == "M:Capture date available" {
+        return false;
+    }
+    if !send_gps && signal == "M:GPS available" {
+        return false;
+    }
+    true
 }
 
 impl SystemOneResponse {

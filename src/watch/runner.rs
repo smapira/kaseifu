@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use crate::classifier::jev::JevIntegration;
 use crate::models::decision::DecisionAction;
-use crate::operations::organize::{OrganizeOutcome, organize_file_with};
+use crate::operations::organize::{OrganizeOutcome, organize_file_with_full};
 use crate::operations::plan::PlanError;
 use crate::storage::history::OperationHistory;
 use crate::watch::coordinator::{
@@ -67,10 +67,41 @@ pub async fn process_request_with(
     execute: bool,
     thresholds: crate::policy::decision::Thresholds,
 ) -> ProcessOutcome {
+    process_request_with_full(
+        request,
+        coordinator,
+        jev,
+        history,
+        execute,
+        thresholds,
+        &crate::context::image_metadata::MetadataOptions::default(),
+    )
+    .await
+}
+
+/// [`process_request_with`] with explicit image toggles (v3.2).
+pub async fn process_request_with_full(
+    request: &ProcessingRequest,
+    coordinator: &mut EventCoordinator,
+    jev: &dyn JevIntegration,
+    history: &OperationHistory,
+    execute: bool,
+    thresholds: crate::policy::decision::Thresholds,
+    image_options: &crate::context::image_metadata::MetadataOptions,
+) -> ProcessOutcome {
     // Deduplication: the path is locked for the duration of processing.
     coordinator.begin_processing(&request.path);
 
-    let outcome = match organize_file_with(&request.path, jev, history, execute, thresholds).await {
+    let outcome = match organize_file_with_full(
+        &request.path,
+        jev,
+        history,
+        execute,
+        thresholds,
+        image_options,
+    )
+    .await
+    {
         Ok(report) => match report.outcome {
             OrganizeOutcome::Moved {
                 operation_id,
@@ -157,6 +188,28 @@ pub async fn run_loop(
     config: WatchConfig,
     thresholds: crate::policy::decision::Thresholds,
 ) -> Result<()> {
+    run_loop_with(
+        events,
+        jev,
+        history,
+        execute,
+        config,
+        thresholds,
+        &crate::context::image_metadata::MetadataOptions::default(),
+    )
+    .await
+}
+
+/// [`run_loop`] with explicit image toggles (v3.2).
+pub async fn run_loop_with(
+    events: Receiver<PathBuf>,
+    jev: &dyn JevIntegration,
+    history: &OperationHistory,
+    execute: bool,
+    config: WatchConfig,
+    thresholds: crate::policy::decision::Thresholds,
+    image_options: &crate::context::image_metadata::MetadataOptions,
+) -> Result<()> {
     let mut coordinator = EventCoordinator::new(config);
 
     loop {
@@ -175,13 +228,14 @@ pub async fn run_loop(
         // so the Jev API is never called for a rejected event.
         for request in coordinator.drain_due(Instant::now()) {
             println!("detected {}", request.path.display());
-            let outcome = process_request_with(
+            let outcome = process_request_with_full(
                 &request,
                 &mut coordinator,
                 jev,
                 history,
                 execute,
                 thresholds,
+                image_options,
             )
             .await;
             log_outcome(&request.path, &outcome);

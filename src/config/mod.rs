@@ -12,6 +12,7 @@ pub use loader::{
     SUPPORTED_KEYS, UserConfig, apply_setting, load_from, load_user, parse_toml, save_to, validate,
 };
 pub use resolver::{
-    ApiKey, CliOverrides, JevConfig, ResolvedConfig, resolve, resolve_with, resolve_with_env,
+    ApiKey, CliOverrides, JevConfig, ResolvedConfig, ResolvedMetadata, resolve, resolve_with,
+    resolve_with_env,
 };
 pub use storage::{app_dir, user_config_path};
