@@ -131,6 +131,22 @@ fn doctor_api_key_check(report: &kaseifu::doctor::DoctorReport) -> &kaseifu::doc
         .expect("API key check exists")
 }
 
+/// `doctor` with temporary journal paths.
+///
+/// The doctor now inspects the journal, so these tests inject paths that do
+/// not exist: they must never read (or depend on) the developer's real
+/// journal at `~/Library/Application Support/kaseifu/kaseifu.db`. The
+/// default resolution itself is covered by the CLI-level tests with an
+/// isolated HOME.
+async fn diagnose_local(
+    resolved: &kaseifu::config::ResolvedConfig,
+) -> kaseifu::doctor::DoctorReport {
+    let missing = std::env::temp_dir()
+        .join(format!("kaseifu-doctor-key-source-{}", std::process::id()))
+        .join("no-journal.db");
+    kaseifu::doctor::diagnose_with(resolved, false, &missing, &missing).await
+}
+
 // ---------------------------------------------------------------------------
 // K0. Mode selection
 // ---------------------------------------------------------------------------
@@ -377,7 +393,7 @@ fn auto_mode_missing_everywhere_reports_missing() {
 async fn doctor_env_mode_missing_key_reports_the_mode_without_store_access() {
     let store = CountingStore::with_secret(KEYCHAIN_SECRET);
     let resolved = resolve_from(&HashMap::new(), &store, KeySourceMode::Env);
-    let report = kaseifu::doctor::diagnose(&resolved, false).await;
+    let report = diagnose_local(&resolved).await;
 
     let check = doctor_api_key_check(&report);
     assert!(!check.ok);
@@ -404,7 +420,7 @@ async fn doctor_reports_the_dotenv_source_in_env_mode() {
         &store,
         KeySourceMode::Env,
     );
-    let report = kaseifu::doctor::diagnose(&resolved, false).await;
+    let report = diagnose_local(&resolved).await;
 
     let check = doctor_api_key_check(&report);
     assert!(check.ok);
@@ -416,14 +432,11 @@ async fn doctor_reports_the_dotenv_source_in_env_mode() {
 async fn doctor_reports_every_source() {
     assert_eq!(
         doctor_api_key_check(
-            &kaseifu::doctor::diagnose(
-                &resolve_from(
-                    &env_vars(&[("JEV_API_KEY", SECRET)]),
-                    &CountingStore::empty(),
-                    KeySourceMode::Env
-                ),
-                false,
-            )
+            &diagnose_local(&resolve_from(
+                &env_vars(&[("JEV_API_KEY", SECRET)]),
+                &CountingStore::empty(),
+                KeySourceMode::Env
+            ))
             .await
         )
         .detail,
@@ -431,14 +444,11 @@ async fn doctor_reports_every_source() {
     );
     assert_eq!(
         doctor_api_key_check(
-            &kaseifu::doctor::diagnose(
-                &resolve_from(
-                    &HashMap::new(),
-                    &CountingStore::with_secret(SECRET),
-                    KeySourceMode::Keychain
-                ),
-                false,
-            )
+            &diagnose_local(&resolve_from(
+                &HashMap::new(),
+                &CountingStore::with_secret(SECRET),
+                KeySourceMode::Keychain
+            ))
             .await
         )
         .detail,
@@ -446,14 +456,11 @@ async fn doctor_reports_every_source() {
     );
     assert_eq!(
         doctor_api_key_check(
-            &kaseifu::doctor::diagnose(
-                &resolve_from(
-                    &HashMap::new(),
-                    &CountingStore::empty(),
-                    KeySourceMode::Auto
-                ),
-                false,
-            )
+            &diagnose_local(&resolve_from(
+                &HashMap::new(),
+                &CountingStore::empty(),
+                KeySourceMode::Auto
+            ))
             .await
         )
         .detail,
@@ -464,7 +471,7 @@ async fn doctor_reports_every_source() {
 #[tokio::test]
 async fn doctor_keychain_denied_reports_the_cause() {
     let resolved = resolve_from(&HashMap::new(), &DeniedStore, KeySourceMode::Keychain);
-    let report = kaseifu::doctor::diagnose(&resolved, false).await;
+    let report = diagnose_local(&resolved).await;
 
     let check = doctor_api_key_check(&report);
     assert!(!check.ok);

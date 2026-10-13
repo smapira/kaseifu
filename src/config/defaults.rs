@@ -16,10 +16,12 @@ pub const DEFAULT_AUTO_MOVE_MARGIN: f64 = crate::policy::decision::AUTO_MOVE_MAR
 /// Default policy thresholds (same values as the policy engine constants).
 pub const DEFAULT_REVIEW_CONFIDENCE: f64 = crate::policy::decision::REVIEW_CONFIDENCE;
 
-/// Default dry-run behavior (nothing moves unless `--execute` is passed).
+/// Resolved default for `operations.dry_run` (inactive: moves are controlled
+/// by `--execute`; the value is kept for `config show` compatibility).
 pub const DEFAULT_DRY_RUN: bool = true;
 
-/// Default undo availability.
+/// Resolved default for `operations.enable_undo` (inactive: every executed
+/// move is journaled; the value is kept for `config show` compatibility).
 pub const DEFAULT_ENABLE_UNDO: bool = true;
 
 /// Default image metadata extraction (v3.2 `[metadata.image]`).

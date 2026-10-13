@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Interrupted-operation detection (`doctor`, `undo`, journal API)** — a move
+  that is interrupted between the filesystem rename and its journal update
+  leaves a `pending` row; the journal now makes those rows visible instead of
+  requiring direct SQL: `doctor` prints the resolved journal path, the
+  recorded operation count and every pending row with its age and the current
+  state of its source/destination file (`FAIL` only when a pending row is old
+  enough to be an interruption rather than an in-flight operation), and
+  `undo` prints a warning with the number of pending rows before restoring.
+  Nothing is repaired, rewritten or deleted automatically — the journal alone
+  cannot tell an interrupted move from one still in flight, so recovery stays
+  a human decision (this task deliberately implements detection only, per the
+  debug-scenario design S05). The inspection is read-only (SQLite read-only
+  connection): `doctor` never creates or modifies a journal.
+
+### Changed
+
+- **Journal location is now stable** — the default journal moved from the
+  CWD-relative `data/kaseifu.db` (which silently created a different journal
+  per working directory, so `undo` could not see moves recorded elsewhere) to
+  the absolute `~/Library/Application Support/kaseifu/kaseifu.db`, next to
+  the user configuration. `doctor` reports the resolved path. The old
+  CWD-relative `./data/kaseifu.db` is not migrated, merged or deleted:
+  `doctor`'s `Legacy Journal` check points it out (`FAIL`) and the file is
+  left exactly as it is.
+- **System-directory exclusion is component-based** — discovery used to drop
+  any hit whose path merely *contained* `/system`, `/private`, `/usr`,
+  `/bin`, `/sbin`, `/var` or `/tmp`, so user folders such as `~/var/photos`,
+  `~/tmp/mail`, `~/system-backup` or `~/private-docs` never reached the
+  candidate list. The macOS system trees are now matched as the **first path
+  component** of absolute paths (`/System/...`, `/usr/...`,
+  `/private/var/...`, `/var/...`, `/tmp/...`), the rule lives only in
+  `discovery::destinations` (the single authority shared by the hit filter
+  and the aggregation gate), and user folders that reuse a system name stay
+  candidates.
+- **Configuration honesty** — `config/default.toml` no longer lists the
+  `[scanner]`, `[context]` and `[storage]` sections (nothing ever read them;
+  the `[storage] database` path named a file the journal never used), and it
+  now states that it documents the built-in defaults without being read at
+  runtime. `operations.dry_run` / `operations.enable_undo` are still accepted
+  in user TOML files (existing files must keep loading) but are inactive:
+  `config show` marks both keys as such (`inactive_settings` in
+  `--format json`) and the README table says so. Wiring `dry_run` as a safety
+  interlock was considered and rejected — its default `true` would stop every
+  `--execute` move. `config set` validation (unknown keys, API keys) is
+  unchanged.
 ## [0.5.0] - 2026-10-13
 
 ### Added

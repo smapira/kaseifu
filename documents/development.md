@@ -129,7 +129,7 @@ CLI flags (--jev-endpoint, --jev-model)
   -> JEV_API_URL / JEV_API_BASE_URL / JEV_MODEL (environment)
   -> project-local .env (developers/CI)
   -> ~/Library/Application Support/kaseifu/config.toml + macOS Keychain
-  -> application defaults (config/default.toml values)
+  -> application defaults (src/config/defaults.rs)
 
 API key, selected by KASEIFU_KEY_SOURCE:
   auto     -> JEV_API_KEY (environment or .env) -> macOS Keychain

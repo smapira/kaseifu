@@ -18,7 +18,7 @@ use kaseifu::presentation::renderers::{
     organize as organize_view,
 };
 use kaseifu::presentation::{OutputFormat, resolve_mode};
-use kaseifu::storage::history::{DEFAULT_DATABASE_PATH, OperationHistory};
+use kaseifu::storage::history::{OperationHistory, journal_path};
 use kaseifu::watch::coordinator::WatchConfig;
 use kaseifu::watch::runner;
 use kaseifu::{context, discovery, normalize};
@@ -326,7 +326,7 @@ async fn handle_organize(
     require_jev_api_key(&resolved)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
     let jev = RealJevIntegration::from_resolved_full(&resolved);
-    let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
+    let history = OperationHistory::open(journal_path())?;
 
     let report = organize::organize_file_with_full(
         file,
@@ -370,7 +370,7 @@ async fn handle_watch(
     require_jev_api_key(&resolved)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
     let jev = RealJevIntegration::from_resolved_full(&resolved);
-    let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
+    let history = OperationHistory::open(journal_path())?;
 
     let (sender, receiver) = std::sync::mpsc::channel();
     let _watcher = fsevents::spawn(paths, sender)?;
@@ -413,7 +413,8 @@ fn handle_undo(last: usize, format: OutputFormat) -> Result<()> {
     if mode.rich {
         println!("{}", generic::header("KASEIFU / UNDO", mode.color));
     }
-    let history = OperationHistory::open(DEFAULT_DATABASE_PATH)?;
+    let history = OperationHistory::open(journal_path())?;
+    print_pending_warning(&history);
 
     for _ in 0..last {
         if !apply_single_undo(&history) {
@@ -421,6 +422,41 @@ fn handle_undo(last: usize, format: OutputFormat) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Report `pending` rows before undoing, without touching them.
+///
+/// A pending row means a mutation was recorded but its result was never
+/// written: the process was interrupted, or another process is performing the
+/// operation right now. Neither case is auto-recoverable from the journal
+/// alone — rewriting the row (or moving the file back) could destroy a state
+/// that is actually correct — so this only makes the situation visible and
+/// leaves the decision to the user (`pending` stays out of Undo's selection,
+/// which requires `result='success'`).
+fn print_pending_warning(history: &OperationHistory) {
+    let Ok(entries) = history.pending_entries() else {
+        return;
+    };
+    if entries.is_empty() {
+        return;
+    }
+    let moves = entries
+        .iter()
+        .filter(|entry| entry.operation == "move")
+        .count();
+    let undos = entries
+        .iter()
+        .filter(|entry| entry.operation == "undo")
+        .count();
+    let noun = if entries.len() == 1 { "row" } else { "rows" };
+    println!(
+        "warning: {} pending journal {} ({} move, {} undo); interrupted moves may already be at the destination",
+        entries.len(),
+        noun,
+        moves,
+        undos
+    );
+    println!("  (not recovered automatically; run `kaseifu doctor` to inspect)");
 }
 
 /// One undo step; returns false when the loop must stop.
@@ -1046,8 +1082,14 @@ fn handle_config_show(format: OutputFormat) -> Result<()> {
         format!("auto_move_margin = {}", resolved.auto_move_margin),
         format!("review_confidence = {}", resolved.review_confidence),
         "[operations]".to_string(),
-        format!("dry_run = {}", resolved.dry_run),
-        format!("enable_undo = {}", resolved.enable_undo),
+        format!(
+            "dry_run = {} (inactive; moves are controlled by --execute)",
+            resolved.dry_run
+        ),
+        format!(
+            "enable_undo = {} (inactive; every executed move is journaled)",
+            resolved.enable_undo
+        ),
         "[metadata.image]".to_string(),
         format!("enabled = {}", resolved.metadata.image_enabled),
         format!("spotlight = {}", resolved.metadata.spotlight),
@@ -1068,6 +1110,10 @@ fn handle_config_show(format: OutputFormat) -> Result<()> {
             "review_confidence": resolved.review_confidence,
         }},
         "operations": {"dry_run": resolved.dry_run, "enable_undo": resolved.enable_undo},
+        "inactive_settings": [
+            "operations.dry_run",
+            "operations.enable_undo",
+        ],
         "metadata": {
             "image": {
                 "enabled": resolved.metadata.image_enabled,
