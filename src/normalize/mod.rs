@@ -21,13 +21,12 @@ pub fn normalize(context: FileContext) -> anyhow::Result<NormalizedFileContext> 
     for item in context.evidence.iter() {
         if item.source == crate::models::file_context::EvidenceSource::Xattr {
             let key = item.key.as_str();
-            if let Some(value_str) = item.value.as_str() {
-                if key.starts_with("FinderInfo") || value_str.contains("Firefox") {
-                    if !value_str.is_empty() {
-                        let signaling_output = format!("X:{}", key);
-                        semantic_signals.push(signaling_output);
-                    }
-                }
+            if let Some(value_str) = item.value.as_str()
+                && (key.starts_with("FinderInfo") || value_str.contains("Firefox"))
+                && !value_str.is_empty()
+            {
+                let signaling_output = format!("X:{}", key);
+                semantic_signals.push(signaling_output);
             }
         }
     }
@@ -134,7 +133,7 @@ fn split_case(input: &str) -> Vec<String> {
 
         if ch.is_uppercase() {
             // Check if this starts a new word
-            if !current.is_empty() && current.chars().last().map_or(false, |c| c.is_lowercase()) {
+            if !current.is_empty() && current.chars().last().is_some_and(|c| c.is_lowercase()) {
                 terms.push(current.clone());
                 current.clear();
             }

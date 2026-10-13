@@ -25,7 +25,6 @@ use serde_json::Value;
 /// ];
 /// let result = normalize_xattr(&evidence);
 /// ```
-
 pub fn normalize_xattr(evidence: &[crate::models::file_context::Evidence]) -> XattrResult {
     let mut result = XattrResult::default();
 
@@ -68,12 +67,12 @@ pub fn normalize_xattr(evidence: &[crate::models::file_context::Evidence]) -> Xa
             }
 
             // Extract downloader agent
-            if let Some(agent) = parse_agent(&value_ref) {
+            if let Some(agent) = parse_agent(value_ref) {
                 result.downloader = Some(agent);
             }
 
             // Extract URLs if present
-            for url in parse_url(&value_ref) {
+            for url in parse_url(value_ref) {
                 if !url.is_empty() {
                     result.urls.push(url);
                 }

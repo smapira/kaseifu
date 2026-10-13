@@ -223,7 +223,7 @@ mod tests {
     fn test_mock_accepts_decision_context() {
         let mock = MockJevIntegration::configured_decision(JevResponse::default());
         let dc = crate::models::decision::DecisionContext::from_candidates(vec![]);
-        let _ = mock.decide(&dc);
+        drop(mock.decide(&dc));
     }
 
     #[test]

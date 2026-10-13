@@ -26,12 +26,6 @@ fn similar(dir: &str, file: &str) -> SimilarFile {
     }
 }
 
-fn similar_aged(dir: &str, file: &str, modified_at: Option<&str>) -> SimilarFile {
-    let mut f = similar(dir, file);
-    f.modified_at = modified_at.map(|s| s.to_string());
-    f
-}
-
 #[test]
 fn normalization_unifies_separators() {
     let a = normalize_name("THCO-COA-Non-Detect Updated.pdf");

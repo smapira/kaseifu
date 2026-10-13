@@ -7,3 +7,11 @@
 /.serena
 /.opencode
 /opencode.json
+
+# v3.4 quality reports (generated). baseline.json is the reviewed exception.
+reports/quality/*
+!reports/quality/baseline.json
+
+# Python bytecode (report tooling only; product has no Python dependency)
+__pycache__/
+*.pyc

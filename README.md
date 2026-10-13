@@ -224,6 +224,55 @@ All six phases are implemented:
 | 5 — Execute | ✅ | Transactional move, journal, undo |
 | 6 — Automate | ✅ | FSEvents watcher with debounce, dedup, stability check |
 
+## Code quality
+
+One script runs every quality check, locally and in CI
+(`.github/workflows/rust-quality.yml`, macOS runner):
+
+```bash
+bash scripts/quality_check.sh
+```
+
+| Check | Command | CI gate |
+|---|---|---|
+| Formatting | `cargo fmt --all -- --check` | 1+ violation fails |
+| Lint | `cargo clippy --all-targets --all-features -- -D warnings` | 1+ warning fails |
+| Tests | `cargo test --all-targets --all-features` | 1 failure fails |
+| Complexity | `rust-code-analysis-cli 0.0.25` + `scripts/complexity_report.py` | new/changed fn CC 16+ fails |
+| Coverage | `cargo-llvm-cov 0.9.1 --summary-only` | report-only (current line coverage ~71%) |
+
+Complexity analyzer setup (pinned; `--locked` is required):
+
+```bash
+cargo install rust-code-analysis-cli --version 0.0.25 --locked
+cargo install cargo-llvm-cov --version 0.9.1 --locked
+```
+
+Quality policy (project-local thresholds, not official Rust limits):
+
+- CC 1–10 Normal, 11–15 Review (warning), 16+ Refactor.
+- Existing high-CC functions are tracked in `reports/quality/baseline.json`
+  and never fail CI by themselves; only **new** functions with CC 16+ or
+  **worsening** to CC 16+ fail.
+- Cognitive complexity, function length, and coverage are
+  measured as warnings/reports only (staged rollout).
+- Nesting depth is not measurable with the adopted analyzer
+  (its metric set has no depth output), so no depth gate is enforced.
+- Unmeasurable functions are excluded from statistics — never counted as CC 0.
+- No live Jev API key is needed for quality checks; tests use mocks.
+
+Refreshing the reviewed baseline after intentional refactoring:
+
+```bash
+bash scripts/quality_check.sh
+python3 scripts/complexity_report.py baseline \
+  --current reports/quality/complexity.json \
+  --out reports/quality/baseline.json
+```
+
+Reports land in `reports/quality/` (git-ignored except `baseline.json`)
+and are uploaded as CI artifacts.
+
 ## License
 
 MIT

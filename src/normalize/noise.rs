@@ -1,22 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DirectorySummary {
     pub total_entries: usize,
     pub file_count: usize,
     pub directory_count: usize,
     pub counts_map: std::collections::HashMap<String, usize>,
-}
-
-impl Default for DirectorySummary {
-    fn default() -> Self {
-        Self {
-            total_entries: 0,
-            file_count: 0,
-            directory_count: 0,
-            counts_map: std::collections::HashMap::new(),
-        }
-    }
 }
 
 impl DirectorySummary {
@@ -85,16 +74,13 @@ pub enum NoiseType {
     Binary,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum NoiseFilter {
-    Exclude { noise: NoiseType },
+    Exclude {
+        noise: NoiseType,
+    },
+    #[default]
     IncludeAll,
-}
-
-impl Default for NoiseFilter {
-    fn default() -> Self {
-        Self::IncludeAll
-    }
 }
 
 impl From<NoiseFilter> for bool {

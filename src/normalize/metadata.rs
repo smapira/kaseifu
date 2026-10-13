@@ -13,7 +13,7 @@ pub fn normalize_metadata(evidence: &[crate::models::file_context::Evidence]) ->
             }
         } else if let Some(_v) = key.strip_prefix("kMDItemTitle") {
             if let Value::String(title_value) = value {
-                for term in extract_terms(&title_value) {
+                for term in extract_terms(title_value) {
                     if !term.is_empty() {
                         result.semantic_signals.push(format!("M:{}", term));
                     }
@@ -21,7 +21,7 @@ pub fn normalize_metadata(evidence: &[crate::models::file_context::Evidence]) ->
             }
         } else if let Some(_v) = key.strip_prefix("kMDItemKind") {
             if let Value::String(kind_value) = value {
-                for term in extract_terms(&kind_value) {
+                for term in extract_terms(kind_value) {
                     if !term.is_empty() {
                         result.semantic_signals.push(format!("K:{}", term));
                     }
@@ -31,10 +31,10 @@ pub fn normalize_metadata(evidence: &[crate::models::file_context::Evidence]) ->
             if let Value::String(v) = value {
                 result.authors = Some(format!("A:{}", v));
             }
-        } else if matches!(key, "kMDItemFSCreationDate" | "kMDItemFSContentChangeDate") {
-            if let Value::String(v) = value {
-                result.created_date = Some(v.clone());
-            }
+        } else if matches!(key, "kMDItemFSCreationDate" | "kMDItemFSContentChangeDate")
+            && let Value::String(v) = value
+        {
+            result.created_date = Some(v.clone());
         }
     }
     result

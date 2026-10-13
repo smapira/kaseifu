@@ -8,7 +8,7 @@ pub fn normalize_filename(input: &str) -> Vec<String> {
 
     let cleans = remove_noise(&base);
 
-    let cleans = cleans
+    cleans
         .split_whitespace()
         .filter(|term| !term.is_empty())
         .filter(|term| {
@@ -20,9 +20,7 @@ pub fn normalize_filename(input: &str) -> Vec<String> {
                 && !lower.contains("documents")
         })
         .map(|s| s.to_string())
-        .collect();
-
-    cleans
+        .collect()
 }
 
 #[allow(dead_code)]

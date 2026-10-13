@@ -1,0 +1,42 @@
+name: Rust Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  quality:
+    # kaseifu depends on Spotlight / macOS-specific APIs: Linux-only CI is
+    # not assumed sufficient for the full test suite.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (pinned)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install coverage tool (pinned, report-only)
+        run: cargo install cargo-llvm-cov --version 0.9.1 --locked
+
+      - name: Install complexity analyzer (pinned)
+        # --locked is required: without it the 2023-era dependency set drifts
+        # and the build fails (tree-sitter type mismatch).
+        run: cargo install rust-code-analysis-cli --version 0.0.25 --locked
+
+      - name: Run quality gate
+        # Same script developers run locally. No secrets, no live API keys:
+        # the test suite uses mocks and a local std-only HTTP stub.
+        run: bash scripts/quality_check.sh
+
+      - name: Upload quality reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-reports
+          path: reports/quality

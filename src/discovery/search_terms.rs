@@ -34,10 +34,10 @@ pub fn extract_terms(normalized: &NormalizedFileContext) -> Vec<String> {
             Some(signal.trim())
         };
 
-        if let Some(term) = term {
-            if !term.is_empty() {
-                terms.insert(term.to_string());
-            }
+        if let Some(term) = term
+            && !term.is_empty()
+        {
+            terms.insert(term.to_string());
         }
     }
 
