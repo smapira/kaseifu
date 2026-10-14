@@ -9,6 +9,8 @@
 - `kaseifu undo --format json` → `nothing left to undo`（人間向けテキスト。JSON ではない）。
 - `kaseifu scan <path> --format json` → `Scanning: <path>`（同上）。
 - `watch` は `--format` フラグを受けるが、JSON 経路の有無は未確認（常駐コマンドなので検証が要る）。
+- **この制限はすでに `kaseifu --help` に明記されている**（実測）: 「`json` applies to inspect, classify, organize, doctor, setup, auth, config, completions --install and uninstall. `scan`, `undo` and `watch` always render text.」。**黙って無視されるわけではない**ので、これは不具合ではなく「自動化向けの拡張候補」である。
+- `scan` はそもそもバナー出力のみ（`--help` にも「scanning is not implemented yet」と出る）なので、JSON 化の前に「scan が何をするコマンドなのか」の整理が必要（W2〜W5 の S21/S26/S27 と同席）。
 - 一方で `organize` / `rename` / `discover` / `classify` / `inspect` / `doctor` は JSON を出す（既存の契約: stdout = 人間向けテキスト（JSON 対応コマンドのみ JSON）、stderr = 診断）。
 
 ## やること

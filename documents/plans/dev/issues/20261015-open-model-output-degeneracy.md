@@ -8,9 +8,10 @@
 
 - 既存の防御: ラベル丸写しの保留（`label_echo`）、ファイル名エコーの除去（`strip_redundant_extension`、プロンプトの「never the file name or its stem」）、危険名の保留、長さと空白の正規化。
 - 実測で観測した退化:
+  - **文書（PDF）で題名が元のステムの写し**: `THCO-COA-Non-Detect Updated.pdf` → 題名 `THCO-COA-Non-Detect_Updated`（実機セッション、2026-10-15）。提案は `2022-06-07_THCO-COA-Non-Detect_Updated.pdf` となり、**内容由来の題名が付いていない**。既存の防御がすり抜ける形（元名からの正規化差が `strip_redundant_extension` の比較に掛からない）。
   - フォルダで子の本文ではなく**ファイル名**を題名にする（例: 子 `note.txt` → 題名 `note.txt`）。
   - PDF 主体のフォルダで**モデル自身の型名**を出す（`KfSemanticPayload` 等）。子の抜粋を長い順に上位 4 件へ絞る規則で再現形は解消した。
-- どちらも「同じ入力・同じ設定で毎回起きる」ものではなく、**非決定的**。
+- いずれも「同じ入力・同じ設定で毎回起きる」ものではなく、**非決定的**。
 
 ## やること
 
