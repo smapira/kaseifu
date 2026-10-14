@@ -18,6 +18,13 @@ use kaseifu::presentation::renderers::{
     organize as organize_view, select as select_view, uninstall as uninstall_view,
 };
 use kaseifu::presentation::{OutputFormat, resolve_mode};
+use kaseifu::rename::{
+    document::classify_document,
+    rules::{PRESETS, find_preset, is_date_format},
+    service::{PlanOutcome, RenameOptions, plan_rename},
+    store::RenameStore,
+};
+use kaseifu::semantic::provider::FoundationModelsProvider;
 use kaseifu::storage::history::{OperationHistory, journal_path};
 use kaseifu::uninstall;
 use kaseifu::watch::coordinator::WatchConfig;
@@ -230,6 +237,15 @@ enum Commands {
         yes: bool,
     },
 
+    /// Propose a content-based file name for a document (dry run by default).
+    ///
+    /// Asks the on-device model for a title, applies the naming rule
+    /// (--pattern, --template, --preset or the stored default), then either
+    /// reports the proposal or renames with --execute. Every executed rename
+    /// is journaled and can be reversed with `undo`. Use --patterns to list
+    /// the rules; documents are txt, md, pdf and html.
+    Rename(Box<RenameCli>),
+
     /// Print a shell completion script (only zsh can be installed).
     ///
     /// Without --install the script goes to stdout and nothing is written;
@@ -306,67 +322,98 @@ async fn dispatch(
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
-    match command {
-        None => handle_usage(format),
-        Some(Commands::Inspect { path, all, verbose }) => {
-            handle_inspect(&path, all, verbose, format)
-        }
-        Some(Commands::Scan { path }) => {
+    let Some(cmd) = command else {
+        return handle_usage(format);
+    };
+    if is_support_command(&cmd) {
+        return dispatch_support(cmd, format, overrides).await;
+    }
+    match cmd {
+        Commands::Inspect { path, all, verbose } => handle_inspect(&path, all, verbose, format),
+        Commands::Scan { path } => {
             handle_scan(&path, format);
             Ok(())
         }
-        Some(Commands::Organize {
+        Commands::Organize {
             file,
             execute,
             dry_run,
             select,
             yes,
             explain,
-        }) => {
-            let options = OrganizeOptions {
-                file,
-                execute,
-                dry_run,
-                select,
-                yes,
-                explain,
-            };
-            dispatch_organize(options, format, overrides).await
+        } => {
+            dispatch_organize(
+                OrganizeOptions {
+                    file,
+                    execute,
+                    dry_run,
+                    select,
+                    yes,
+                    explain,
+                },
+                format,
+                overrides,
+            )
+            .await
         }
-        Some(Commands::Watch {
+        Commands::Watch {
             paths,
             execute,
             dry_run,
-        }) => handle_watch(&paths, execute, dry_run, format, overrides).await,
-        Some(Commands::Undo { last }) => handle_undo(last, format),
-        Some(Commands::Discover { file, all, verbose }) => {
-            handle_discover(&file, all, verbose, format)
-        }
-        Some(Commands::Classify {
+        } => handle_watch(&paths, execute, dry_run, format, overrides).await,
+        Commands::Rename(boxed) => handle_rename(*boxed, format).await,
+        Commands::Undo { last } => handle_undo(last, format),
+        Commands::Discover { file, all, verbose } => handle_discover(&file, all, verbose, format),
+        Commands::Classify {
             file,
             all,
             verbose,
             explain,
-        }) => handle_classify(&file, all, verbose, explain, format, overrides).await,
-        Some(Commands::Setup { check_connection }) => {
+        } => handle_classify(&file, all, verbose, explain, format, overrides).await,
+        _ => unreachable!("support commands route through dispatch_support"),
+    }
+}
+
+/// True for the environment and setup commands (handled by `dispatch_support`).
+fn is_support_command(cmd: &Commands) -> bool {
+    matches!(
+        cmd,
+        Commands::Setup { .. }
+            | Commands::Auth { .. }
+            | Commands::Config { .. }
+            | Commands::Doctor { .. }
+            | Commands::Uninstall { .. }
+            | Commands::Completions { .. }
+    )
+}
+
+/// Setup and environment commands (split out so `dispatch` stays small).
+async fn dispatch_support(
+    cmd: Commands,
+    format: OutputFormat,
+    overrides: &CliOverrides,
+) -> Result<()> {
+    match cmd {
+        Commands::Setup { check_connection } => {
             handle_setup(overrides, check_connection, format).await
         }
-        Some(Commands::Auth { action }) => handle_auth(action, format),
-        Some(Commands::Config { action }) => handle_config(action, format),
-        Some(Commands::Doctor { check_connection }) => {
+        Commands::Auth { action } => handle_auth(action, format),
+        Commands::Config { action } => handle_config(action, format),
+        Commands::Doctor { check_connection } => {
             handle_doctor(overrides, check_connection, format).await
         }
-        Some(Commands::Uninstall {
+        Commands::Uninstall {
             execute,
             purge,
             remove_key,
             yes,
-        }) => handle_uninstall(execute, purge, remove_key, yes, format),
-        Some(Commands::Completions {
+        } => handle_uninstall(execute, purge, remove_key, yes, format),
+        Commands::Completions {
             shell,
             install,
             dir,
-        }) => handle_completions(shell, install, dir, format),
+        } => handle_completions(shell, install, dir, format),
+        _ => unreachable!("only support commands reach dispatch_support"),
     }
 }
 
@@ -823,6 +870,422 @@ fn handle_undo(last: usize, format: OutputFormat) -> Result<()> {
             break;
         }
     }
+    Ok(())
+}
+
+/// Parsed `rename` arguments (boxed: the struct form keeps `Commands` small).
+#[derive(clap::Args, Debug)]
+struct RenameCli {
+    /// Document to rename (txt, md, pdf, html).
+    target: Option<PathBuf>,
+    /// Rename the file (default is a dry run; cannot be combined with --dry-run).
+    #[arg(long, conflicts_with = "dry_run")]
+    execute: bool,
+    /// Request a dry run explicitly (the default; cannot be combined with --execute).
+    #[arg(long)]
+    dry_run: bool,
+    /// Naming pattern: a P01-P12 id or slug (ai, date-title, ...).
+    #[arg(long, value_name = "PATTERN")]
+    pattern: Option<String>,
+    /// Custom template with {variables} (overrides --pattern).
+    #[arg(long, value_name = "TEMPLATE")]
+    template: Option<String>,
+    /// Stored preset to apply.
+    #[arg(long, value_name = "NAME")]
+    preset: Option<String>,
+    /// Fixed prefix for the {prefix} variable.
+    #[arg(long, value_name = "TEXT")]
+    prefix: Option<String>,
+    /// Fixed suffix for the {suffix} variable.
+    #[arg(long, value_name = "TEXT")]
+    suffix: Option<String>,
+    /// Project for the {project} variable (defaults to the model value).
+    #[arg(long, value_name = "TEXT")]
+    project: Option<String>,
+    /// Sequence number for the {seq} variable.
+    #[arg(long, value_name = "N")]
+    seq: Option<u32>,
+    /// Date format (YYYY-MM-DD, YYYYMMDD, YYYY-MM, YYYY, or Japanese YMD).
+    #[arg(long, value_name = "FORMAT")]
+    date_format: Option<String>,
+    /// List builtin patterns and stored presets.
+    #[arg(long)]
+    patterns: bool,
+    /// List stored presets only.
+    #[arg(long)]
+    list_presets: bool,
+    /// Save --template/--pattern/--preset as the stored preset NAME.
+    #[arg(long, value_name = "NAME")]
+    save_preset: Option<String>,
+    /// Delete the stored preset NAME.
+    #[arg(long, value_name = "NAME")]
+    delete_preset: Option<String>,
+    /// Show the default rule.
+    #[arg(long)]
+    show_default: bool,
+    /// Set the default rule (pattern id, slug, preset name or preset:NAME).
+    #[arg(long, value_name = "RULE")]
+    set_default: Option<String>,
+}
+
+/// `rename`: management flags, or a document dry-run / execution.
+async fn handle_rename(args: RenameCli, format: OutputFormat) -> Result<()> {
+    let store = RenameStore::open(journal_path())?;
+    if has_management(&args) {
+        if args.target.is_some() {
+            anyhow::bail!("management flags cannot be combined with a target file");
+        }
+        return rename_management(&store, &args, format);
+    }
+    let Some(target) = args.target.as_deref() else {
+        return rename_guidance(format);
+    };
+    rename_file(&store, target, &args, format).await
+}
+
+/// True when any preset/default management flag is present.
+fn has_management(args: &RenameCli) -> bool {
+    args.patterns
+        || args.list_presets
+        || args.save_preset.is_some()
+        || args.delete_preset.is_some()
+        || args.show_default
+        || args.set_default.is_some()
+}
+
+/// Run the first matching management action (split out for complexity).
+fn rename_management(store: &RenameStore, args: &RenameCli, format: OutputFormat) -> Result<()> {
+    if args.patterns || args.list_presets {
+        return rename_list(store, args.patterns, format);
+    }
+    if let Some(name) = args.save_preset.as_deref() {
+        return rename_save(store, name, args, format);
+    }
+    if let Some(name) = args.delete_preset.as_deref() {
+        return rename_delete(store, name, format);
+    }
+    if let Some(rule) = args.set_default.as_deref() {
+        return rename_set_default(store, rule, format);
+    }
+    if args.show_default {
+        return rename_show_default(store, format);
+    }
+    rename_guidance(format)
+}
+
+/// `rename` without a target or management flag: print guidance only.
+fn rename_guidance(format: OutputFormat) -> Result<()> {
+    emit_report(
+        format,
+        "Rename",
+        &[
+            "usage: kaseifu rename <file> [--pattern PATTERN] [--execute]".to_string(),
+            "documents: txt, md, pdf, html (images and video arrive later)".to_string(),
+            "run `kaseifu rename --patterns` to list the naming rules".to_string(),
+        ],
+        &serde_json::json!({"rename": {"status": "guidance"}}).to_string(),
+    );
+    Ok(())
+}
+
+/// `rename --patterns` / `rename --list-presets`.
+fn rename_list(store: &RenameStore, with_builtin: bool, format: OutputFormat) -> Result<()> {
+    let mut lines = Vec::new();
+    if with_builtin {
+        for preset in PRESETS {
+            lines.push(format!(
+                "{} {} {} - {}",
+                preset.id, preset.slug, preset.template, preset.description
+            ));
+        }
+    }
+    let stored = store
+        .list_presets()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    for preset in &stored {
+        lines.push(format!(
+            "preset:{} {} ({})",
+            preset.name, preset.template, preset.date_format
+        ));
+    }
+    if lines.is_empty() {
+        lines.push("no stored presets (builtins are hidden by --list-presets)".to_string());
+    }
+    let json = serde_json::json!({
+        "rename": {
+            "status": "patterns",
+            "builtin": with_builtin,
+            "presets": stored.iter().map(|preset| serde_json::json!({
+                "name": preset.name,
+                "template": preset.template,
+                "date_format": preset.date_format,
+            })).collect::<Vec<_>>(),
+        }
+    })
+    .to_string();
+    emit_report(format, "Rename patterns", &lines, &json);
+    Ok(())
+}
+
+/// `rename --save-preset NAME` from --template, --pattern or --preset.
+fn rename_save(
+    store: &RenameStore,
+    name: &str,
+    args: &RenameCli,
+    format: OutputFormat,
+) -> Result<()> {
+    if args.target.is_some() {
+        anyhow::bail!("--save-preset cannot be combined with a target file");
+    }
+    let (template, date_format) = rename_save_template(store, args)?;
+    store
+        .save_preset(name, &template, &date_format)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let line = format!("saved preset:{name} {template} ({date_format})");
+    let json =
+        serde_json::json!({"rename": {"status": "saved", "preset": name, "template": template}})
+            .to_string();
+    emit_report(format, "Rename preset", &[line], &json);
+    Ok(())
+}
+
+/// Resolve the template and date format a preset save should store.
+fn rename_save_template(store: &RenameStore, args: &RenameCli) -> Result<(String, String)> {
+    let date_format = args
+        .date_format
+        .clone()
+        .unwrap_or_else(|| "YYYY-MM-DD".to_string());
+    if !is_date_format(&date_format) {
+        anyhow::bail!("unknown date format: {date_format}");
+    }
+    if let Some(template) = args.template.as_deref() {
+        return Ok((template.to_string(), date_format));
+    }
+    if let Some(spec) = args.pattern.as_deref() {
+        let preset = find_preset(spec).ok_or_else(|| anyhow::anyhow!("unknown pattern: {spec}"))?;
+        if preset.id == "P12" {
+            anyhow::bail!("P12 custom needs --template");
+        }
+        return Ok((preset.template.to_string(), date_format));
+    }
+    if let Some(name) = args.preset.as_deref() {
+        let stored = store
+            .get_preset(name)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        let Some(preset) = stored else {
+            anyhow::bail!("unknown preset: {name}");
+        };
+        return Ok((preset.template, preset.date_format));
+    }
+    anyhow::bail!("--save-preset needs --template, --pattern or --preset")
+}
+
+/// `rename --delete-preset NAME`.
+fn rename_delete(store: &RenameStore, name: &str, format: OutputFormat) -> Result<()> {
+    let deleted = store
+        .delete_preset(name)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    if !deleted {
+        anyhow::bail!("unknown preset: {name}");
+    }
+    let line = format!("deleted preset:{name}");
+    let json = serde_json::json!({"rename": {"status": "deleted", "preset": name}}).to_string();
+    emit_report(format, "Rename preset", &[line], &json);
+    Ok(())
+}
+
+/// `rename --set-default RULE`.
+fn rename_set_default(store: &RenameStore, rule: &str, format: OutputFormat) -> Result<()> {
+    store
+        .set_default(rule)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let current = store
+        .get_default()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let line = format!("default rule: {current}");
+    let json = serde_json::json!({"rename": {"status": "default", "default": current}}).to_string();
+    emit_report(format, "Rename default", &[line], &json);
+    Ok(())
+}
+
+/// `rename --show-default`.
+fn rename_show_default(store: &RenameStore, format: OutputFormat) -> Result<()> {
+    let current = store
+        .get_default()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let line = format!("default rule: {current}");
+    let json = serde_json::json!({"rename": {"status": "default", "default": current}}).to_string();
+    emit_report(format, "Rename default", &[line], &json);
+    Ok(())
+}
+
+/// One `rename` file report (text lines plus the fixed JSON shape).
+struct RenameReport<'a> {
+    current_name: &'a str,
+    proposal: Option<&'a str>,
+    pattern: &'a str,
+    date_source: &'a str,
+    status: &'a str,
+    reason: Option<&'a str>,
+    operation_id: Option<&'a str>,
+    target: &'a Path,
+}
+
+/// Emit a `rename` file report (text lines plus the fixed JSON shape).
+fn emit_rename_report(format: OutputFormat, report: &RenameReport) {
+    let mut lines = vec![
+        format!("target: {}", report.target.display()),
+        format!("current: {}", report.current_name),
+        format!("pattern: {}", report.pattern),
+    ];
+    if let Some(proposal) = report.proposal {
+        lines.push(format!("proposal: {proposal}"));
+    }
+    if !report.date_source.is_empty() {
+        lines.push(format!("date_source: {}", report.date_source));
+    }
+    if let Some(reason) = report.reason {
+        lines.push(format!("reason: {reason}"));
+    }
+    if let Some(operation_id) = report.operation_id {
+        lines.push(format!("operation_id: {operation_id}"));
+    }
+    lines.push(format!("status: {}", report.status));
+    if report.status == "proposed" {
+        lines.push("mode: dry-run (pass --execute to rename)".to_string());
+    }
+    let json = serde_json::json!({
+        "rename": {
+            "target": report.target.display().to_string(),
+            "current_name": report.current_name,
+            "proposal": report.proposal,
+            "status": report.status,
+            "reason": report.reason,
+            "pattern": report.pattern,
+            "date_source": report.date_source,
+            "operation_id": report.operation_id,
+        }
+    })
+    .to_string();
+    emit_report(format, "Rename", &lines, &json);
+}
+
+/// `rename <file>`: dry-run proposal or `--execute` rename.
+async fn rename_file(
+    store: &RenameStore,
+    target: &Path,
+    args: &RenameCli,
+    format: OutputFormat,
+) -> Result<()> {
+    // Classify the extension before touching the model: images, video and
+    // unknown types fail fast with the phase that owns them.
+    if let Err(error) = classify_document(target) {
+        anyhow::bail!("{error}");
+    }
+    let options = RenameOptions {
+        pattern: args.pattern.clone(),
+        template: args.template.clone(),
+        preset: args.preset.clone(),
+        prefix: args.prefix.clone(),
+        suffix: args.suffix.clone(),
+        project: args.project.clone(),
+        seq: args.seq,
+        date_format: args.date_format.clone(),
+    };
+    let provider = FoundationModelsProvider::production();
+    let history = OperationHistory::open(journal_path())?;
+    let outcome = plan_rename(&provider, store, target, &options)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    match outcome {
+        PlanOutcome::Ready(plan) => rename_ready(
+            &plan,
+            &history,
+            args.execute && !args.dry_run,
+            format,
+            target,
+        ),
+        PlanOutcome::Noop {
+            current_name,
+            rule_label,
+        } => {
+            emit_rename_report(
+                format,
+                &RenameReport {
+                    current_name: &current_name,
+                    proposal: Option::None,
+                    pattern: &rule_label,
+                    date_source: "",
+                    status: "noop",
+                    reason: Some("name is already current"),
+                    operation_id: Option::None,
+                    target,
+                },
+            );
+            Ok(())
+        }
+        PlanOutcome::Held {
+            current_name,
+            rule_label,
+            reason,
+        } => {
+            emit_rename_report(
+                format,
+                &RenameReport {
+                    current_name: &current_name,
+                    proposal: Option::None,
+                    pattern: &rule_label,
+                    date_source: "",
+                    status: "held",
+                    reason: Some(&reason),
+                    operation_id: Option::None,
+                    target,
+                },
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Report a ready plan: preview it, or execute and report the journal id.
+fn rename_ready(
+    plan: &kaseifu::rename::service::RenamePlan,
+    history: &OperationHistory,
+    execute: bool,
+    format: OutputFormat,
+    target: &Path,
+) -> Result<()> {
+    if !execute {
+        emit_rename_report(
+            format,
+            &RenameReport {
+                current_name: &plan.current_name,
+                proposal: Some(&plan.proposal),
+                pattern: &plan.rule_label,
+                date_source: plan.date_source,
+                status: "proposed",
+                reason: Option::None,
+                operation_id: Option::None,
+                target,
+            },
+        );
+        return Ok(());
+    }
+    let operation_id = kaseifu::rename::service::execute_plan(plan, history)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    emit_rename_report(
+        format,
+        &RenameReport {
+            current_name: &plan.current_name,
+            proposal: Some(&plan.proposal),
+            pattern: &plan.rule_label,
+            date_source: plan.date_source,
+            status: "executed",
+            reason: Option::None,
+            operation_id: Some(&operation_id),
+            target,
+        },
+    );
     Ok(())
 }
 
