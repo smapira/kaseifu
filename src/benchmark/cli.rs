@@ -145,6 +145,36 @@ pub enum Command {
         qrels: Option<PathBuf>,
     },
 
+    /// Measure the Phase 9 numbers (FFI, inference, session reuse, folder
+    /// sampling, video, memory) on this machine.
+    Perf {
+        /// Repetitions of every measured call.
+        #[arg(long, default_value_t = 3)]
+        generations: usize,
+
+        /// Reuse one inference session per instruction set (the product
+        /// creates one session per generation).
+        #[arg(long)]
+        reuse_session: bool,
+
+        /// Also generate for two different documents through one reused
+        /// session and report whether the first one bleeds into the second.
+        #[arg(long)]
+        bleed: bool,
+
+        /// Entries in the synthetic folder used for the sampling measurement.
+        #[arg(long, default_value_t = 260)]
+        folder_entries: usize,
+
+        /// A PNG or JPEG to time Apple Vision on.
+        #[arg(long, value_name = "FILE")]
+        image: Option<PathBuf>,
+
+        /// A video to time AVFoundation and Vision on (any duration).
+        #[arg(long, value_name = "FILE")]
+        video: Option<PathBuf>,
+    },
+
     /// Compare the newest run of every system.
     Compare,
 }
@@ -217,7 +247,36 @@ fn dispatch(cli: &Cli) -> Result<ExitCode> {
             qrels.as_ref(),
         ),
         Command::Compare => compare_command(cli, &workspace),
+        Command::Perf {
+            generations,
+            reuse_session,
+            bleed,
+            folder_entries,
+            image,
+            video,
+        } => perf_command(
+            cli,
+            super::perf::PerfRequest {
+                generations: *generations,
+                reuse_session: *reuse_session,
+                bleed: *bleed,
+                folder_entries: *folder_entries,
+                image: image.clone(),
+                video: video.clone(),
+                timeout_ms: DEFAULT_TIMEOUT_MS,
+            },
+        ),
     }
+}
+
+/// `perf`: measure and print (this command never writes to the workspace).
+fn perf_command(cli: &Cli, request: super::perf::PerfRequest) -> Result<ExitCode> {
+    let report = super::perf::run(&request)?;
+    match cli.format {
+        Format::Json => emit_json(&report)?,
+        Format::Text => super::perf::print_text(&report),
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn emit_json<T: serde::Serialize>(value: &T) -> Result<()> {

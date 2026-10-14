@@ -615,7 +615,16 @@ private func kfBuildPrompt(_ request: [String: Any]) -> String {
 }
 
 /// Run one generation and always answer with a response JSON (never throws).
-private func kfRunGeneration(requestId: String, request: [String: Any]) async -> String {
+///
+/// `cache` is the opt-in session reuse of the benchmark: when it is present,
+/// one session is kept per instruction text and reused, which also means each
+/// answer sees the earlier ones in its transcript. The product path passes
+/// `nil`.
+private func kfRunGeneration(
+    requestId: String,
+    request: [String: Any],
+    cache: KfSessionCache?
+) async -> String {
     #if canImport(FoundationModels)
     if #available(macOS 26.0, *) {
         if let (reason, detail) = kfUnavailableReason() {
@@ -637,7 +646,16 @@ private func kfRunGeneration(requestId: String, request: [String: Any]) async ->
                 ? videoInstructions
                 : (request["target_type"] as? String == "directory" ? directoryInstructions : baseInstructions))
         let instructions = Instructions(instructionsText)
-        let session = LanguageModelSession(model: .default, instructions: instructions)
+        let session: LanguageModelSession
+        if let reused = cache?.sessions[instructionsText] as? LanguageModelSession {
+            session = reused
+        } else {
+            let created = LanguageModelSession(model: .default, instructions: instructions)
+            if let cache {
+                cache.sessions[instructionsText] = created
+            }
+            session = created
+        }
         do {
             let response = try await session.respond(to: kfBuildPrompt(request), generating: KfSemanticPayload.self)
             if Task.isCancelled {
@@ -658,6 +676,17 @@ private func kfRunGeneration(requestId: String, request: [String: Any]) async ->
 
 // MARK: - Context
 
+/// Reused inference sessions, keyed by the instructions they were built with.
+///
+/// A session keeps its transcript, so a reused session carries earlier files
+/// into later answers. This type exists so the benchmark can measure both the
+/// saving and that risk; the product path creates one session per generation
+/// and never passes a cache (original spec section 11.5).
+final class KfSessionCache {
+    /// The sessions one context keeps, keyed by the instruction text.
+    var sessions: [String: Any] = [:]
+}
+
 /// One inference context. At most one generation runs at a time; the callback
 /// fires exactly once per accepted request and never after `destroy` returns.
 final class KaseifuFmContext: @unchecked Sendable {
@@ -671,6 +700,10 @@ final class KaseifuFmContext: @unchecked Sendable {
     var userData: UnsafeMutableRawPointer?
     var done = DispatchSemaphore(value: 0)
     var task: Task<Void, Never>?
+    /// The opt-in session cache (nil unless the context was created with
+    /// `reuse_session`). Only the active generation touches it, and the ABI
+    /// serializes generations on one context, so it needs no lock of its own.
+    var sessionCache: KfSessionCache?
 
     /// Complete the active generation exactly once.
     ///
@@ -703,10 +736,19 @@ final class KaseifuFmContext: @unchecked Sendable {
 
 @_cdecl("kaseifu_fm_create")
 public func kaseifu_fm_create(_ options: UnsafePointer<CChar>?) -> UnsafeMutableRawPointer? {
-    if let options, kfParseObject(String(cString: options)) == nil {
-        return nil
+    var reuseSession = false
+    if let options {
+        guard let object = kfParseObject(String(cString: options)) else { return nil }
+        // `reuse_session` is the only option so far, and it is diagnostic:
+        // the product path passes no options and keeps one session per
+        // generation (original spec section 11.5).
+        reuseSession = object["reuse_session"] as? Bool == true
     }
-    return Unmanaged.passRetained(KaseifuFmContext()).toOpaque()
+    let context = KaseifuFmContext()
+    if reuseSession {
+        context.sessionCache = KfSessionCache()
+    }
+    return Unmanaged.passRetained(context).toOpaque()
 }
 
 @_cdecl("kaseifu_fm_generate")
@@ -740,7 +782,11 @@ public func kaseifu_fm_generate(
     ctx.lock.unlock()
 
     let task = Task.detached { [ctx] in
-        let payload = await kfRunGeneration(requestId: requestId, request: object)
+        let payload = await kfRunGeneration(
+            requestId: requestId,
+            request: object,
+            cache: ctx.sessionCache
+        )
         ctx.finish(payload)
     }
     ctx.lock.lock()

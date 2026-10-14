@@ -20,6 +20,7 @@
 
 pub mod cli;
 pub mod gate;
+pub mod perf;
 pub mod qrels;
 pub mod run;
 pub mod scatter;

@@ -192,6 +192,27 @@ impl FmContext {
             .ok_or_else(|| FfiError::Internal("the bridge could not create a context".to_string()))
     }
 
+    /// Create a context with bridge options (a JSON object).
+    ///
+    /// The only option the bridge knows is `{"reuse_session":true}`, which
+    /// keeps one inference session per instruction set instead of creating one
+    /// per generation. It exists for the benchmark that evaluates session
+    /// reuse (original spec section 11.5); the product path calls [`create`]
+    /// and keeps one session per generation, so a file never sees another
+    /// file's transcript.
+    ///
+    /// [`create`]: FmContext::create
+    pub fn create_with_options(options: &str) -> Result<Self, FfiError> {
+        let text = CString::new(options).map_err(|_| FfiError::Rejected {
+            code: CODE_INVALID_REQUEST,
+            detail: "the bridge options contain a NUL byte".to_string(),
+        })?;
+        let pointer = unsafe { raw::kaseifu_fm_create(text.as_ptr()) };
+        NonNull::new(pointer)
+            .map(|pointer| Self { pointer })
+            .ok_or_else(|| FfiError::Internal("the bridge could not create a context".to_string()))
+    }
+
     /// Run one generation and return the raw response JSON.
     ///
     /// On timeout the generation is cancelled and a late result is discarded

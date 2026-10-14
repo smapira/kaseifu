@@ -570,7 +570,7 @@ src/
 ├── main.rs              # CLI entry point (clap)
 ├── lib.rs               # Library root
 ├── auth/                # Keychain access + interactive prompts (v3.3)
-├── benchmark/           # TREC related-document harness (kaseifu-bench)
+├── benchmark/           # TREC related-document harness + Phase 9 measurements (kaseifu-bench)
 ├── completion/          # zsh completion generation + installation
 ├── config/              # User TOML + resolution order (v3.3)
 ├── doctor.rs            # Environment diagnostics (v3.3)
@@ -636,6 +636,20 @@ cargo build --release --bin kaseifu-bench
 The document corpus comes from NIST (the qrels are public). When a dataset is
 missing the harness stops and says so; it never fabricates or substitutes data,
 and it only ever reads the corpus.
+
+The same binary carries the Phase 9 measurements (`kaseifu-bench perf`): the
+FFI round trip, one generation per call with and without a reused inference
+session, whether reuse bleeds one file into the next, folder sampling cost, a
+video's perception cost, and the peak resident set size. It is a research
+command: it needs Apple Intelligence, it writes only to a temporary directory
+that it removes, and it never touches your files.
+
+```bash
+cargo build --release --bin kaseifu-bench
+./target/release/kaseifu-bench perf --generations 5
+./target/release/kaseifu-bench perf --generations 5 --reuse-session --bleed
+./target/release/kaseifu-bench perf --video ~/Movies/clip.mov
+```
 
 ## Safety
 
