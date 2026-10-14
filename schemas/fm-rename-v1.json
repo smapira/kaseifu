@@ -71,6 +71,57 @@
                   "type": "string"
                 }
               }
+            },
+            "directory": {
+              "type": "object",
+              "description": "Phase 7: what kaseifu read from a folder's own children. Optional and folder-only; the counts are a floor when the read hit its cap (truncated), and the folder's own name is not carried here because it is what the rename replaces.",
+              "properties": {
+                "total_entries": {
+                  "type": "integer"
+                },
+                "file_count": {
+                  "type": "integer"
+                },
+                "directory_count": {
+                  "type": "integer"
+                },
+                "truncated": {
+                  "type": "boolean"
+                },
+                "files": {
+                  "type": "array",
+                  "maxItems": 12,
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "folders": {
+                  "type": "array",
+                  "maxItems": 8,
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "extensions": {
+                  "type": "array",
+                  "maxItems": 8,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "extension",
+                      "count"
+                    ],
+                    "properties": {
+                      "extension": {
+                        "type": "string"
+                      },
+                      "count": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
         }

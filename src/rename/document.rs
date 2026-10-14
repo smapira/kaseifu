@@ -50,7 +50,8 @@ impl std::fmt::Display for DocumentError {
 /// Classify a path by extension (case-insensitive).
 ///
 /// Images, videos, folders and extension-less files are refused by naming the
-/// type they are, so the caller never guesses.
+/// type they are, so the caller never guesses. Folders are accepted by the
+/// rename service before this function runs (a folder has no extension).
 pub fn classify_document(path: &Path) -> Result<DocumentKind, DocumentError> {
     let raw = path
         .extension()
@@ -62,7 +63,8 @@ pub fn classify_document(path: &Path) -> Result<DocumentKind, DocumentError> {
         "html" | "htm" => Ok(DocumentKind::Html),
         "pdf" => Ok(DocumentKind::Pdf),
         "" => Err(DocumentError::UnsupportedType(format!(
-            "{} has no extension; rename needs txt, md, pdf or html",
+            "{} has no extension and is not a folder; rename needs txt, md, pdf, html, an image or a \
+             video",
             path.display()
         ))),
         "jpg" | "jpeg" | "png" | "heic" | "heif" | "hif" | "tif" | "tiff" | "webp" => {

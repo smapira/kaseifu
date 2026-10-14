@@ -3,6 +3,16 @@
 //! Reverses the most recent successful, not-yet-undone move using the
 //! journal only. The reverse path comes from the recorded paths; collision
 //! rules are identical to a move (never overwrite).
+//!
+//! Phase 7 moved folders through the same journal: a folder rename is a `move`
+//! row like any other, so undo has to accept a folder at the recorded path.
+//! The selection order (newest successful move first) is what keeps a child's
+//! history resolvable after an ancestor folder was renamed: the ancestor row is
+//! always reversed before any row recorded under its old name, so by the time
+//! that row is reached its recorded paths exist again. Nothing rewrites journal
+//! rows. When a recorded path cannot be found and no row explains where it
+//! went (an ancestor renamed outside kaseifu, or an interrupted operation),
+//! the undo refuses with that path and mutates nothing.
 
 use crate::storage::history::OperationHistory;
 use std::path::{Path, PathBuf};
@@ -17,6 +27,37 @@ pub enum UndoError {
     Collision(PathBuf),
     Io(String),
     History(String),
+}
+
+impl std::fmt::Display for UndoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NothingToUndo => write!(f, "nothing left to undo"),
+            Self::SourceMissing(path) => write!(
+                f,
+                "the recorded path {} no longer exists (a parent folder may have been renamed \
+                 outside kaseifu); nothing was changed",
+                path.display()
+            ),
+            Self::SourceNotAFile(path) => write!(
+                f,
+                "the recorded path {} is neither a file nor a folder; nothing was changed",
+                path.display()
+            ),
+            Self::DestinationNotADirectory(path) => write!(
+                f,
+                "{} is not a usable directory to restore into; nothing was changed",
+                path.display()
+            ),
+            Self::Collision(path) => write!(
+                f,
+                "refusing to overwrite {}; nothing was changed",
+                path.display()
+            ),
+            Self::Io(detail) => write!(f, "{detail}"),
+            Self::History(detail) => write!(f, "journal: {detail}"),
+        }
+    }
 }
 
 /// Result of a successful undo.
@@ -52,8 +93,8 @@ struct UndoPaths {
 }
 
 /// Verify preconditions without touching the filesystem or the journal:
-/// the moved file must exist exactly as journaled, and the original
-/// location must be free (undo never overwrites).
+/// the moved target must exist exactly as journaled (a file or a folder), and
+/// the original location must be free (undo never overwrites).
 fn validate_undo_preconditions(
     entry: &crate::storage::history::HistoryEntry,
 ) -> Result<UndoPaths, UndoError> {
@@ -63,7 +104,11 @@ fn validate_undo_preconditions(
     if !moved_file.exists() {
         return Err(UndoError::SourceMissing(moved_file));
     }
-    if !moved_file.is_file() {
+    // A rename moves files and folders alike (Phase 7). Anything else (a
+    // socket, a device node, a dangling symlink) is refused; `exists` already
+    // follows symlinks, so a symlink to a real target gets here and is undone
+    // as the move it was.
+    if !moved_file.is_file() && !moved_file.is_dir() {
         return Err(UndoError::SourceNotAFile(moved_file));
     }
     let original_directory = original_path

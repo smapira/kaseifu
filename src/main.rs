@@ -21,7 +21,9 @@ use kaseifu::presentation::{OutputFormat, resolve_mode};
 use kaseifu::rename::{
     document::classify_document,
     rules::{PRESETS, find_preset, is_date_format},
-    service::{PerceptionReport, PlanOutcome, RenameOptions, VideoReport, plan_rename},
+    service::{
+        DirectoryReport, PerceptionReport, PlanOutcome, RenameOptions, VideoReport, plan_rename,
+    },
     store::RenameStore,
 };
 use kaseifu::semantic::provider::FoundationModelsProvider;
@@ -237,7 +239,7 @@ enum Commands {
         yes: bool,
     },
 
-    /// Propose a content-based file name (dry run by default).
+    /// Propose a content-based file or folder name (dry run by default).
     ///
     /// Asks the on-device model for a title, applies the naming rule
     /// (--pattern, --template, --preset or the stored default), then either
@@ -247,7 +249,11 @@ enum Commands {
     /// png, heic, heif, tif, tiff and webp, and their scene is described by
     /// on-device Vision labels. Videos are mp4, mov, m4v, 3gp and 3g2: the
     /// container's metadata comes from AVFoundation and the same on-device
-    /// classifier labels a few representative frames.
+    /// classifier labels a few representative frames. Folders are named from
+    /// what is inside them (child names, file types and a few child files),
+    /// and a folder kaseifu must not touch (system trees, app bundles, the
+    /// Library tree, caches, hidden folders, the working directory) is
+    /// refused with the reason.
     Rename(Box<RenameCli>),
 
     /// Print a shell completion script (only zsh can be installed).
@@ -880,7 +886,7 @@ fn handle_undo(last: usize, format: OutputFormat) -> Result<()> {
 /// Parsed `rename` arguments (boxed: the struct form keeps `Commands` small).
 #[derive(clap::Args, Debug)]
 struct RenameCli {
-    /// File to rename (a document, or an image).
+    /// File or folder to rename (a document, an image, a video, or a folder).
     target: Option<PathBuf>,
     /// Rename the file (default is a dry run; cannot be combined with --dry-run).
     #[arg(long, conflicts_with = "dry_run")]
@@ -983,10 +989,11 @@ fn rename_guidance(format: OutputFormat) -> Result<()> {
         format,
         "Rename",
         &[
-            "usage: kaseifu rename <file> [--pattern PATTERN] [--execute]".to_string(),
+            "usage: kaseifu rename <file-or-folder> [--pattern PATTERN] [--execute]".to_string(),
             "documents: txt, md, pdf, html".to_string(),
             "images: jpg, jpeg, png, heic, heif, tif, tiff, webp".to_string(),
             "videos: mp4, mov, m4v, 3gp, 3g2".to_string(),
+            "folders: named from what is inside them, never from their own name".to_string(),
             "run `kaseifu rename --patterns` to list the naming rules".to_string(),
         ],
         &serde_json::json!({"rename": {"status": "guidance"}}).to_string(),
@@ -1137,6 +1144,7 @@ struct RenameReport<'a> {
     target: &'a Path,
     perception: Option<&'a PerceptionReport>,
     video: Option<&'a VideoReport>,
+    directory: Option<&'a DirectoryReport>,
 }
 
 /// The `perception` object for the JSON report (images and videos).
@@ -1185,6 +1193,29 @@ fn video_json(report: &VideoReport) -> serde_json::Value {
     value
 }
 
+/// The `directory` object for the JSON report (folders only).
+///
+/// Every key is an addition: no document, image or video report changes shape.
+/// The child names are not repeated here (they are in the request, not in the
+/// report); the user sees the counts and the file types.
+fn directory_json(report: &DirectoryReport) -> serde_json::Value {
+    let facts = &report.facts;
+    serde_json::json!({
+        "total_entries": facts.total_entries,
+        "file_count": facts.file_count,
+        "directory_count": facts.directory_count,
+        "truncated": facts.truncated,
+        "extensions": facts
+            .extensions
+            .iter()
+            .map(|entry| serde_json::json!({
+                "extension": entry.extension,
+                "count": entry.count,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
 /// Emit a `rename` file report (text lines plus the fixed JSON shape).
 fn emit_rename_report(format: OutputFormat, report: &RenameReport) {
     let mut lines = vec![
@@ -1207,6 +1238,9 @@ fn emit_rename_report(format: OutputFormat, report: &RenameReport) {
     if let Some(perception) = report.perception {
         lines.push(format!("perception: {}", perception.summary()));
     }
+    if let Some(directory) = report.directory {
+        lines.push(format!("directory: {}", directory.summary()));
+    }
     if let Some(operation_id) = report.operation_id {
         lines.push(format!("operation_id: {operation_id}"));
     }
@@ -1226,6 +1260,7 @@ fn emit_rename_report(format: OutputFormat, report: &RenameReport) {
             "operation_id": report.operation_id,
             "perception": report.perception.map(perception_json),
             "video": report.video.map(video_json),
+            "directory": report.directory.map(directory_json),
         }
     })
     .to_string();
@@ -1233,12 +1268,17 @@ fn emit_rename_report(format: OutputFormat, report: &RenameReport) {
 }
 
 /// `rename <file>`: dry-run proposal or `--execute` rename.
-/// Reject rename targets that are neither documents, images nor videos.
+/// Reject rename targets that are neither documents, images, videos nor folders.
 ///
 /// Unknown types fail fast here with the message that names what the command
-/// accepts, so no extraction or model call is spent on them.
+/// accepts, so no extraction or model call is spent on them. Folders are
+/// accepted by filesystem type (a folder called `notes.png` is a folder); the
+/// folder-specific refusals (system trees, bundles, the Library tree, caches,
+/// hidden folders, the working directory) are applied by the planner, which
+/// compares canonical paths.
 fn reject_foreign_rename_target(target: &Path) -> Result<()> {
-    if kaseifu::context::image_metadata::is_image_file(target)
+    if target.is_dir()
+        || kaseifu::context::image_metadata::is_image_file(target)
         || kaseifu::context::video::is_video_file(target)
     {
         return Ok(());
@@ -1298,6 +1338,7 @@ async fn rename_file(
                     target,
                     perception: Option::None,
                     video: Option::None,
+                    directory: Option::None,
                 },
             );
             Ok(())
@@ -1320,6 +1361,7 @@ async fn rename_file(
                     target,
                     perception: Option::None,
                     video: Option::None,
+                    directory: Option::None,
                 },
             );
             Ok(())
@@ -1349,6 +1391,7 @@ fn rename_ready(
                 target,
                 perception: plan.perception.as_ref(),
                 video: plan.video.as_ref(),
+                directory: plan.directory.as_ref(),
             },
         );
         return Ok(());
@@ -1368,6 +1411,7 @@ fn rename_ready(
             target,
             perception: plan.perception.as_ref(),
             video: plan.video.as_ref(),
+            directory: plan.directory.as_ref(),
         },
     );
     Ok(())
@@ -1424,7 +1468,7 @@ fn apply_single_undo(history: &OperationHistory) -> bool {
             false
         }
         Err(error) => {
-            println!("undo failed: {error:?}");
+            println!("undo failed: {error}");
             false
         }
     }

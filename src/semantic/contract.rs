@@ -99,6 +99,77 @@ pub struct FmInput {
     pub perception: Option<FmPerception>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video: Option<FmVideoFacts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory: Option<FmDirectoryFacts>,
+}
+
+/// What kaseifu read from a folder's own children (Phase 7).
+///
+/// A compatible extension of `fm-rename-v1` like [`FmPerception`] and
+/// [`FmVideoFacts`]: the field is optional, no key was removed or retyped, both
+/// sides ignore unknown fields, and the envelope version stays the same. Only
+/// folder targets carry it.
+///
+/// The facts are the bounded sample the model needs to name a *collection*
+/// (original spec section 5.4): how many entries were seen, whether the read
+/// hit its cap, the child names, and the file type distribution. The folder's
+/// own name is deliberately not repeated here or in the prompt: it is the
+/// thing being replaced, not evidence. Child text excerpts travel in
+/// `semantic_signals` (the existing `T:` path), so no second text channel
+/// exists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FmDirectoryFacts {
+    pub total_entries: usize,
+    pub file_count: usize,
+    pub directory_count: usize,
+    /// True when the folder held more entries than the read bound.
+    pub truncated: bool,
+    pub files: Vec<String>,
+    pub folders: Vec<String>,
+    pub extensions: Vec<FmExtensionCount>,
+}
+
+/// One file type in a folder's distribution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FmExtensionCount {
+    pub extension: String,
+    pub count: usize,
+}
+
+impl From<&crate::models::file_context::DirectoryFacts> for FmDirectoryFacts {
+    /// Copy the bounded observation onto the wire, bounding every list again
+    /// (the request never carries more than the folder budget, whatever the
+    /// observation held).
+    fn from(facts: &crate::models::file_context::DirectoryFacts) -> Self {
+        let max_name = crate::models::file_context::DirectoryFacts::MAX_NAME_CHARS;
+        Self {
+            total_entries: facts.total_entries,
+            file_count: facts.file_count,
+            directory_count: facts.directory_count,
+            truncated: facts.truncated,
+            files: facts
+                .files
+                .iter()
+                .take(crate::models::file_context::DirectoryFacts::MAX_FILES)
+                .map(|name| bound_chars(name, max_name))
+                .collect(),
+            folders: facts
+                .folders
+                .iter()
+                .take(crate::models::file_context::DirectoryFacts::MAX_FOLDERS)
+                .map(|name| bound_chars(name, max_name))
+                .collect(),
+            extensions: facts
+                .extensions
+                .iter()
+                .take(crate::models::file_context::DirectoryFacts::MAX_EXTENSIONS)
+                .map(|entry| FmExtensionCount {
+                    extension: bound_chars(&entry.extension, 16),
+                    count: entry.count,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Video facts already measured in Swift (AVFoundation, Phase 6).
@@ -545,6 +616,7 @@ mod tests {
                 image: None,
                 perception: None,
                 video: None,
+                directory: None,
             },
         };
         let json = serde_json::to_value(&request).expect("serializes");
@@ -603,6 +675,7 @@ mod tests {
                 }),
                 perception: Some(FmPerception::from(&info)),
                 video: None,
+                directory: None,
             },
         };
         let json = serde_json::to_value(&request).expect("serializes");
@@ -654,6 +727,7 @@ mod tests {
                 image: None,
                 perception: None,
                 video: Some(FmVideoFacts::from(&info)),
+                directory: None,
             },
         };
         let json = serde_json::to_value(&request).expect("serializes");

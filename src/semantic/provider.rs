@@ -19,10 +19,10 @@ use std::time::Duration;
 
 use super::bridge::{FmBridge, FmBridgeError, SwiftFmBridge};
 use super::contract::{
-    self, AnalysisFlags, Availability, ContractError, ErrorKind, FmErrorInfo, FmImageFacts,
-    FmInput, FmPerception, FmRequest, FmResponse, FmStatus, FmVideoFacts, MAX_FILENAME_CHARS,
-    MAX_LANGUAGE_CHARS, MAX_PARENT_CHARS, MAX_PATH_CHARS, MAX_REQUEST_ID_CHARS, SCHEMA_VERSION,
-    SemanticInfo, TargetKind,
+    self, AnalysisFlags, Availability, ContractError, ErrorKind, FmDirectoryFacts, FmErrorInfo,
+    FmImageFacts, FmInput, FmPerception, FmRequest, FmResponse, FmStatus, FmVideoFacts,
+    MAX_FILENAME_CHARS, MAX_LANGUAGE_CHARS, MAX_PARENT_CHARS, MAX_PATH_CHARS, MAX_REQUEST_ID_CHARS,
+    SCHEMA_VERSION, SemanticInfo, TargetKind,
 };
 use super::perception::PerceptionError;
 use super::video::VideoPerception;
@@ -257,14 +257,20 @@ pub fn build_request(
             image: image_facts(context),
             perception: perception_facts(context),
             video: video_facts(context),
+            directory: directory_facts(context),
         },
     }
 }
 
-/// The target kind Phase 2 and later can decide: images and videos by
-/// extension, the rest is a document.
+/// The target kind this build can decide: folders by filesystem type, images
+/// and videos by extension, the rest is a document.
+///
+/// The filesystem type wins over the name: a folder called `notes.png` is a
+/// folder (original spec section 5.4).
 pub fn target_kind(path: &Path) -> TargetKind {
-    if crate::context::image_metadata::is_image_file(path) {
+    if crate::context::directory::is_directory_target(path) {
+        TargetKind::Directory
+    } else if crate::context::image_metadata::is_image_file(path) {
         TargetKind::Image
     } else if crate::context::video::is_video_file(path) {
         TargetKind::Video
@@ -317,6 +323,15 @@ fn video_facts(context: &NormalizedFileContext) -> Option<FmVideoFacts> {
         return None;
     }
     Some(FmVideoFacts::from(info))
+}
+
+/// Folder facts kaseifu read from the target's children (Phase 7); `None` when
+/// the observation carries none (files, images, videos, or a folder that was
+/// not read). The facts are already bounded by the context layer, and the wire
+/// type bounds them again.
+fn directory_facts(context: &NormalizedFileContext) -> Option<FmDirectoryFacts> {
+    let facts = context.directory.as_ref()?;
+    Some(FmDirectoryFacts::from(facts))
 }
 
 /// `make model`, omitting empty parts.

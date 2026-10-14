@@ -82,6 +82,8 @@ pub struct NormalizedFileContext {
     pub perception: Option<PerceptionInfo>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub video: Option<VideoInfo>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub directory: Option<DirectoryFacts>,
 }
 
 /// Video facts the Swift bridge measured through AVFoundation (Phase 6).
@@ -217,6 +219,65 @@ impl ImageMetadata {
     /// True when a capture time is present.
     pub fn has_capture_time(&self) -> bool {
         self.capture_time.is_some()
+    }
+}
+
+/// What kaseifu read from a folder's own children (Phase 7, original spec
+/// section 5.4).
+///
+/// This is the folder-side counterpart of [`VideoInfo`]: facts measured by one
+/// bounded read, carried into the request so the model can name a collection.
+/// It is deliberately **not** a second directory summary: the counts come from
+/// [`crate::normalize::noise::DirectorySummary`], the single place that
+/// aggregates `DirectoryEntry` values, and this type carries the observation
+/// the request needs beside those counts (the bounded name samples, the file
+/// type distribution and whether the read hit its cap).
+///
+/// Only a sample ever travels: at most [`DirectoryFacts::MAX_FILES`] file names
+/// and [`DirectoryFacts::MAX_FOLDERS`] folder names, each cut to
+/// [`DirectoryFacts::MAX_NAME_CHARS`] characters. Nothing here is recursive:
+/// only the folder's own children were read (original spec section 5.4 forbids
+/// unbounded recursion).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct DirectoryFacts {
+    /// Entries seen after noise names were dropped (at most 200).
+    pub total_entries: usize,
+    pub file_count: usize,
+    pub directory_count: usize,
+    /// True when the folder held more entries than the read bound: the counts
+    /// are then a floor and the prompt says so instead of claiming a total.
+    pub truncated: bool,
+    /// Bounded, sorted child file names.
+    pub files: Vec<String>,
+    /// Bounded, sorted child folder names.
+    pub folders: Vec<String>,
+    /// File type distribution over every entry that was read, strongest first.
+    pub extensions: Vec<ExtensionCount>,
+}
+
+/// One file type in a folder's distribution.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ExtensionCount {
+    pub extension: String,
+    pub count: usize,
+}
+
+impl DirectoryFacts {
+    /// How many child file names are carried.
+    pub const MAX_FILES: usize = 12;
+    /// How many child folder names are carried.
+    pub const MAX_FOLDERS: usize = 8;
+    /// How many file types are carried.
+    pub const MAX_EXTENSIONS: usize = 8;
+    /// Character budget of one carried child name.
+    pub const MAX_NAME_CHARS: usize = 48;
+
+    /// True when the folder offered nothing to name after exclusions.
+    ///
+    /// The caller holds the proposal instead of naming a folder from its own
+    /// name (original spec section 5.4).
+    pub fn is_empty(&self) -> bool {
+        self.total_entries == 0
     }
 }
 

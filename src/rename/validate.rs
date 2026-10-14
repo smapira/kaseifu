@@ -4,6 +4,7 @@
 //! are an error, never silently replaced. Small one-purpose functions keep
 //! the complexity gate quiet.
 
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 /// Maximum file name length in bytes (filesystem limit guard).
@@ -24,6 +25,7 @@ pub enum NameProblem {
     ReadOnly,
     SourceMissing,
     SourceNotAFile,
+    SourceNotADirectory,
     SourceChanged,
 }
 
@@ -42,6 +44,7 @@ impl std::fmt::Display for NameProblem {
             Self::ReadOnly => write!(f, "target is not writable"),
             Self::SourceMissing => write!(f, "source no longer exists"),
             Self::SourceNotAFile => write!(f, "source is no longer a file"),
+            Self::SourceNotADirectory => write!(f, "source is no longer a folder"),
             Self::SourceChanged => write!(f, "source changed since the proposal"),
         }
     }
@@ -51,11 +54,26 @@ impl std::fmt::Display for NameProblem {
 ///
 /// The extension must match exactly: Phase 4 never changes it.
 pub fn check_filename(name: &str, current_extension: &str) -> Result<(), NameProblem> {
+    check_name_shape(name)?;
+    check_extension_kept(name, current_extension)
+}
+
+/// Check the shape of a bare folder name.
+///
+/// A folder has no extension, so the extension rule does not apply to it: a
+/// dot inside the name is part of the name (`v1.2 notes`), not a second
+/// extension. Every other rule is the same one files answer to, checked by
+/// the same functions (original spec section 9.1).
+pub fn check_directory_name(name: &str) -> Result<(), NameProblem> {
+    check_name_shape(name)
+}
+
+/// The shape rules every rename target answers to.
+fn check_name_shape(name: &str) -> Result<(), NameProblem> {
     check_nonempty(name)?;
     check_dot_entry(name)?;
     check_separators(name)?;
     check_length(name)?;
-    check_extension_kept(name, current_extension)?;
     Ok(())
 }
 
@@ -191,6 +209,68 @@ fn check_parent_usable(destination: &Path) -> Result<(), NameProblem> {
     Ok(())
 }
 
+/// A proposal-time identity for a folder (TOCTOU recheck).
+///
+/// A folder's size and modification time move every time a child is added or
+/// removed, so comparing them would refuse legitimate renames while still not
+/// answering the real question ("is this the same folder?"). The device and
+/// inode pair answers exactly that question: the folder may have gained and
+/// lost children, but it is still the same object on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectorySnapshot {
+    pub device: u64,
+    pub inode: u64,
+}
+
+/// Snapshot a folder's identity (device and inode).
+pub fn snapshot_directory(source: &Path) -> Result<DirectorySnapshot, NameProblem> {
+    let metadata = std::fs::metadata(source).map_err(|_| NameProblem::SourceMissing)?;
+    if !metadata.is_dir() {
+        return Err(NameProblem::SourceNotADirectory);
+    }
+    Ok(DirectorySnapshot {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+
+/// Re-verify the execution preconditions for a folder immediately before
+/// rename.
+///
+/// Refuses when the folder vanished, became something else, is no longer the
+/// same object, or became unwritable, when the destination appeared, or when
+/// the parent directory is unusable. Same shape as
+/// [`recheck_before_execute`], with the folder identity in place of the file
+/// size and modification time.
+pub fn recheck_directory_before_execute(
+    source: &Path,
+    destination: &Path,
+    before: &DirectorySnapshot,
+) -> Result<(), NameProblem> {
+    check_directory_stable(source, before)?;
+    check_destination_free(destination)?;
+    check_parent_usable(destination)?;
+    Ok(())
+}
+
+/// The folder must still be the folder the proposal was built for.
+fn check_directory_stable(source: &Path, before: &DirectorySnapshot) -> Result<(), NameProblem> {
+    if is_symlink(source) {
+        return Err(NameProblem::Symlink);
+    }
+    let metadata = std::fs::metadata(source).map_err(|_| NameProblem::SourceMissing)?;
+    if !metadata.is_dir() {
+        return Err(NameProblem::SourceNotADirectory);
+    }
+    if metadata.permissions().readonly() {
+        return Err(NameProblem::ReadOnly);
+    }
+    if metadata.dev() != before.device || metadata.ino() != before.inode {
+        return Err(NameProblem::SourceChanged);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +301,74 @@ mod tests {
             Err(NameProblem::ExtensionChanged)
         );
         assert_eq!(check_filename("2026-10-14_title.txt", "txt"), Ok(()));
+    }
+
+    #[test]
+    fn directory_names_keep_their_dots_and_answer_the_other_rules() {
+        assert_eq!(check_directory_name(""), Err(NameProblem::Empty));
+        assert_eq!(check_directory_name("."), Err(NameProblem::DotEntry));
+        assert_eq!(check_directory_name(".."), Err(NameProblem::DotEntry));
+        assert_eq!(check_directory_name("a/b"), Err(NameProblem::Separator));
+        assert_eq!(check_directory_name("a\u{0}b"), Err(NameProblem::Separator));
+        assert_eq!(check_directory_name("a:b"), Err(NameProblem::Separator));
+        assert_eq!(
+            check_directory_name(&"a".repeat(300)),
+            Err(NameProblem::TooLong)
+        );
+        // A folder has no extension: a dot is part of the name.
+        for name in ["v1.2 notes", "2026. invoices", "project.x"] {
+            assert_eq!(check_directory_name(name), Ok(()), "must pass: {name}");
+            assert_eq!(
+                check_filename(name, ""),
+                Err(NameProblem::ExtensionChanged),
+                "the file rule stays strict about dots: {name}"
+            );
+        }
+        // Without a dot the two rules agree (the file rule only objects when
+        // the last dot would read as a changed extension).
+        let japanese = "\u{8acb}\u{6c42}\u{30fb}\u{5951}\u{7d04}\u{95a2}\u{9023}\u{66f8}\u{985e}";
+        assert_eq!(check_directory_name(japanese), Ok(()));
+        assert_eq!(check_filename(japanese, ""), Ok(()));
+    }
+
+    #[test]
+    fn directory_snapshots_track_the_object_not_its_contents() {
+        let dir = std::env::temp_dir().join(format!("kaseifu-rename-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let folder = dir.join("folder");
+        std::fs::create_dir_all(&folder).expect("folder");
+        let before = snapshot_directory(&folder).expect("snapshot");
+        // Writing a child moves the folder's size and mtime; the identity stays
+        // and the recheck must accept it (a legitimate rename is not refused).
+        std::fs::write(folder.join("child.txt"), b"x").expect("child");
+        assert_eq!(
+            recheck_directory_before_execute(&folder, &dir.join("moved"), &before),
+            Ok(())
+        );
+        // A different folder at the same path is a different object.
+        let replaced = dir.join("folder");
+        std::fs::remove_dir_all(&replaced).expect("remove");
+        std::fs::create_dir_all(&replaced).expect("recreate");
+        assert_eq!(
+            recheck_directory_before_execute(&replaced, &dir.join("moved"), &before),
+            Err(NameProblem::SourceChanged)
+        );
+        // A file is not a folder.
+        let file = dir.join("file.txt");
+        std::fs::write(&file, b"x").expect("file");
+        assert_eq!(
+            snapshot_directory(&file),
+            Err(NameProblem::SourceNotADirectory)
+        );
+        // The destination must stay free.
+        let taken = dir.join("taken");
+        std::fs::create_dir_all(&taken).expect("taken");
+        let fresh = snapshot_directory(&folder).expect("snapshot again");
+        assert!(matches!(
+            recheck_directory_before_execute(&folder, &taken, &fresh),
+            Err(NameProblem::Collision(_))
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

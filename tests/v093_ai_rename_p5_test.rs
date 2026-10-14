@@ -209,6 +209,7 @@ fn v093_image_requests_serialize_under_fm_rename_v1() {
             // never a video target.
             perception: None,
             video: None,
+            directory: None,
         },
     };
     let json = serde_json::to_value(&request).expect("serializes");
@@ -626,6 +627,7 @@ fn v093_image_facts_carry_no_person_fields() {
         }),
         perception: None,
         video: None,
+        directory: None,
     };
     let value = serde_json::to_value(&input).expect("serializes");
     let image = value.get("image").expect("image object present");

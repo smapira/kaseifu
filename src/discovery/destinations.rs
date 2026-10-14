@@ -12,53 +12,30 @@
 //! filter in `similarity` and the aggregation gate in `candidates` both call
 //! [`is_excluded_destination`], so a rule lives here and nowhere else.
 //!
+//! The name-shape rules that a rename target must answer to as well (bundles,
+//! macOS library trees, OS areas, cache and temporary areas, hidden names, the
+//! system tree names) live in `crate::context::directory`; this module calls
+//! them instead of keeping a second copy, and keeps the two rules that are
+//! destination-specific (the system tree *subtree* rule and the
+//! machine-generated name rule).
+//!
 //! The rules below describe *path shapes* that cannot be a destination
 //! rather than a list of banned paths, so they hold for folders that were
 //! never measured. Every rule was chosen against a real population: a scan
 //! of 171,428 directories under `$HOME` and `/Volumes` found no hand-made
 //! folder that any rule here would drop.
 
+use crate::context::directory::{
+    is_bundle_container, is_cache_or_temp, is_hidden_name, is_library_tree, is_system_area,
+    is_system_tree_name,
+};
 use crate::discovery::scoring;
 
-/// Extensions of macOS package / app-managed container directories (without
-/// the leading dot): a file inside one of these belongs to an application's
-/// own storage, not to a folder the user organizes by hand. Extensions
-/// ending in `library` are matched separately because the family is large
-/// (`.library`, `.photoslibrary`, `.tvlibrary`, `.aplibrary`, …).
-const BUNDLE_EXTENSIONS: [&str; 6] = ["app", "bundle", "framework", "pkg", "plugin", "xcodeproj"];
-
-/// Deepest path component that counts as a macOS library root: `/Library`,
-/// `/Users/<user>/Library`, `/Volumes/<volume>/Library`. A `Library` folder
-/// further down a user tree can be a folder the user made, so it stays.
-const LIBRARY_ROOT_MAX_DEPTH: usize = 2;
-
-/// Path component names that only appear inside cache and temp areas. The
-/// plural forms cover macOS (`Caches`), the singular forms cover app-local
-/// folders (`cache/`), and the `*.cache` suffix covers dotted variants such
-/// as `~/.cache`, which may sit above a candidate directory.
-const CACHE_COMPONENT_NAMES: [&str; 3] = ["cache", "caches", "temporaryitems"];
-
-/// Hidden system areas that exist on every macOS volume and are never a
-/// destination. The destination's own name is already refused while it is
-/// hidden; naming the components closes the nested case
-/// (`~/.Trash/old-album`) where a visible folder name would otherwise pass.
-const SYSTEM_AREA_COMPONENT_NAMES: [&str; 6] = [
-    ".trash",
-    ".trashes",
-    ".spotlight-v100",
-    ".fseventsd",
-    ".documentrevisions-v100",
-    ".temporaryitems",
-];
-
-/// Names of the root-level directories macOS reserves for itself. Only the
-/// **first** component of an absolute path is matched (R8): macOS system
-/// trees live at the volume root, while `/Users/me/var`, `/Users/me/tmp`,
-/// `/Users/me/system-backup` or `/Users/me/private-docs` are folders the
-/// user made. Matching any component (or a substring, as an earlier version
-/// did with `contains`) silently dropped those user folders from the
-/// candidate list.
-const SYSTEM_ROOT_COMPONENTS: [&str; 7] = ["system", "private", "usr", "bin", "sbin", "var", "tmp"];
+// The name-shape rules below were implemented here first and now live in
+// `crate::context::directory`, which the rename policy also reads. Each rule
+// has exactly one implementation; this module keeps the rules that are
+// specific to *destination* eligibility (the system tree subtree rule and the
+// machine-generated name rule) plus the policy decision itself.
 
 /// Shortest hex token treated as a content hash or storage id.
 const HEX_TOKEN_MIN_LENGTH: usize = 16;
@@ -81,39 +58,13 @@ pub fn is_excluded_destination(dir: &str) -> bool {
     let Some(name) = components.last() else {
         return false;
     };
-    is_inside_bundle(&components)
-        || is_macos_library_tree(&components)
+    components.iter().any(|part| is_bundle_container(part))
+        || is_library_tree(&components)
         || is_system_root_tree(dir, &components)
-        || is_hidden_destination(name)
+        || is_hidden_name(name)
         || is_cache_or_temp(&components)
         || is_system_area(&components)
         || is_generated_name(name)
-}
-
-/// True when any component is an app-managed container, e.g.
-/// `~/Pictures/Eagle.library/images` or `/Applications/Foo.app/Contents`.
-fn is_inside_bundle(components: &[&str]) -> bool {
-    components.iter().any(|name| is_bundle_container(name))
-}
-
-/// True when the component's extension marks a package: `Eagle.library`,
-/// `Photos.photoslibrary`, `App.app`. The extension sits after the last dot,
-/// so a plain folder named `mylibrary` or `notes.app-backup` stays.
-fn is_bundle_container(name: &str) -> bool {
-    let lowered = name.to_lowercase();
-    let Some((_, extension)) = lowered.rsplit_once('.') else {
-        return false;
-    };
-    extension.ends_with("library") || BUNDLE_EXTENSIONS.contains(&extension)
-}
-
-/// True for the standard macOS library trees (`/Library`,
-/// `/Users/<user>/Library`, `/Volumes/<volume>/Library`).
-fn is_macos_library_tree(components: &[&str]) -> bool {
-    components
-        .iter()
-        .take(LIBRARY_ROOT_MAX_DEPTH + 1)
-        .any(|name| name.eq_ignore_ascii_case("Library"))
 }
 
 /// True for the macOS system trees that sit at the volume root: `/System`,
@@ -129,35 +80,7 @@ fn is_system_root_tree(dir: &str, components: &[&str]) -> bool {
     }
     components
         .first()
-        .is_some_and(|name| SYSTEM_ROOT_COMPONENTS.contains(&name.to_lowercase().as_str()))
-}
-
-/// True when the destination directory itself is hidden (`.Trash`,
-/// `.config`): macOS hides such folders from the user, so they cannot be a
-/// deliberate destination.
-///
-/// Only the destination's own name is inspected. A visible folder inside a
-/// hidden tree (`~/.ghq/<repo>/static/img`, a checkout under `.delta/`) is
-/// still reachable through its visible part and is kept.
-fn is_hidden_destination(name: &str) -> bool {
-    name.starts_with('.') && name != "." && name != ".."
-}
-
-/// True when any component marks a cache or temporary area, e.g.
-/// `~/Library/Caches/...`, `/Volumes/Work/TemporaryItems` or `.../.cache/...`.
-fn is_cache_or_temp(components: &[&str]) -> bool {
-    components.iter().any(|name| {
-        let lowered = name.to_lowercase();
-        CACHE_COMPONENT_NAMES.contains(&lowered.as_str()) || lowered.ends_with(".cache")
-    })
-}
-
-/// True when any component names an OS-reserved area (trash, Spotlight
-/// index, volume metadata).
-fn is_system_area(components: &[&str]) -> bool {
-    components
-        .iter()
-        .any(|name| SYSTEM_AREA_COMPONENT_NAMES.contains(&name.to_lowercase().as_str()))
+        .is_some_and(|name| is_system_tree_name(name))
 }
 
 /// True when the directory name looks machine-generated rather than chosen.

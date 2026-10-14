@@ -194,13 +194,14 @@ plan even if one arrives from somewhere else. Without a terminal, `--select`
 fails with guidance; `--select --format json` prints the candidate list
 instead of prompting.
 
-### Rename a file (AI naming)
+### Rename a file or folder (AI naming)
 
 Propose a content-based name, and apply it on request:
 
 ```bash
 kaseifu rename ~/Desktop/report.pdf            # dry run: print the proposal
 kaseifu rename ~/Desktop/report.pdf --execute  # rename it (journaled, undoable)
+kaseifu rename ~/Documents/untitled-folder     # a folder, named from its contents
 ```
 
 The name comes from the rule you pick, and the rule's variables come from the
@@ -230,9 +231,28 @@ kaseifu rename --delete-preset work
 
 Behaviour worth knowing:
 
-- **Documents, images and videos.** Documents are txt, md, pdf and html;
-  images are jpg, jpeg, png, heic, heif, tif, tiff and webp; videos are mp4,
-  mov, m4v, 3gp and 3g2. Other types are refused with the reason.
+- **Documents, images, videos and folders.** Documents are txt, md, pdf and
+  html; images are jpg, jpeg, png, heic, heif, tif, tiff and webp; videos are
+  mp4, mov, m4v, 3gp and 3g2; folders are any directory kaseifu may rename.
+  Other types are refused with the reason.
+- **Folders are named from what is inside them.** kaseifu reads the folder's own
+  children (names, file types, and the bounded text of up to three document
+  children) and names the collection from that: `新しいフォルダ/` with invoices,
+  a contract and a payment sheet becomes `請求・契約関連書類/`. The folder's
+  current name is the string being replaced, so it is not sent to the model as
+  evidence. The read is bounded: at most 200 entries are read, at most 12 file
+  names and 8 folder names reach the model, and the reading never recurses into
+  a child folder (a grandchild is never opened). An empty folder (or one with
+  nothing but system files) and a folder whose contents share no theme are
+  reported as `status: held` with the reason instead of being renamed after a
+  guess.
+- **Folders kaseifu refuses to touch.** The volume root, the system trees
+  themselves (`/System`, `/usr`, `/tmp`, ...), the home directory, the working
+  directory (and their ancestors), app bundles (`Foo.app`,
+  `Photos.photoslibrary`), anything inside the macOS Library tree, OS areas
+  (trash, Spotlight index), cache and temporary areas, and hidden folders.
+  A folder *inside* a system tree stays renameable, so a scratch folder under
+  `/tmp` or `$TMPDIR` works.
 - **Images are described on device.** Apple Vision labels the scene (`outdoor`,
   `moon`, ...) and the model turns those into the title, so `IMG_1234.png` can
   become `2026-10-14_夜空の月.png`. The image is opened read-only and never
@@ -248,8 +268,10 @@ Behaviour worth knowing:
 - **Dates.** Images prefer the EXIF capture time (the Spotlight EXIF value,
   then the EXIF inside the file); videos prefer the container's own recording
   date; documents prefer the creation time, then the modification time, then a
-  date found in the text. `--date-format` picks the rendering, and the display
-  reports `date_source` so you can see which one was used.
+  date found in the text; folders use their own creation and modification times
+  (a folder has neither a capture time nor a text body). `--date-format` picks
+  the rendering, and the display reports `date_source` so you can see which one
+  was used (`now` means the last resort was used, and is reported as such).
 - **Missing values hold the proposal back.** A rule whose required variable is
   empty, a name collision, a dangerous name (`/`, `..`, an extension change) or
   a document that looks like a prompt-injection payload is reported as
@@ -257,14 +279,22 @@ Behaviour worth knowing:
 - **Names stay shell friendly.** The stem is cut to 80 characters at a word
   boundary, whitespace runs become `_`, and the extension never changes.
 - **Journal and undo.** An executed rename is one journal row, and
-  `kaseifu undo` reverses it exactly like an organize move.
+  `kaseifu undo` reverses it exactly like an organize move. That includes a
+  folder rename (the folder and its children move back under the old name) and
+  the case where a folder was renamed around child files: undo always reverses
+  the newest operation first, so a parent folder is renamed back before any row
+  recorded under its old name is reached, and those rows resolve again. kaseifu
+  never rewrites journal rows; when a recorded path cannot be found and no row
+  explains where it went (a rename done by another tool, or an interrupted
+  operation), the undo refuses with that path and changes nothing.
 - **No model, no rename.** Without Apple Intelligence the command exits with
   `model unavailable: ...`; it never falls back to another model.
 - `--format json` (with or without `--execute`) prints one object: `target`,
   `current_name`, `pattern`, `proposal`, `date_source`, `status`, `reason`,
   `operation_id`, `perception` for images and videos (the labels, or why they
-  are missing), and `video` for videos (the measured metadata and the frame
-  count).
+  are missing), `video` for videos (the measured metadata and the frame count),
+  and `directory` for folders (the entry counts, whether the read hit its cap,
+  and the file type distribution).
 
 ### Undo
 
@@ -535,7 +565,7 @@ src/
 ├── operations/          # Organize, plan, move, undo (Phase 5)
 ├── policy/              # Auto/review/refuse decisions
 ├── platform/            # macOS-specific code (FSEvents)
-├── rename/              # Naming rules, document + image + video rename
+├── rename/              # Naming rules, document + image + video + folder rename
 ├── semantic/            # Foundation Models bridge + semantic provider (Phase 0-2)
 ├── storage/             # SQLite history + cache
 └── watch/               # FSEvents watcher + coordinator (Phase 6)

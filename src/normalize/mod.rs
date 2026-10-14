@@ -131,6 +131,7 @@ pub fn normalize_with_options(
         image_metadata,
         perception: None,
         video: None,
+        directory: None,
     })
 }
 

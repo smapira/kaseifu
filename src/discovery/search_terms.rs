@@ -132,6 +132,7 @@ mod tests {
             image_metadata: None,
             perception: None,
             video: None,
+            directory: None,
         };
 
         let terms = extract_terms(&normalized);
@@ -157,6 +158,7 @@ mod tests {
             image_metadata: None,
             perception: None,
             video: None,
+            directory: None,
         };
 
         let terms = extract_terms(&normalized);

@@ -7,6 +7,7 @@
 //! document  (bounded document text extraction, T: signals, document dates)
 //! image     (extension-side image classification; pixels stay in Swift)
 //! video     (extension-side video classification; frames stay in Swift)
+//! directory (folder classification and rename refusals; facts stay in context)
 //! store     (user presets and the default rule in the existing SQLite DB)
 //! validate  (file name checks, original spec 9.1)
 //! service   (planner plus executor: SemanticProvider -> proposal -> journal)
@@ -17,6 +18,7 @@
 //! (original spec 6.5): a template whose required variable is empty is held
 //! back with its reason.
 
+pub mod directory;
 pub mod document;
 pub mod image;
 pub mod rules;
