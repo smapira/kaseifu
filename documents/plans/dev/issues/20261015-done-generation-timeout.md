@@ -43,6 +43,28 @@ proposal: 2026-07-05_道路で自動車が走行する写真.jpeg / status: prop
 
 ## 検証
 
-- `tests/v098_rename_timeout_test.rs`（stub provider、Apple Intelligence 不要）。
-- 実機: タイムアウトを一時的に 1 ms にしたビルドで、`Error: the on-device model did not answer in time, even after a retry; the file was not changed` が出ること（内部語が消えていること）。
+- `tests/v098_rename_timeout_test.rs`（stub provider、Apple Intelligence 不要、4 テスト）。
+- 実機（文言の確認）: `DEFAULT_FM_TIMEOUT` を一時的に 1 ms にして同じ経路を通した実測。
+
+```text
+$ kaseifu rename /tmp/to-work/note.txt
+Error: the on-device model did not answer in time, even after a retry; the file was not changed
+（exit 1、0.97 秒）
+
+$ kaseifu rename /tmp/to-work --recursive
+folder: /tmp/to-work
+proposals: 0
+held: 1
+status: proposed
+mode: dry-run (pass --execute to rename)
+1. note.txt  [held: the on-device model did not answer in time, even after a retry; the file was not changed]
+```
+
+- 確認後、`DEFAULT_FM_TIMEOUT` は 20 秒に戻し、ツリーが clean であることを確かめた（`git status` が空）。
+- 通常の経路が壊れていないことも同じビルドで確認（`proposal: 2026-10-14_Quarterly_budget_review_notes_for_the_finance_team.txt`）。
+
+## まだやっていないこと
+
+- 実写真（3840x2160 級）5 枚での失敗率と所要時間の記録。頻繁にタイムアウトするなら、再試行ではなく `--timeout` か閾値の見直しが必要になる。
+- インストール済みバイナリ（`~/.cargo/bin/kaseifu`）はこの修正前のもの。使うなら `cargo install --path .` の再実行が要る。
 
