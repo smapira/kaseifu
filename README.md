@@ -202,6 +202,7 @@ Propose a content-based name, and apply it on request:
 kaseifu rename ~/Desktop/report.pdf            # dry run: print the proposal
 kaseifu rename ~/Desktop/report.pdf --execute  # rename it (journaled, undoable)
 kaseifu rename ~/Documents/untitled-folder     # a folder, named from its contents
+kaseifu rename ~/Pictures/inbox --recursive    # everything inside it, one preview
 ```
 
 The name comes from the rule you pick, and the rule's variables come from the
@@ -278,6 +279,19 @@ Behaviour worth knowing:
   `status: held` with a reason; nothing is silently repaired or invented.
 - **Names stay shell friendly.** The stem is cut to 80 characters at a word
   boundary, whitespace runs become `_`, and the extension never changes.
+- **A whole folder at once (`--recursive`).** `kaseifu rename <folder>
+  --recursive` renames what is inside the folder instead of the folder itself:
+  at most three levels deep and at most 50 targets, one numbered line each,
+  with the proposal, conflict and held counts above them. Two items that would
+  write the same name (including two names that differ only in case, which on
+  the default macOS volume is one file) are both held, so a batch never
+  half-writes a name. Ready items are applied children first, because renaming
+  a folder moves everything inside it, and those rows undo in the reverse
+  order. The run says what it could not do: `bounded:` appears when the tree
+  held more targets than the cap, and a target kaseifu refuses is one `held`
+  line instead of a failed run. On a terminal `--execute` asks
+  `Apply changes? [y/N]` first (`--yes` skips the question, and a run without a
+  terminal never asks, so a pipeline cannot hang).
 - **Journal and undo.** An executed rename is one journal row, and
   `kaseifu undo` reverses it exactly like an organize move. That includes a
   folder rename (the folder and its children move back under the old name) and
@@ -294,7 +308,10 @@ Behaviour worth knowing:
   `operation_id`, `perception` for images and videos (the labels, or why they
   are missing), `video` for videos (the measured metadata and the frame count),
   and `directory` for folders (the entry counts, whether the read hit its cap,
-  and the file type distribution).
+  and the file type distribution). A `--recursive` batch prints one object with
+  `status`, `target`, `proposals`, `conflicts`, `held`, `noop`, `truncated`,
+  `applied`, `undo_last` and `items`, where each item reuses the single-target
+  key names.
 
 ### Undo
 
@@ -565,7 +582,7 @@ src/
 ├── operations/          # Organize, plan, move, undo (Phase 5)
 ├── policy/              # Auto/review/refuse decisions
 ├── platform/            # macOS-specific code (FSEvents)
-├── rename/              # Naming rules, document + image + video + folder rename
+├── rename/              # Naming rules, document + image + video + folder + batch
 ├── semantic/            # Foundation Models bridge + semantic provider (Phase 0-2)
 ├── storage/             # SQLite history + cache
 └── watch/               # FSEvents watcher + coordinator (Phase 6)

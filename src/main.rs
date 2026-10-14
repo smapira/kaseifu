@@ -19,6 +19,7 @@ use kaseifu::presentation::renderers::{
 };
 use kaseifu::presentation::{OutputFormat, resolve_mode};
 use kaseifu::rename::{
+    batch::{Applied, BatchItem, BatchOutcome, BatchReport},
     document::classify_document,
     rules::{PRESETS, find_preset, is_date_format},
     service::{
@@ -26,7 +27,8 @@ use kaseifu::rename::{
     },
     store::RenameStore,
 };
-use kaseifu::semantic::provider::FoundationModelsProvider;
+use kaseifu::semantic::Availability;
+use kaseifu::semantic::provider::{FoundationModelsProvider, SemanticProvider};
 use kaseifu::storage::history::{OperationHistory, journal_path};
 use kaseifu::uninstall;
 use kaseifu::watch::coordinator::WatchConfig;
@@ -253,7 +255,8 @@ enum Commands {
     /// what is inside them (child names, file types and a few child files),
     /// and a folder kaseifu must not touch (system trees, app bundles, the
     /// Library tree, caches, hidden folders, the working directory) is
-    /// refused with the reason.
+    /// refused with the reason. With --recursive the folder is not renamed:
+    /// everything inside it is, after the whole list has been shown.
     Rename(Box<RenameCli>),
 
     /// Print a shell completion script (only zsh can be installed).
@@ -894,6 +897,12 @@ struct RenameCli {
     /// Request a dry run explicitly (the default; cannot be combined with --execute).
     #[arg(long)]
     dry_run: bool,
+    /// Rename everything inside this folder (bounded), not the folder itself.
+    #[arg(long)]
+    recursive: bool,
+    /// Answer yes to the batch confirmation (used with --recursive --execute).
+    #[arg(long, requires = "recursive")]
+    yes: bool,
     /// Naming pattern: a P01-P12 id or slug (ai, date-title, ...).
     #[arg(long, value_name = "PATTERN")]
     pattern: Option<String>,
@@ -950,6 +959,9 @@ async fn handle_rename(args: RenameCli, format: OutputFormat) -> Result<()> {
     let Some(target) = args.target.as_deref() else {
         return rename_guidance(format);
     };
+    if args.recursive {
+        return rename_batch(&store, target, &args, format).await;
+    }
     rename_file(&store, target, &args, format).await
 }
 
@@ -990,6 +1002,7 @@ fn rename_guidance(format: OutputFormat) -> Result<()> {
         "Rename",
         &[
             "usage: kaseifu rename <file-or-folder> [--pattern PATTERN] [--execute]".to_string(),
+            "batch: kaseifu rename <folder> --recursive [--execute]".to_string(),
             "documents: txt, md, pdf, html".to_string(),
             "images: jpg, jpeg, png, heic, heif, tif, tiff, webp".to_string(),
             "videos: mp4, mov, m4v, 3gp, 3g2".to_string(),
@@ -1298,16 +1311,7 @@ async fn rename_file(
     // and videos are renamed here; unknown types fail fast with the message
     // that names what the command accepts.
     reject_foreign_rename_target(target)?;
-    let options = RenameOptions {
-        pattern: args.pattern.clone(),
-        template: args.template.clone(),
-        preset: args.preset.clone(),
-        prefix: args.prefix.clone(),
-        suffix: args.suffix.clone(),
-        project: args.project.clone(),
-        seq: args.seq,
-        date_format: args.date_format.clone(),
-    };
+    let options = rename_options(args);
     let provider = FoundationModelsProvider::production();
     let history = OperationHistory::open(journal_path())?;
     let outcome = plan_rename(&provider, store, target, &options)
@@ -1370,6 +1374,290 @@ async fn rename_file(
 }
 
 /// Report a ready plan: preview it, or execute and report the journal id.
+/// The naming options one `rename` invocation carries.
+fn rename_options(args: &RenameCli) -> RenameOptions {
+    RenameOptions {
+        pattern: args.pattern.clone(),
+        template: args.template.clone(),
+        preset: args.preset.clone(),
+        prefix: args.prefix.clone(),
+        suffix: args.suffix.clone(),
+        project: args.project.clone(),
+        seq: args.seq,
+        date_format: args.date_format.clone(),
+    }
+}
+
+/// `rename <folder> --recursive`: preview or apply a bounded batch.
+///
+/// Planning is sequential and bounded: at most
+/// [`kaseifu::rename::batch::MAX_BATCH_TARGETS`] targets, one on-device
+/// generation each (original spec section 11.2). A target the single-target
+/// rules hold or refuse becomes a held item instead of failing the run (section
+/// 12), and two items that would write one name are held together before
+/// anything is applied.
+async fn rename_batch(
+    store: &RenameStore,
+    root: &Path,
+    args: &RenameCli,
+    format: OutputFormat,
+) -> Result<()> {
+    if !root.is_dir() {
+        anyhow::bail!("--recursive needs a folder: {}", root.display());
+    }
+    let provider = FoundationModelsProvider::production();
+    let options = rename_options(args);
+    let walk = kaseifu::rename::batch::walk(root)?;
+    // An empty folder is an empty batch: nothing to plan means nothing to ask
+    // the model for, so the model is only required when there is work.
+    if !walk.targets.is_empty() {
+        require_model(&provider)?;
+    }
+    let mut report = kaseifu::rename::batch::plan(&provider, store, &walk, root, &options).await;
+    let execute = args.execute && !args.dry_run;
+    // The confirmation question exists only on a terminal and never for machine
+    // output: a run without one must not block, and one invocation must stay one
+    // parseable JSON document (original spec section 8.5 with this tool's
+    // non-TTY rule).
+    let prompt =
+        execute && !args.yes && format != OutputFormat::Json && std::io::stdin().is_terminal();
+    if !execute {
+        emit_batch_report(format, &report, BatchPhase::Preview);
+        return Ok(());
+    }
+    if prompt {
+        emit_batch_report(format, &report, BatchPhase::Awaiting);
+    }
+    if !confirmed_by_prompt(prompt)? {
+        println!("aborted: nothing was renamed");
+        return Ok(());
+    }
+    let history = OperationHistory::open(journal_path())?;
+    kaseifu::rename::batch::apply(&mut report, &history);
+    emit_batch_report(format, &report, BatchPhase::Result);
+    Ok(())
+}
+
+/// Fail the whole run when the on-device model cannot start at all.
+///
+/// A batch is not a place for the same failure repeated per target: the
+/// acceptance criteria ask for a safe exit (original spec section 15), so an
+/// unavailable model is reported once, before any planning is spent.
+fn require_model(provider: &FoundationModelsProvider) -> Result<()> {
+    match provider.availability() {
+        Ok(Availability::Available) => Ok(()),
+        Ok(Availability::Unavailable { reason, detail }) => {
+            let detail = detail.map(|text| format!(": {text}")).unwrap_or_default();
+            anyhow::bail!(
+                "the on-device model is not available ({reason}{detail}); nothing was renamed"
+            )
+        }
+        Err(error) => {
+            anyhow::bail!("the on-device model is not available ({error}); nothing was renamed")
+        }
+    }
+}
+
+/// Ask the confirmation question, when there is one to ask.
+///
+/// Answering `true` without reading anything is the behaviour for every run
+/// without a terminal: `--execute` is already the explicit request, and a
+/// pipeline must never wait for input.
+fn confirmed_by_prompt(prompt: bool) -> Result<bool> {
+    if !prompt {
+        return Ok(true);
+    }
+    print!("Apply changes? [y/N] ");
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+/// Which part of a batch run a report describes.
+///
+/// The summary has to say the right thing at each step: a dry run is not an
+/// execution waiting for its confirmation, and neither is the result of one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BatchPhase {
+    /// Nothing will be applied unless `--execute` is passed.
+    Preview,
+    /// `--execute` was passed and the answer to the question is pending.
+    Awaiting,
+    /// The ready proposals were applied (or refused) and the batch is over.
+    Result,
+}
+
+/// Emit a batch report: one summary panel plus one line per item, or one JSON
+/// document.
+///
+/// The item lines stay plain in every mode: a panel would wrap them, and the
+/// list is the part the user reads (original spec section 8.5).
+fn emit_batch_report(format: OutputFormat, report: &BatchReport, phase: BatchPhase) {
+    if format == OutputFormat::Json {
+        println!("{}", batch_json(report, phase));
+        return;
+    }
+    let mode = resolve_mode(format);
+    let lines = batch_summary_lines(report, phase);
+    if mode.rich {
+        print!(
+            "{}",
+            kaseifu::presentation::components::panel::frame("Rename (batch)", &lines, mode.color)
+        );
+    } else {
+        for line in &lines {
+            println!("{line}");
+        }
+    }
+    for line in batch_item_lines(report) {
+        println!("{line}");
+    }
+}
+
+/// The summary a batch prints above its item list.
+fn batch_summary_lines(report: &BatchReport, phase: BatchPhase) -> Vec<String> {
+    let mut lines = vec![
+        format!("folder: {}", report.root.display()),
+        format!("proposals: {}", report.proposals()),
+        format!("conflicts: {}", report.conflicts()),
+        format!("held: {}", report.held()),
+        format!("noop: {}", report.noop()),
+    ];
+    if report.truncated {
+        lines.push(format!(
+            "bounded: the folder holds more than {} targets; only those were planned",
+            kaseifu::rename::batch::MAX_BATCH_TARGETS
+        ));
+    }
+    lines.push(format!("status: {}", batch_status(report, phase)));
+    match phase {
+        BatchPhase::Preview => lines.push("mode: dry-run (pass --execute to rename)".to_string()),
+        BatchPhase::Awaiting => {
+            lines.push("mode: execute (waiting for confirmation)".to_string());
+        }
+        BatchPhase::Result => {
+            lines.push("order: applied children before parents (deepest first)".to_string());
+            let recorded = report.recorded();
+            if recorded > 0 {
+                lines.push(format!("undo: kaseifu undo --last {recorded}"));
+            }
+        }
+    }
+    lines
+}
+
+/// The word for what a batch report shows.
+fn batch_status(report: &BatchReport, phase: BatchPhase) -> &'static str {
+    if phase != BatchPhase::Result {
+        return "proposed";
+    }
+    let ready = report.proposals();
+    let recorded = report.recorded();
+    if ready > 0 && recorded == ready {
+        "applied"
+    } else if recorded == 0 {
+        "not applied"
+    } else {
+        "partially applied"
+    }
+}
+
+/// One numbered line per item, in the order the batch planned them.
+fn batch_item_lines(report: &BatchReport) -> Vec<String> {
+    report
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| format!("{}. {}", index + 1, batch_item_line(item)))
+        .collect()
+}
+
+/// What one item line says.
+fn batch_item_line(item: &BatchItem) -> String {
+    let mut line = match item.plan() {
+        Some(plan) => format!("{} -> {}", item.current_name, plan.proposal),
+        None => item.current_name.clone(),
+    };
+    if let Some(note) = batch_item_note(item) {
+        line.push_str("  [");
+        line.push_str(&note);
+        line.push(']');
+    }
+    line
+}
+
+/// The bracketed note of one item (why it is held, or what applying did).
+fn batch_item_note(item: &BatchItem) -> Option<String> {
+    if let Some(applied) = &item.applied {
+        return Some(match applied {
+            Applied::Executed(id) => format!("renamed {id}"),
+            Applied::Failed(reason) => format!("failed: {reason}"),
+        });
+    }
+    match &item.outcome {
+        BatchOutcome::Propose(_) => None,
+        BatchOutcome::Conflict { reason } => Some(format!("conflict: {reason}")),
+        BatchOutcome::Held { reason } => Some(format!("held: {reason}")),
+        BatchOutcome::Noop => Some("noop: name is already current".to_string()),
+    }
+}
+
+/// The batch JSON document.
+///
+/// A batch is its own shape, so nothing the single-target form already answers
+/// loses a key; the item objects reuse the single-target key names.
+fn batch_json(report: &BatchReport, phase: BatchPhase) -> serde_json::Value {
+    serde_json::json!({
+        "rename": {
+            "status": batch_status(report, phase),
+            "target": report.root.display().to_string(),
+            "proposals": report.proposals(),
+            "conflicts": report.conflicts(),
+            "held": report.held(),
+            "noop": report.noop(),
+            "truncated": report.truncated,
+            "applied": report.recorded(),
+            "undo_last": report.recorded(),
+            "items": report.items.iter().map(batch_item_json).collect::<Vec<_>>(),
+        }
+    })
+}
+
+/// One batch item in the JSON report.
+fn batch_item_json(item: &BatchItem) -> serde_json::Value {
+    serde_json::json!({
+        "target": item.target.display().to_string(),
+        "current_name": item.current_name,
+        "proposal": item.plan().map(|plan| plan.proposal.clone()),
+        "pattern": item.plan().map(|plan| plan.rule_label.clone()),
+        "date_source": item.plan().map(|plan| plan.date_source),
+        "status": batch_item_status(item),
+        "reason": batch_item_note(item).filter(|_| item.plan().is_none()),
+        "operation_id": match &item.applied {
+            Some(Applied::Executed(id)) => Some(id.clone()),
+            _ => Option::None,
+        },
+    })
+}
+
+/// The word for one item's state.
+fn batch_item_status(item: &BatchItem) -> &'static str {
+    match &item.applied {
+        Some(Applied::Executed(_)) => "executed",
+        Some(Applied::Failed(_)) => "failed",
+        None => match &item.outcome {
+            BatchOutcome::Propose(_) => "proposed",
+            BatchOutcome::Conflict { .. } => "conflict",
+            BatchOutcome::Held { .. } => "held",
+            BatchOutcome::Noop => "noop",
+        },
+    }
+}
+
 fn rename_ready(
     plan: &kaseifu::rename::service::RenamePlan,
     history: &OperationHistory,

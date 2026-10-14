@@ -18,6 +18,7 @@
 //! (original spec 6.5): a template whose required variable is empty is held
 //! back with its reason.
 
+pub mod batch;
 pub mod directory;
 pub mod document;
 pub mod image;
