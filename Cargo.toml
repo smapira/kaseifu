@@ -14,6 +14,12 @@ readme = "README.md"
 name = "kaseifu"
 path = "src/main.rs"
 
+# Research / evaluation interface (TREC benchmark). A separate binary keeps
+# the product CLI, its help scan and the zsh completion unchanged.
+[[bin]]
+name = "kaseifu-bench"
+path = "src/bin/kaseifu_bench.rs"
+
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"

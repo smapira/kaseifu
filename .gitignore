@@ -14,3 +14,14 @@ reports/quality/*
 # Python bytecode (report tooling only; product has no Python dependency)
 __pycache__/
 *.pyc
+
+# TREC benchmark data must never be committed (development instruction section 2:
+# "do not commit the source data"). The canonical location is outside the
+# repository (~/Documents/kaseifu-benchmark/); these entries guard against an
+# accidental copy inside the checkout. `/benchmark/` is anchored to the
+# repository root, so src/benchmark/ (the implementation) is not affected.
+/qrels*.txt
+*.qrels
+/datasets/
+/benchmark/
+*.robust2004

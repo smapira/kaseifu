@@ -17,7 +17,7 @@ pub use scoring::{
     token_jaccard,
 };
 pub use search_terms::{extract_terms, normalize_terms};
-pub use similarity::find_similar_files;
+pub use similarity::{find_similar_files, find_similar_files_with};
 
 /// Maximum number of raw Spotlight hits fetched and scored per run.
 ///
