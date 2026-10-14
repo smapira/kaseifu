@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use crate::models::file_context::{
     DirectoryFacts, NormalizedFileContext, PerceptionInfo, PerceptionLabel, VideoInfo,
 };
-use crate::semantic::contract::SemanticInfo;
+use crate::semantic::contract::{self, SemanticInfo};
 use crate::semantic::perception::PerceptionError;
 use crate::semantic::provider::{SemanticError, SemanticProvider};
 use crate::semantic::video::VideoPerception;
@@ -283,6 +283,8 @@ pub enum RenameError {
     Unreadable(String),
     Semantic(String),
     ModelUnavailable(String),
+    /// The model did not answer in time, even after one retry.
+    ModelTimeout,
     Store(String),
     History(String),
     Io(String),
@@ -296,6 +298,11 @@ impl std::fmt::Display for RenameError {
             Self::Unreadable(detail) => write!(f, "{detail}"),
             Self::Semantic(detail) => write!(f, "{detail}"),
             Self::ModelUnavailable(detail) => write!(f, "model unavailable: {detail}"),
+            Self::ModelTimeout => write!(
+                f,
+                "the on-device model did not answer in time, even after a retry; the file was \
+                 not changed"
+            ),
             Self::Store(detail) => write!(f, "preset store: {detail}"),
             Self::History(detail) => write!(f, "journal: {detail}"),
             Self::Io(detail) => write!(f, "{detail}"),
@@ -916,21 +923,70 @@ fn read_document_signals(
     Ok((signals, document_ymd, contains_prompt_injection(&text)))
 }
 
-/// Run the semantic provider, mapping unavailability explicitly.
+/// Run the semantic provider, retrying once after a timeout.
+///
+/// A timeout is the one failure worth a second attempt: the generation was
+/// cancelled, the retry happens before anything is planned or written, and a
+/// real photo was measured to answer on a retry (2026-10-15, `IMG_2741.jpeg`).
+/// A timeout never repeats more than once, so the worst case for one target
+/// stays two generations (original spec section 11.5, `DEFAULT_FM_TIMEOUT`).
+///
+/// Every other failure becomes a sentence that names the cause and says the
+/// file was not changed, so no internal state name reaches the user.
 async fn analyze(
     provider: &impl SemanticProvider,
     context: &NormalizedFileContext,
 ) -> Result<SemanticInfo, RenameError> {
     match provider.analyze(context).await {
         Ok(info) => Ok(info),
-        Err(error) if error.is_unavailable() => {
-            Err(RenameError::ModelUnavailable(error.to_string()))
-        }
-        Err(SemanticError::ModelInitFailed(detail)) => Err(RenameError::Semantic(format!(
-            "model init failed: {detail}"
-        ))),
-        Err(error) => Err(RenameError::Semantic(format!("skipped: {error}"))),
+        Err(SemanticError::Timeout) => match provider.analyze(context).await {
+            Ok(info) => Ok(info),
+            Err(error) => Err(analyze_error(&error)),
+        },
+        Err(error) => Err(analyze_error(&error)),
     }
+}
+
+/// Character budget for one provider detail quoted back to the user.
+const MAX_ERROR_DETAIL_CHARS: usize = 160;
+
+/// One semantic failure as a user-facing rename error.
+fn analyze_error(error: &SemanticError) -> RenameError {
+    match error {
+        SemanticError::Unavailable { reason } => RenameError::ModelUnavailable(reason.clone()),
+        // Reachable only when a retried timeout is followed by an error that is
+        // not a timeout; kept total so the mapping stays one function.
+        SemanticError::Timeout => RenameError::ModelTimeout,
+        SemanticError::ModelInitFailed(detail) => RenameError::Semantic(format!(
+            "the model session could not start ({}); the file was not changed",
+            one_line(detail)
+        )),
+        SemanticError::InferenceFailed(detail) => RenameError::Semantic(format!(
+            "the model could not answer ({}); the file was not changed",
+            one_line(detail)
+        )),
+        SemanticError::Cancelled => RenameError::Semantic(
+            "the generation was cancelled; the file was not changed".to_string(),
+        ),
+        SemanticError::InvalidResult(detail) => RenameError::Semantic(format!(
+            "the model's answer did not match the expected shape ({}); the file was not changed",
+            one_line(detail)
+        )),
+        SemanticError::Bridge(detail) => RenameError::Semantic(format!(
+            "the model boundary failed ({}); the file was not changed",
+            one_line(detail)
+        )),
+    }
+}
+
+/// One bounded, single-line rendering of a provider detail.
+///
+/// A provider detail can carry a framework message with newlines; a report line
+/// and a batch item are one line each, so the whitespace is collapsed and the
+/// length is bounded before it is quoted.
+fn one_line(detail: &str) -> String {
+    let collapsed = detail.split_whitespace().collect::<Vec<_>>().join(" ");
+    contract::bound_chars(&collapsed, MAX_ERROR_DETAIL_CHARS)
 }
 
 /// Choose the naming rule: `--template`, `--pattern`, `--preset`, default.
