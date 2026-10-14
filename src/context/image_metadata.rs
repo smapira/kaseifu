@@ -3,6 +3,13 @@
 //! Assembly only: Spotlight values win, EXIF fills gaps, sources are
 //! recorded per field, conflicts never overwrite blindly. Validation
 //! (ranges, NaN/Inf, datetime sanity) lives in `crate::normalize::image`.
+//!
+//! Capture time has one extra rule: it must be a real capture signal. The
+//! Spotlight EXIF attribute wins, then the EXIF in the file. A filesystem
+//! creation date is never a capture time (photos carry the transfer time in
+//! their filesystem dates): it stays available as `creation_date`, so a
+//! screenshot without EXIF is dated honestly as "created" instead of being
+//! reported as capture metadata that does not exist.
 
 use std::path::Path;
 
@@ -144,13 +151,12 @@ fn spotlight_value(evidence: &[Evidence], key: &str) -> Option<String> {
         .filter(|s| !s.is_empty() && s != "(null)")
 }
 
+/// Capture from the Spotlight EXIF attribute (a real capture signal).
 fn apply_spotlight_capture(evidence: &[Evidence], meta: &mut ImageMetadata) {
     if meta.capture_time.is_some() {
         return;
     }
     if let Some(raw) = spotlight_value(evidence, "kMDItemEXIFDateTimeOriginal") {
-        meta.capture_time = Some(spotlight_capture(&raw));
-    } else if let Some(raw) = spotlight_value(evidence, "kMDItemContentCreationDate") {
         meta.capture_time = Some(spotlight_capture(&raw));
     }
 }

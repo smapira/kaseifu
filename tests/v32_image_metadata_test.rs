@@ -219,14 +219,34 @@ fn v32_spotlight_null_and_garbage_are_ignored() {
 }
 
 #[test]
-fn v32_spotlight_content_creation_date_is_the_fallback_capture() {
+fn v32_content_creation_date_is_not_a_capture_time() {
+    // A filesystem creation date is a transfer time, not a capture time, and
+    // it is already carried as `creation_date`. Reporting it as capture
+    // metadata made an unreadable EXIF look like a successful capture.
     let path = jpg_path("spotlight-created.jpg");
+    let evidence = vec![
+        spotlight_evidence("kMDItemContentCreationDate", "2025-08-10 15:30:00 +0000"),
+        spotlight_evidence("kMDItemAcquisitionMake", "Apple"),
+    ];
+    let meta = collect(&path, &evidence, &MetadataOptions::default()).expect("camera only");
+    assert!(meta.capture_time.is_none(), "{meta:?}");
+    assert_eq!(meta.camera.make.as_deref(), Some("Apple"));
+}
+
+#[test]
+fn v32_a_real_exif_capture_wins_over_the_spotlight_creation_date() {
+    // A photo with EXIF plus a Spotlight creation date must keep the EXIF
+    // capture time: the creation date is a transfer time, not a capture time.
+    let path = write_temp("v32-created-and-exif.jpg", &fixture_jpeg());
     let evidence = vec![spotlight_evidence(
         "kMDItemContentCreationDate",
-        "2025-08-10 15:30:00 +0000",
+        "2026-10-14 08:22:56 +0000",
     )];
-    let meta = collect(&path, &evidence, &MetadataOptions::default()).expect("fallback capture");
-    assert_eq!(meta.capture_time.expect("capture").source, "spotlight");
+    let meta = collect(&path, &evidence, &MetadataOptions::default()).expect("merged");
+    let capture = meta.capture_time.expect("capture");
+    assert_eq!(capture.source, "exif");
+    assert_eq!(capture.value, "2025-08-10T15:30:00");
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
