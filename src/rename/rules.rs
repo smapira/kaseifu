@@ -332,6 +332,15 @@ pub fn bound_stem(stem: &str) -> String {
     }
 }
 
+/// Replace whitespace runs with single underscores.
+///
+/// Spaces break shell tab-completion, so model titles never keep them:
+/// `Budget review` becomes `Budget_review`. Leading, trailing and repeated
+/// whitespace (including tabs and newlines) collapse away.
+pub fn underscore_whitespace(stem: &str) -> String {
+    stem.split_whitespace().collect::<Vec<_>>().join("_")
+}
+
 /// Drop a trailing `.{extension}` the model echoed back into the title.
 ///
 /// The extension is owned by the rule engine (`finish_plan` appends it), so a
@@ -578,6 +587,15 @@ mod tests {
         assert_eq!(strip_redundant_extension("plain", "txt"), "plain");
         assert_eq!(strip_redundant_extension("plain", ""), "plain");
         assert_eq!(strip_redundant_extension(".txt", "txt"), "");
+    }
+
+    #[test]
+    fn whitespace_runs_become_single_underscores() {
+        assert_eq!(underscore_whitespace("Budget review"), "Budget_review");
+        assert_eq!(underscore_whitespace("a  b\tc\nd"), "a_b_c_d");
+        assert_eq!(underscore_whitespace("  padded  "), "padded");
+        assert_eq!(underscore_whitespace("no-spaces"), "no-spaces");
+        assert_eq!(underscore_whitespace(""), "");
     }
 
     #[test]

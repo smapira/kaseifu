@@ -215,7 +215,7 @@ async fn v092_an_echoed_extension_is_not_doubled() {
     let PlanOutcome::Ready(plan) = outcome else {
         panic!("expected a ready plan, got {outcome:?}");
     };
-    assert_eq!(plan.proposal, "Quarterly memo.txt");
+    assert_eq!(plan.proposal, "Quarterly_memo.txt");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

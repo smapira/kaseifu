@@ -19,7 +19,7 @@ use super::document::{
 };
 use super::rules::{
     PresetDef, ResolvedDate, RuleInputs, bound_stem, find_preset, is_date_format, resolve_date,
-    resolve_template, strip_redundant_extension,
+    resolve_template, strip_redundant_extension, underscore_whitespace,
 };
 use super::store::RenameStore;
 use super::validate::{
@@ -338,9 +338,12 @@ fn finish_plan(
         }
     };
     // Trailing dots and spaces are model punctuation, not name content
-    // ("Budget memo. " must not become "Budget memo. .txt"), and over-long
-    // titles are cut back to MAX_STEM_CHARS at a word boundary.
+    // ("Budget memo. " must not become "Budget memo. .txt"), over-long
+    // titles are cut back to MAX_STEM_CHARS at a word boundary (which needs
+    // the spaces still in place), and the surviving whitespace runs become
+    // underscores because spaces break shell tab-completion.
     let stem = bound_stem(stem.trim_end_matches(&['.', ' '][..]));
+    let stem = underscore_whitespace(&stem);
     if stem.is_empty() {
         return Ok(PlanOutcome::Held {
             current_name,
