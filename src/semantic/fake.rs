@@ -1,0 +1,232 @@
+//! Test doubles for the semantic layer.
+//!
+//! Same role as `classifier::mock_jev`: they return what the test configured
+//! and never contain business logic, so the pipeline and its tests never need
+//! the on-device model (or an Apple Intelligence enabled machine).
+
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use super::bridge::{FmBridge, FmBridgeError};
+use super::contract::{self, Availability, ErrorKind, SemanticFields, SemanticInfo};
+use super::provider::{SemanticError, SemanticProvider};
+use crate::models::file_context::NormalizedFileContext;
+
+/// A configured outcome for [`FakeFmBridge`].
+#[derive(Debug, Clone)]
+enum Outcome {
+    /// Answer with this exact string (malformed payloads, id mismatches).
+    Raw(String),
+    /// Answer with a success envelope that echoes the request id.
+    Success(SemanticInfo),
+    /// Answer with an error envelope that echoes the request id.
+    Failure {
+        kind: ErrorKind,
+        reason: Option<String>,
+    },
+    /// Fail at the transport level.
+    Error(FmBridgeError),
+}
+
+/// A bridge that answers with configured data and records its requests.
+///
+/// Cloning shares the same state, so a test can keep a handle after moving the
+/// bridge into a provider.
+#[derive(Debug, Clone)]
+pub struct FakeFmBridge {
+    inner: Arc<FakeFmBridgeInner>,
+}
+
+#[derive(Debug)]
+struct FakeFmBridgeInner {
+    availability: Result<Availability, FmBridgeError>,
+    outcome: Mutex<Outcome>,
+    requests: Mutex<Vec<String>>,
+}
+
+impl FakeFmBridge {
+    /// A bridge whose model is available and that answers with `info`.
+    pub fn answering(info: SemanticInfo) -> Self {
+        Self::with_availability(Ok(Availability::Available), Outcome::Success(info))
+    }
+
+    /// A bridge whose model is available and that answers with `response`
+    /// verbatim (for malformed payloads and id mismatches).
+    pub fn responding(response: impl Into<String>) -> Self {
+        Self::with_availability(Ok(Availability::Available), Outcome::Raw(response.into()))
+    }
+
+    /// A bridge that reports the model as unavailable and fails accordingly.
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self::with_availability(
+            Ok(Availability::Unavailable {
+                reason: reason.clone(),
+                detail: None,
+            }),
+            Outcome::Failure {
+                kind: ErrorKind::Unavailable,
+                reason: Some(reason),
+            },
+        )
+    }
+
+    /// A bridge that reports a specific model error.
+    pub fn reporting(kind: ErrorKind, reason: Option<String>) -> Self {
+        Self::with_availability(
+            Ok(Availability::Available),
+            Outcome::Failure { kind, reason },
+        )
+    }
+
+    /// A bridge whose `generate` fails at the transport level.
+    pub fn failing(error: FmBridgeError) -> Self {
+        Self::with_availability(Ok(Availability::Available), Outcome::Error(error))
+    }
+
+    fn with_availability(
+        availability: Result<Availability, FmBridgeError>,
+        outcome: Outcome,
+    ) -> Self {
+        Self {
+            inner: Arc::new(FakeFmBridgeInner {
+                availability,
+                outcome: Mutex::new(outcome),
+                requests: Mutex::new(Vec::new()),
+            }),
+        }
+    }
+
+    /// Replace the answer after construction.
+    pub fn set_response(&self, response: impl Into<String>) {
+        *self.inner.outcome.lock().expect("outcome lock") = Outcome::Raw(response.into());
+    }
+
+    /// The request JSONs the provider sent, in order.
+    pub fn requests(&self) -> Vec<String> {
+        self.inner.requests.lock().expect("requests lock").clone()
+    }
+}
+
+impl FmBridge for FakeFmBridge {
+    fn available(&self) -> Result<Availability, FmBridgeError> {
+        self.inner.availability.clone()
+    }
+
+    fn generate<'a>(
+        &'a self,
+        request_json: &'a str,
+        _timeout: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<String, FmBridgeError>> + Send + 'a>> {
+        self.inner
+            .requests
+            .lock()
+            .expect("requests lock")
+            .push(request_json.to_string());
+        let outcome = self.inner.outcome.lock().expect("outcome lock").clone();
+        let request_id = serde_json::from_str::<serde_json::Value>(request_json)
+            .ok()
+            .and_then(|value| value.get("request_id")?.as_str().map(str::to_string))
+            .unwrap_or_default();
+        Box::pin(async move {
+            match outcome {
+                Outcome::Raw(response) => Ok(response),
+                Outcome::Success(info) => Ok(success_response(&request_id, &info)),
+                Outcome::Failure { kind, reason } => {
+                    Ok(failure_response(&request_id, &kind, reason.as_deref()))
+                }
+                Outcome::Error(error) => Err(error),
+            }
+        })
+    }
+}
+
+/// A success envelope that echoes the request id.
+fn success_response(request_id: &str, info: &SemanticInfo) -> String {
+    let fields = SemanticFields {
+        title: info.title.clone(),
+        category: info.category.clone(),
+        project: info.project.clone(),
+    };
+    serde_json::json!({
+        "schema_version": contract::SCHEMA_VERSION,
+        "request_id": request_id,
+        "status": "success",
+        "semantic": {
+            "title": fields.title,
+            "category": fields.category,
+            "project": fields.project,
+        },
+    })
+    .to_string()
+}
+
+/// An error envelope that echoes the request id.
+fn failure_response(request_id: &str, kind: &ErrorKind, reason: Option<&str>) -> String {
+    serde_json::json!({
+        "schema_version": contract::SCHEMA_VERSION,
+        "request_id": request_id,
+        "status": "error",
+        "semantic": serde_json::Value::Null,
+        "error": { "kind": kind_str(kind), "reason": reason },
+    })
+    .to_string()
+}
+
+/// The wire name of an error kind (mirrors the Swift bridge).
+fn kind_str(kind: &ErrorKind) -> &'static str {
+    match kind {
+        ErrorKind::Unavailable => "unavailable",
+        ErrorKind::ModelInitFailed => "model-init-failed",
+        ErrorKind::InferenceFailed => "inference-failed",
+        ErrorKind::InvalidOutput => "invalid-output",
+        ErrorKind::Cancelled => "cancelled",
+        ErrorKind::Internal => "internal",
+        ErrorKind::Unknown => "unknown",
+    }
+}
+
+/// A provider that answers with configured values (no bridge involved).
+#[derive(Debug)]
+pub struct FakeSemanticProvider {
+    availability: Result<Availability, SemanticError>,
+    result: Mutex<Result<SemanticInfo, SemanticError>>,
+}
+
+impl FakeSemanticProvider {
+    /// A provider that is available and returns `info`.
+    pub fn returning(info: SemanticInfo) -> Self {
+        Self {
+            availability: Ok(Availability::Available),
+            result: Mutex::new(Ok(info)),
+        }
+    }
+
+    /// A provider whose model is unavailable with `reason`.
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self {
+            availability: Ok(Availability::Unavailable {
+                reason: reason.clone(),
+                detail: None,
+            }),
+            result: Mutex::new(Err(SemanticError::Unavailable { reason })),
+        }
+    }
+}
+
+impl SemanticProvider for FakeSemanticProvider {
+    fn availability(&self) -> Result<Availability, SemanticError> {
+        self.availability.clone()
+    }
+
+    fn analyze<'a>(
+        &'a self,
+        _context: &'a NormalizedFileContext,
+    ) -> Pin<Box<dyn Future<Output = Result<SemanticInfo, SemanticError>> + Send + 'a>> {
+        let result = self.result.lock().expect("result lock").clone();
+        Box::pin(async move { result })
+    }
+}

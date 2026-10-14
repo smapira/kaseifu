@@ -33,6 +33,7 @@ pub mod operations;
 pub mod platform;
 pub mod policy;
 pub mod presentation;
+pub mod semantic;
 pub mod storage;
 pub mod uninstall;
 pub mod watch;

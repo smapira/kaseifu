@@ -461,8 +461,12 @@ src/
 ├── operations/          # Organize, plan, move, undo (Phase 5)
 ├── policy/              # Auto/review/refuse decisions
 ├── platform/            # macOS-specific code (FSEvents)
+├── semantic/            # Foundation Models bridge + semantic provider (Phase 0-2)
 ├── storage/             # SQLite history + cache
 └── watch/               # FSEvents watcher + coordinator (Phase 6)
+
+swift/
+└── kaseifu_fm_bridge.swift  # C ABI bridge to Apple Foundation Models (build.rs)
 
 config/
 └── default.toml         # Built-in defaults (documentation; not read at runtime)
@@ -470,7 +474,8 @@ config/
 schemas/
 ├── file-context-v1.json
 ├── candidate-destination-v1.json
-└── jev-decision-v1.json
+├── jev-decision-v1.json
+└── fm-rename-v1.json    # Rust <-> Swift Foundation Models contract
 
 docs/
 ├── ARCHITECTURE.md
@@ -478,6 +483,24 @@ docs/
 ├── MACOS.md
 └── design/              # Per-phase design documents
 ```
+
+The Foundation Models bridge (the AI rename foundation, phases 0-2) is compiled
+by `build.rs` when the machine has a Swift compiler and a macOS 26 SDK; it is
+weak-linked, so the binary still starts on older systems and answers with an
+explicit `unavailable: <reason>` instead of falling back to another model.
+Without a Swift toolchain (or on an older SDK, like a CI runner) the build
+falls back to a Rust stub with the same C ABI that reports
+`unavailable: foundation-models-sdk-missing` / `swift-toolchain-missing`.
+Because the bridge uses the OS Swift concurrency runtime, the binary requires
+macOS 12.0 or later. To see what the bridge answers on this machine:
+
+```bash
+cargo run --example fm_bridge_smoke
+```
+
+Real inference runs there only with Apple Intelligence enabled; the test suite
+stays model-independent (`cargo test --test v090_fm_bridge_test -- --ignored`
+runs the inference path manually).
 
 ## Safety
 

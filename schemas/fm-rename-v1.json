@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "fm-rename-v1",
+  "title": "FmRenameContract",
+  "type": "object",
+  "required": [
+    "schema_version"
+  ],
+  "oneOf": [
+    {
+      "title": "Request",
+      "required": [
+        "schema_version",
+        "request_id",
+        "target_type",
+        "path",
+        "language",
+        "analysis",
+        "input"
+      ]
+    },
+    {
+      "title": "Response",
+      "required": [
+        "schema_version",
+        "request_id",
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "success",
+            "error",
+            "cancelled"
+          ]
+        }
+      }
+    },
+    {
+      "title": "Availability",
+      "required": [
+        "schema_version",
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "unavailable"
+          ]
+        }
+      }
+    },
+    {
+      "title": "Available",
+      "required": [
+        "schema_version",
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "available"
+          ]
+        }
+      }
+    }
+  ]
+}
