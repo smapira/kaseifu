@@ -21,7 +21,7 @@ use kaseifu::presentation::{OutputFormat, resolve_mode};
 use kaseifu::rename::{
     document::classify_document,
     rules::{PRESETS, find_preset, is_date_format},
-    service::{PerceptionReport, PlanOutcome, RenameOptions, plan_rename},
+    service::{PerceptionReport, PlanOutcome, RenameOptions, VideoReport, plan_rename},
     store::RenameStore,
 };
 use kaseifu::semantic::provider::FoundationModelsProvider;
@@ -245,7 +245,9 @@ enum Commands {
     /// is journaled and can be reversed with `undo`. Use --patterns to list
     /// the rules. Documents are txt, md, pdf and html; images are jpg, jpeg,
     /// png, heic, heif, tif, tiff and webp, and their scene is described by
-    /// on-device Vision labels.
+    /// on-device Vision labels. Videos are mp4, mov, m4v, 3gp and 3g2: the
+    /// container's metadata comes from AVFoundation and the same on-device
+    /// classifier labels a few representative frames.
     Rename(Box<RenameCli>),
 
     /// Print a shell completion script (only zsh can be installed).
@@ -982,7 +984,9 @@ fn rename_guidance(format: OutputFormat) -> Result<()> {
         "Rename",
         &[
             "usage: kaseifu rename <file> [--pattern PATTERN] [--execute]".to_string(),
-            "documents: txt, md, pdf, html (images and video arrive later)".to_string(),
+            "documents: txt, md, pdf, html".to_string(),
+            "images: jpg, jpeg, png, heic, heif, tif, tiff, webp".to_string(),
+            "videos: mp4, mov, m4v, 3gp, 3g2".to_string(),
             "run `kaseifu rename --patterns` to list the naming rules".to_string(),
         ],
         &serde_json::json!({"rename": {"status": "guidance"}}).to_string(),
@@ -1132,9 +1136,10 @@ struct RenameReport<'a> {
     operation_id: Option<&'a str>,
     target: &'a Path,
     perception: Option<&'a PerceptionReport>,
+    video: Option<&'a VideoReport>,
 }
 
-/// The `perception` object for the JSON report (images only).
+/// The `perception` object for the JSON report (images and videos).
 fn perception_json(report: &PerceptionReport) -> serde_json::Value {
     match report {
         PerceptionReport::Labels(labels) => serde_json::json!({
@@ -1154,6 +1159,32 @@ fn perception_json(report: &PerceptionReport) -> serde_json::Value {
     }
 }
 
+/// The `video` object for the JSON report (videos only).
+///
+/// Only keys the container actually reported are present; the frame count is
+/// how many representative frames were classified. Every key is an addition:
+/// no image or document report changes shape.
+fn video_json(report: &VideoReport) -> serde_json::Value {
+    let mut value = serde_json::json!({ "frames": report.frames });
+    let info = &report.info;
+    if let Some(duration) = info.duration_seconds {
+        value["duration_seconds"] = serde_json::json!(duration);
+    }
+    if let Some(width) = info.width {
+        value["width"] = serde_json::json!(width);
+    }
+    if let Some(height) = info.height {
+        value["height"] = serde_json::json!(height);
+    }
+    if let Some(rate) = info.frame_rate {
+        value["frame_rate"] = serde_json::json!(rate);
+    }
+    if let Some(recorded) = info.creation_date.as_deref() {
+        value["creation_date"] = serde_json::json!(recorded);
+    }
+    value
+}
+
 /// Emit a `rename` file report (text lines plus the fixed JSON shape).
 fn emit_rename_report(format: OutputFormat, report: &RenameReport) {
     let mut lines = vec![
@@ -1169,6 +1200,9 @@ fn emit_rename_report(format: OutputFormat, report: &RenameReport) {
     }
     if let Some(reason) = report.reason {
         lines.push(format!("reason: {reason}"));
+    }
+    if let Some(video) = report.video {
+        lines.push(format!("video: {}", video.summary()));
     }
     if let Some(perception) = report.perception {
         lines.push(format!("perception: {}", perception.summary()));
@@ -1191,6 +1225,7 @@ fn emit_rename_report(format: OutputFormat, report: &RenameReport) {
             "date_source": report.date_source,
             "operation_id": report.operation_id,
             "perception": report.perception.map(perception_json),
+            "video": report.video.map(video_json),
         }
     })
     .to_string();
@@ -1198,12 +1233,14 @@ fn emit_rename_report(format: OutputFormat, report: &RenameReport) {
 }
 
 /// `rename <file>`: dry-run proposal or `--execute` rename.
-/// Reject rename targets that are neither documents nor images.
+/// Reject rename targets that are neither documents, images nor videos.
 ///
-/// Video and unknown types fail fast here with the phase that owns them, so
-/// no model call is spent on them.
+/// Unknown types fail fast here with the message that names what the command
+/// accepts, so no extraction or model call is spent on them.
 fn reject_foreign_rename_target(target: &Path) -> Result<()> {
-    if kaseifu::context::image_metadata::is_image_file(target) {
+    if kaseifu::context::image_metadata::is_image_file(target)
+        || kaseifu::context::video::is_video_file(target)
+    {
         return Ok(());
     }
     classify_document(target)
@@ -1217,9 +1254,9 @@ async fn rename_file(
     args: &RenameCli,
     format: OutputFormat,
 ) -> Result<()> {
-    // Classify the extension before touching the model: documents and
-    // images are renamed here, video and unknown types fail fast with the
-    // phase that owns them.
+    // Classify the extension before touching the model: documents, images
+    // and videos are renamed here; unknown types fail fast with the message
+    // that names what the command accepts.
     reject_foreign_rename_target(target)?;
     let options = RenameOptions {
         pattern: args.pattern.clone(),
@@ -1260,6 +1297,7 @@ async fn rename_file(
                     operation_id: Option::None,
                     target,
                     perception: Option::None,
+                    video: Option::None,
                 },
             );
             Ok(())
@@ -1281,6 +1319,7 @@ async fn rename_file(
                     operation_id: Option::None,
                     target,
                     perception: Option::None,
+                    video: Option::None,
                 },
             );
             Ok(())
@@ -1309,6 +1348,7 @@ fn rename_ready(
                 operation_id: Option::None,
                 target,
                 perception: plan.perception.as_ref(),
+                video: plan.video.as_ref(),
             },
         );
         return Ok(());
@@ -1327,6 +1367,7 @@ fn rename_ready(
             operation_id: Some(&operation_id),
             target,
             perception: plan.perception.as_ref(),
+            video: plan.video.as_ref(),
         },
     );
     Ok(())

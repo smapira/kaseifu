@@ -79,22 +79,26 @@ struct Payload {
 }
 
 /// One raw label; a missing or wrongly typed field is treated as missing.
+///
+/// Shared with the video path (`super::video`): a frame's labels use exactly
+/// the same shape as a picture's labels.
 #[derive(Deserialize)]
-struct RawLabel {
+pub(crate) struct RawLabel {
     #[serde(default)]
-    label: Option<String>,
+    pub(crate) label: Option<String>,
     #[serde(default)]
-    confidence: Option<f32>,
+    pub(crate) confidence: Option<f32>,
 }
 
+/// One raw error payload; shared by the image and the video envelope.
 #[derive(Deserialize)]
-struct Failure {
+pub(crate) struct Failure {
     #[serde(default)]
-    kind: Option<String>,
+    pub(crate) kind: Option<String>,
     #[serde(default)]
-    reason: Option<String>,
+    pub(crate) reason: Option<String>,
     #[serde(default)]
-    detail: Option<String>,
+    pub(crate) detail: Option<String>,
 }
 
 /// Parse one perception payload and bound its labels.
@@ -125,7 +129,7 @@ pub fn parse(json: &str) -> Result<PerceptionInfo, PerceptionError> {
                 .into_iter()
                 .filter_map(usable_label),
         )),
-        "error" => Err(failure(envelope.error)),
+        "error" => Err(classify_failure(envelope.error)),
         other => Err(PerceptionError::Malformed {
             detail: format!("unknown status: {other}"),
         }),
@@ -133,14 +137,17 @@ pub fn parse(json: &str) -> Result<PerceptionInfo, PerceptionError> {
 }
 
 /// Keep only labels that carry both a text and a number.
-fn usable_label(raw: RawLabel) -> Option<PerceptionLabel> {
+pub(crate) fn usable_label(raw: RawLabel) -> Option<PerceptionLabel> {
     let label = raw.label.unwrap_or_default();
     let confidence = raw.confidence?;
     Some(PerceptionLabel { label, confidence })
 }
 
 /// Map one error payload onto a perception error (unknown kinds stay named).
-fn failure(error: Option<Failure>) -> PerceptionError {
+///
+/// Shared with the video path: the error classification of the two envelope
+/// shapes is the same rule set (original spec section 12).
+pub(crate) fn classify_failure(error: Option<Failure>) -> PerceptionError {
     let Some(error) = error else {
         return PerceptionError::Malformed {
             detail: "error status without an error payload".to_string(),

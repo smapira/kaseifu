@@ -47,11 +47,28 @@ pub unsafe extern "C" fn kaseifu_fm_available() -> *mut c_char {
 /// [`kaseifu_fm_free_result`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kaseifu_vision_perceive(image_path: *const c_char) -> *mut c_char {
-    let detail = if image_path.is_null() {
+    unavailable_perception(image_path)
+}
+
+/// Video perception JSON: same degradation as the image path.
+///
+/// # Safety
+/// `video_path` must be null or a valid NUL-terminated string, and the
+/// returned pointer must be freed exactly once with
+/// [`kaseifu_fm_free_result`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kaseifu_video_perceive(video_path: *const c_char) -> *mut c_char {
+    unavailable_perception(video_path)
+}
+
+/// One `status:error` envelope with the build's reason (and the path as
+/// detail, so a caller can tell which target was refused).
+fn unavailable_perception(path: *const c_char) -> *mut c_char {
+    let detail = if path.is_null() {
         None
     } else {
         Some(
-            unsafe { CStr::from_ptr(image_path) }
+            unsafe { CStr::from_ptr(path) }
                 .to_string_lossy()
                 .into_owned(),
         )

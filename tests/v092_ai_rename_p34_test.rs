@@ -309,13 +309,18 @@ async fn v092_symlinks_and_foreign_types_are_refused() {
             .expect_err("symlink must fail");
         assert!(matches!(error, RenameError::Precondition(_)), "got {error}");
     }
-    // Images are Phase 5 scope (see v093): the remaining foreign type here
-    // is video, which still points at its owning phase.
-    let clip = write_doc(&dir, "clip.mp4", "fake\n");
+    // Images are Phase 5 scope and videos are Phase 6 scope (see v093 and
+    // v095); what stays refused here is a type no phase owns.
+    let stranger = write_doc(&dir, "mystery.xyz", "unknown\n");
     let store = RenameStore::open_in_memory().expect("store");
-    let error = plan_rename(&answering("title"), &store, &clip, &pattern_options("P02"))
-        .await
-        .expect_err("video must fail");
+    let error = plan_rename(
+        &answering("title"),
+        &store,
+        &stranger,
+        &pattern_options("P02"),
+    )
+    .await
+    .expect_err("unknown types must fail");
     assert!(matches!(error, RenameError::Unsupported(_)), "got {error}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -439,14 +444,32 @@ fn v092_default_rule_round_trips() {
 fn v092_foreign_types_fail_before_any_model_call() {
     let home = isolated_home("foreign");
     let dir = work_dir("foreign");
-    // Images are renamed too (see v093); video still fails fast, and the
-    // refusal stays free of internal phase vocabulary.
+    // Images and videos are renamed too (see v093 and v095); a type the
+    // command does not accept still fails fast, with no model call and no
+    // internal phase vocabulary.
+    let stranger = write_doc(&dir, "mystery.xyz", "who knows\n");
+    let output = cli(&home, &["rename", stranger.to_str().expect("utf8")]);
+    assert!(!output.status.success(), "unknown types must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        stderr.contains("is not a document"),
+        "names the refusal: {stderr}"
+    );
+    assert!(!stderr.contains("Phase"), "no phase words: {stderr}");
+    // A video extension is accepted now: the file itself is unreadable, so
+    // the proposal is held with the reason and no model call is spent
+    // (Phase 6 behaviour; the details live in the v095 suite).
     let clip = write_doc(&dir, "clip.mp4", "fake\n");
     let output = cli(&home, &["rename", clip.to_str().expect("utf8")]);
-    assert!(!output.status.success(), "videos must fail");
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert!(stderr.contains("is a video"), "names the type: {stderr}");
-    assert!(!stderr.contains("Phase"), "no phase words: {stderr}");
+    assert!(
+        output.status.success(),
+        "a held video is not an error: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = stdout_of(&output);
+    assert!(stdout.contains("status: held"), "{stdout}");
+    assert!(!stdout.contains("Phase"), "no phase words: {stdout}");
+    assert!(clip.exists(), "held plans move nothing");
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&dir);
 }

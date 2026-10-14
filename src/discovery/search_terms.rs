@@ -131,6 +131,7 @@ mod tests {
             directory_summary: DirectorySummary::default(),
             image_metadata: None,
             perception: None,
+            video: None,
         };
 
         let terms = extract_terms(&normalized);
@@ -155,6 +156,7 @@ mod tests {
             directory_summary: DirectorySummary::default(),
             image_metadata: None,
             perception: None,
+            video: None,
         };
 
         let terms = extract_terms(&normalized);

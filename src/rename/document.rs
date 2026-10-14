@@ -49,8 +49,8 @@ impl std::fmt::Display for DocumentError {
 
 /// Classify a path by extension (case-insensitive).
 ///
-/// Images, video, folders and extension-less files are refused with the
-/// phase that owns them, so the caller never guesses.
+/// Images, videos, folders and extension-less files are refused by naming the
+/// type they are, so the caller never guesses.
 pub fn classify_document(path: &Path) -> Result<DocumentKind, DocumentError> {
     let raw = path
         .extension()
@@ -70,8 +70,8 @@ pub fn classify_document(path: &Path) -> Result<DocumentKind, DocumentError> {
                 ".{raw} is an image, not a document (txt, md, pdf, html)"
             )))
         }
-        "mp4" | "mov" | "m4v" => Err(DocumentError::UnsupportedType(format!(
-            ".{raw} is a video; video rename is not available yet"
+        "mp4" | "mov" | "m4v" | "3gp" | "3g2" => Err(DocumentError::UnsupportedType(format!(
+            ".{raw} is a video, not a document (txt, md, pdf, html)"
         ))),
         _ => Err(DocumentError::UnsupportedType(format!(
             ".{raw} is not a document (txt, md, pdf, html)"

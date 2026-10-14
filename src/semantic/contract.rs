@@ -97,6 +97,45 @@ pub struct FmInput {
     pub image: Option<FmImageFacts>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perception: Option<FmPerception>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<FmVideoFacts>,
+}
+
+/// Video facts already measured in Swift (AVFoundation, Phase 6).
+///
+/// A compatible extension of `fm-rename-v1` like [`FmPerception`]: the field
+/// is optional, no key was removed or retyped, both sides ignore unknown
+/// fields, and the envelope version stays the same. Only video targets carry
+/// it. Rust never decodes a video: the bridge reports what the container
+/// said, and a missing value stays missing (original spec sections 5.3, 6.5).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FmVideoFacts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_rate: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation_date: Option<String>,
+}
+
+impl From<&crate::models::file_context::VideoInfo> for FmVideoFacts {
+    /// Copy the measured facts onto the wire (bounded like every other field).
+    fn from(info: &crate::models::file_context::VideoInfo) -> Self {
+        Self {
+            duration_seconds: info.duration_seconds,
+            width: info.width,
+            height: info.height,
+            frame_rate: info.frame_rate,
+            creation_date: info
+                .creation_date
+                .as_deref()
+                .map(|value| bound_chars(value, crate::semantic::video::MAX_VIDEO_DATE_CHARS)),
+        }
+    }
 }
 
 /// Image facts already extracted in Rust (EXIF / Spotlight).
@@ -505,6 +544,7 @@ mod tests {
                 semantic_signals: vec!["F:a".to_string()],
                 image: None,
                 perception: None,
+                video: None,
             },
         };
         let json = serde_json::to_value(&request).expect("serializes");
@@ -562,6 +602,7 @@ mod tests {
                     height: Some(48),
                 }),
                 perception: Some(FmPerception::from(&info)),
+                video: None,
             },
         };
         let json = serde_json::to_value(&request).expect("serializes");
@@ -584,6 +625,76 @@ mod tests {
             .collect();
         keys.sort_unstable();
         assert_eq!(keys, vec!["camera", "capture_time", "height", "width"]);
+    }
+
+    #[test]
+    fn video_facts_travel_under_fm_rename_v1_without_touching_the_other_keys() {
+        let info = crate::models::file_context::VideoInfo {
+            duration_seconds: Some(120.0),
+            width: Some(1920),
+            height: Some(1080),
+            frame_rate: Some(29.97),
+            creation_date: Some("2026-10-14T09:30:00+0900".to_string()),
+        };
+        let request = FmRequest {
+            schema_version: SCHEMA_VERSION.to_string(),
+            request_id: "rename-0003".to_string(),
+            target_type: TargetKind::Video,
+            path: "/tmp/clip.mp4".to_string(),
+            language: "ja".to_string(),
+            analysis: AnalysisFlags::default(),
+            input: FmInput {
+                filename: "clip.mp4".to_string(),
+                extension: Some("mp4".to_string()),
+                size_bytes: 9,
+                created_at: Some("2026-10-15T00:00:00Z".to_string()),
+                modified_at: Some("2026-10-16T00:00:00Z".to_string()),
+                parent_directory: "/tmp".to_string(),
+                semantic_signals: vec![],
+                image: None,
+                perception: None,
+                video: Some(FmVideoFacts::from(&info)),
+            },
+        };
+        let json = serde_json::to_value(&request).expect("serializes");
+        assert_eq!(json["target_type"], serde_json::json!("video"));
+        assert_eq!(json["input"]["video"]["duration_seconds"], 120.0);
+        assert_eq!(json["input"]["video"]["width"], 1920);
+        assert_eq!(json["input"]["video"]["height"], 1080);
+        assert_eq!(
+            json["input"]["video"]["creation_date"],
+            "2026-10-14T09:30:00+0900"
+        );
+        // Add-only: the video request carries no picture facts, and a request
+        // without video facts keeps the exact key set it had before.
+        assert!(json["input"].get("image").is_none());
+        let mut keys: Vec<&str> = json["input"]
+            .as_object()
+            .expect("input")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "created_at",
+                "extension",
+                "filename",
+                "modified_at",
+                "parent_directory",
+                "semantic_signals",
+                "size_bytes",
+                "video"
+            ]
+        );
+        let empty = FmVideoFacts::from(&crate::models::file_context::VideoInfo::default());
+        let value = serde_json::to_value(&empty).expect("serializes");
+        assert_eq!(
+            value,
+            serde_json::json!({}),
+            "a silent container says nothing"
+        );
     }
 
     #[test]

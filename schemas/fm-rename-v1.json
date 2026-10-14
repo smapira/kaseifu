@@ -28,7 +28,7 @@
             },
             "perception": {
               "type": "object",
-              "description": "Phase 5b: bounded Apple Vision labels. Optional and image-only; nothing is required and no existing key changes.",
+              "description": "Phase 5b/6: bounded Apple Vision labels. Optional; an image carries the classifier's labels and a video carries the labels merged across its representative frames. Nothing is required and no existing key changes.",
               "properties": {
                 "labels": {
                   "type": "array",
@@ -48,6 +48,27 @@
                       }
                     }
                   }
+                }
+              }
+            },
+            "video": {
+              "type": "object",
+              "description": "Phase 6: what AVFoundation measured for a video. Optional and video-only; a value the container did not report stays absent.",
+              "properties": {
+                "duration_seconds": {
+                  "type": "number"
+                },
+                "width": {
+                  "type": "integer"
+                },
+                "height": {
+                  "type": "integer"
+                },
+                "frame_rate": {
+                  "type": "number"
+                },
+                "creation_date": {
+                  "type": "string"
                 }
               }
             }

@@ -17,10 +17,17 @@
 //! bounded labels inside the same `fm-rename-v1` request, so the model can
 //! title a picture instead of echoing its file name.
 //!
+//! Phase 6 widens perception to videos: AVFoundation measures the metadata
+//! and extracts a bounded set of representative frames, Vision classifies
+//! each frame, and Rust merges the frames into the same bounded label set
+//! (original spec sections 4.4, 5.3 and 11.4). Nothing new is inferred here:
+//! both media reuse one label budget and one prompt path.
+//!
 //! The Swift side (`swift/kaseifu_fm_bridge.swift`) only bridges Apple APIs:
 //! file names, rules, journals and undo stay in Rust (original spec §2), and
-//! the only file it ever reads is the image path Rust hands it (read-only).
-//! Nothing here writes to the filesystem, the journal or the configuration.
+//! the only files it ever reads are the image or video paths Rust hands it
+//! (read-only; a video is never re-encoded or written). Nothing here writes to
+//! the filesystem, the journal or the configuration.
 
 pub mod bridge;
 pub mod contract;
@@ -28,6 +35,7 @@ pub mod fake;
 pub mod ffi;
 pub mod perception;
 pub mod provider;
+pub mod video;
 
 #[cfg(any(kaseifu_fm_stub = "no-sdk", kaseifu_fm_stub = "no-toolchain"))]
 pub mod ffi_stub;
@@ -37,6 +45,7 @@ pub use contract::{Availability, ContractError, SemanticInfo, TargetKind};
 pub use ffi::{BRIDGE_KIND, FfiError, FmContext};
 pub use perception::PerceptionError;
 pub use provider::{FoundationModelsProvider, SemanticError, SemanticProvider};
+pub use video::{FrameLabels, VideoPerception};
 
 /// The reason the fallback build reports (`None` when the Swift bridge was
 /// built).

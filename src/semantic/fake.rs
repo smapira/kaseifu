@@ -14,7 +14,10 @@ use super::bridge::{FmBridge, FmBridgeError};
 use super::contract::{self, Availability, ErrorKind, SemanticFields, SemanticInfo};
 use super::perception::PerceptionError;
 use super::provider::{SemanticError, SemanticProvider};
-use crate::models::file_context::{NormalizedFileContext, PerceptionInfo, PerceptionLabel};
+use super::video::{FrameLabels, VideoPerception};
+use crate::models::file_context::{
+    NormalizedFileContext, PerceptionInfo, PerceptionLabel, VideoInfo,
+};
 
 /// A configured outcome for [`FakeFmBridge`].
 #[derive(Debug, Clone)]
@@ -48,6 +51,8 @@ struct FakeFmBridgeInner {
     requests: Mutex<Vec<String>>,
     perception: Mutex<Result<PerceptionInfo, PerceptionError>>,
     perceived: Mutex<Vec<PathBuf>>,
+    video_perception: Mutex<Result<VideoPerception, PerceptionError>>,
+    video_perceived: Mutex<Vec<PathBuf>>,
 }
 
 /// What a fake bridge answers when perception was not configured: the layer
@@ -56,6 +61,14 @@ struct FakeFmBridgeInner {
 fn unconfigured_perception() -> Result<PerceptionInfo, PerceptionError> {
     Err(PerceptionError::Unavailable {
         reason: "perception-not-configured".to_string(),
+    })
+}
+
+/// What a fake bridge answers when video perception was not configured: the
+/// same explicit degradation the unconfigured image path reports.
+fn unconfigured_video_perception() -> Result<VideoPerception, PerceptionError> {
+    Err(PerceptionError::Unavailable {
+        reason: "video-perception-not-configured".to_string(),
     })
 }
 
@@ -110,6 +123,8 @@ impl FakeFmBridge {
                 requests: Mutex::new(Vec::new()),
                 perception: Mutex::new(unconfigured_perception()),
                 perceived: Mutex::new(Vec::new()),
+                video_perception: Mutex::new(unconfigured_video_perception()),
+                video_perceived: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -143,6 +158,36 @@ impl FakeFmBridge {
         self.inner.perceived.lock().expect("perceived lock").clone()
     }
 
+    /// Answer video perception with these frames.
+    pub fn perceiving_video(self, info: VideoInfo, frames: Vec<FrameLabels>) -> Self {
+        *self
+            .inner
+            .video_perception
+            .lock()
+            .expect("video perception lock") = Ok(VideoPerception { info, frames });
+        self
+    }
+
+    /// Answer video perception with an explicit failure (a video the bridge
+    /// could not read, could not find a track in, or could not perceive).
+    pub fn failing_video_perception(self, error: PerceptionError) -> Self {
+        *self
+            .inner
+            .video_perception
+            .lock()
+            .expect("video perception lock") = Err(error);
+        self
+    }
+
+    /// The video paths video perception was asked about, in order.
+    pub fn video_perceived_paths(&self) -> Vec<PathBuf> {
+        self.inner
+            .video_perceived
+            .lock()
+            .expect("video perceived lock")
+            .clone()
+    }
+
     /// Replace the answer after construction.
     pub fn set_response(&self, response: impl Into<String>) {
         *self.inner.outcome.lock().expect("outcome lock") = Outcome::Raw(response.into());
@@ -169,6 +214,19 @@ impl FmBridge for FakeFmBridge {
             .perception
             .lock()
             .expect("perception lock")
+            .clone()
+    }
+
+    fn video_perceive(&self, path: &Path) -> Result<VideoPerception, PerceptionError> {
+        self.inner
+            .video_perceived
+            .lock()
+            .expect("video perceived lock")
+            .push(path.to_path_buf());
+        self.inner
+            .video_perception
+            .lock()
+            .expect("video perception lock")
             .clone()
     }
 
@@ -251,6 +309,7 @@ pub struct FakeSemanticProvider {
     availability: Result<Availability, SemanticError>,
     result: Mutex<Result<SemanticInfo, SemanticError>>,
     perception: Mutex<Result<PerceptionInfo, PerceptionError>>,
+    video_perception: Mutex<Result<VideoPerception, PerceptionError>>,
 }
 
 impl FakeSemanticProvider {
@@ -260,6 +319,7 @@ impl FakeSemanticProvider {
             availability: Ok(Availability::Available),
             result: Mutex::new(Ok(info)),
             perception: Mutex::new(unconfigured_perception()),
+            video_perception: Mutex::new(unconfigured_video_perception()),
         }
     }
 
@@ -273,6 +333,7 @@ impl FakeSemanticProvider {
             }),
             result: Mutex::new(Err(SemanticError::Unavailable { reason })),
             perception: Mutex::new(unconfigured_perception()),
+            video_perception: Mutex::new(unconfigured_video_perception()),
         }
     }
 
@@ -290,6 +351,13 @@ impl FakeSemanticProvider {
         *self.perception.lock().expect("perception lock") = Ok(info);
         self
     }
+
+    /// Answer video perception with these frames.
+    pub fn with_video(self, info: VideoInfo, frames: Vec<FrameLabels>) -> Self {
+        *self.video_perception.lock().expect("video perception lock") =
+            Ok(VideoPerception { info, frames });
+        self
+    }
 }
 
 impl SemanticProvider for FakeSemanticProvider {
@@ -299,6 +367,13 @@ impl SemanticProvider for FakeSemanticProvider {
 
     fn perceive(&self, _path: &Path) -> Result<PerceptionInfo, PerceptionError> {
         self.perception.lock().expect("perception lock").clone()
+    }
+
+    fn perceive_video(&self, _path: &Path) -> Result<VideoPerception, PerceptionError> {
+        self.video_perception
+            .lock()
+            .expect("video perception lock")
+            .clone()
     }
 
     fn analyze<'a>(

@@ -94,7 +94,8 @@ metadata only.
 Video files (MP4, MOV, and other video containers) are not classified yet:
 their capture time and GPS are neither read nor sent to Jev, so a video may
 look untouched even when it sits next to a well organized photo series.
-Whether to support video is a separate decision, not a hidden setting.
+Whether to support video is a separate decision, not a hidden setting. (The
+`rename` command does rename videos: see its section below.)
 
 ### Spotlight indexing
 
@@ -204,9 +205,10 @@ kaseifu rename ~/Desktop/report.pdf --execute  # rename it (journaled, undoable)
 
 The name comes from the rule you pick, and the rule's variables come from the
 file itself: the on-device model supplies the title and category, the file
-supplies size, extension, parent directory and dates, and images also get
-scene labels from on-device Vision. Rules are the built-in presets `P01`-`P12`
-or your own template:
+supplies size, extension, parent directory and dates, and images and videos
+also get scene labels from on-device Vision (images directly, videos through a
+few representative frames). Rules are the built-in presets `P01`-`P12` or your
+own template:
 
 ```bash
 kaseifu rename ~/Desktop/report.pdf --patterns
@@ -228,18 +230,26 @@ kaseifu rename --delete-preset work
 
 Behaviour worth knowing:
 
-- **Documents and images.** Documents are txt, md, pdf and html; images are
-  jpg, jpeg, png, heic, heif, tif, tiff and webp. Other types are refused with
-  the reason; video is not renamed yet.
+- **Documents, images and videos.** Documents are txt, md, pdf and html;
+  images are jpg, jpeg, png, heic, heif, tif, tiff and webp; videos are mp4,
+  mov, m4v, 3gp and 3g2. Other types are refused with the reason.
 - **Images are described on device.** Apple Vision labels the scene (`outdoor`,
   `moon`, ...) and the model turns those into the title, so `IMG_1234.png` can
   become `2026-10-14_夜空の月.png`. The image is opened read-only and never
   modified.
+- **Videos are sampled, not decoded.** AVFoundation reads the container's own
+  metadata (duration, resolution, frame rate, recording date) and extracts
+  3-5 representative frames, chosen by length (10% to 90% of the clip); each
+  frame is classified with the same Vision recipe and the labels are merged.
+  The video is opened read-only, is never re-encoded and no frame is written
+  to disk. Videos whose frames cannot be perceived (unreadable containers,
+  audio-only files) are reported as `status: held` with the reason instead of
+  being renamed after a guess.
 - **Dates.** Images prefer the EXIF capture time (the Spotlight EXIF value,
-  then the EXIF inside the file); documents prefer the creation time, then the
-  modification time, then a date found in the text. `--date-format` picks the
-  rendering, and the display reports `date_source` so you can see which one
-  was used.
+  then the EXIF inside the file); videos prefer the container's own recording
+  date; documents prefer the creation time, then the modification time, then a
+  date found in the text. `--date-format` picks the rendering, and the display
+  reports `date_source` so you can see which one was used.
 - **Missing values hold the proposal back.** A rule whose required variable is
   empty, a name collision, a dangerous name (`/`, `..`, an extension change) or
   a document that looks like a prompt-injection payload is reported as
@@ -252,8 +262,9 @@ Behaviour worth knowing:
   `model unavailable: ...`; it never falls back to another model.
 - `--format json` (with or without `--execute`) prints one object: `target`,
   `current_name`, `pattern`, `proposal`, `date_source`, `status`, `reason`,
-  `operation_id`, and `perception` for images (the labels, or why they are
-  missing).
+  `operation_id`, `perception` for images and videos (the labels, or why they
+  are missing), and `video` for videos (the measured metadata and the frame
+  count).
 
 ### Undo
 
@@ -524,7 +535,7 @@ src/
 ├── operations/          # Organize, plan, move, undo (Phase 5)
 ├── policy/              # Auto/review/refuse decisions
 ├── platform/            # macOS-specific code (FSEvents)
-├── rename/              # Naming rules, document + image rename
+├── rename/              # Naming rules, document + image + video rename
 ├── semantic/            # Foundation Models bridge + semantic provider (Phase 0-2)
 ├── storage/             # SQLite history + cache
 └── watch/               # FSEvents watcher + coordinator (Phase 6)

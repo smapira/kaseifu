@@ -130,6 +130,7 @@ pub fn normalize_with_options(
         candidate_destinations: vec![],
         image_metadata,
         perception: None,
+        video: None,
     })
 }
 

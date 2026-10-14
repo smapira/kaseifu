@@ -13,6 +13,7 @@ use std::time::Duration;
 use super::contract::{self, Availability, ContractError};
 use super::ffi::{self, FfiError};
 use super::perception::{self, PerceptionError};
+use super::video::{self, VideoPerception};
 use crate::models::file_context::PerceptionInfo;
 
 /// Transport-level failure at the bridge boundary.
@@ -58,15 +59,24 @@ impl std::fmt::Display for FmBridgeError {
 /// The Foundation Models boundary.
 ///
 /// Phase 5b widens it to the two Apple calls a rename needs: the generation
-/// (`available` / `generate`) and the image perception (`perceive`). Both go
-/// through the same in-process C ABI, so a test that injects one fake covers
-/// the whole Apple side and never touches the OS.
+/// (`available` / `generate`) and the image perception (`perceive`). Phase 6
+/// adds the video perception (`video_perceive`: AVFoundation metadata plus a
+/// bounded set of representative frames, classified by the same Vision
+/// recipe). All of them go through the same in-process C ABI, so a test that
+/// injects one fake covers the whole Apple side and never touches the OS.
 pub trait FmBridge: Send + Sync {
     /// Ask the on-device model's availability (with its explicit reason).
     fn available(&self) -> Result<Availability, FmBridgeError>;
 
     /// Classify one image path (Apple Vision; the bridge reads the file).
     fn perceive(&self, path: &Path) -> Result<PerceptionInfo, PerceptionError>;
+
+    /// Measure and perceive one video path (AVFoundation + Vision).
+    ///
+    /// The bridge opens the file read-only and returns the metadata with the
+    /// per-frame labels; Rust merges them. A video the bridge cannot perceive
+    /// is an explicit error, never an empty success.
+    fn video_perceive(&self, path: &Path) -> Result<VideoPerception, PerceptionError>;
 
     /// Run one generation and answer with the raw `fm-rename-v1` response JSON.
     fn generate<'a>(
@@ -100,6 +110,15 @@ impl FmBridge for SwiftFmBridge {
             detail: error.to_string(),
         })?;
         perception::parse(&json)
+    }
+
+    fn video_perceive(&self, path: &Path) -> Result<VideoPerception, PerceptionError> {
+        // Same rule as perception: a boundary failure is an explicit
+        // perception error, and the caller decides how to hold the target.
+        let json = ffi::video_perceive(path).map_err(|error| PerceptionError::Failed {
+            detail: error.to_string(),
+        })?;
+        video::parse(&json)
     }
 
     fn generate<'a>(

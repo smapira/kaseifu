@@ -198,6 +198,8 @@ pub enum DatePreference {
     Created,
     Modified,
     Exif,
+    /// The video container's own recording timestamp (AVFoundation, Phase 6).
+    Recorded,
     Document,
     Now,
 }
@@ -241,15 +243,21 @@ pub fn resolve_date(
 
 /// Parse one timestamp into a [`ResolvedDate`].
 ///
-/// RFC 3339 first, then zone-less wall-clock forms (`YYYY-MM-DDTHH:MM:SS`
-/// and `YYYY-MM-DD HH:MM:SS`, the EXIF normalized shape). Zones are never
-/// guessed: wall-clock fields are used as-is, no offset is invented.
+/// RFC 3339 first, then the same shape with an offset that omits the colon
+/// (`2026-10-14T09:30:00+0900`, how QuickTime containers write the recording
+/// time), then zone-less wall-clock forms (`YYYY-MM-DDTHH:MM:SS` and
+/// `YYYY-MM-DD HH:MM:SS`, the EXIF normalized shape). Zones are never
+/// guessed: the wall clock at the timestamp's own offset is used as-is, and
+/// no offset is invented for a zone-less value.
 fn parse_datetime(value: Option<&str>, source: &'static str) -> Option<ResolvedDate> {
     let text = value?.trim();
     if text.is_empty() {
         return None;
     }
     if let Ok(parsed) = DateTime::parse_from_rfc3339(text) {
+        return Some(resolved_from(parsed, source));
+    }
+    if let Ok(parsed) = DateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%z") {
         return Some(resolved_from(parsed, source));
     }
     let naive = NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S")
@@ -296,6 +304,29 @@ pub fn resolve_image_date(
 ) -> (ResolvedDate, DatePreference) {
     if let Some(date) = parse_datetime(exif, "exif") {
         return (date, DatePreference::Exif);
+    }
+    if let Some(date) = parse_datetime(created, "created") {
+        return (date, DatePreference::Created);
+    }
+    if let Some(date) = parse_datetime(modified, "modified") {
+        return (date, DatePreference::Modified);
+    }
+    (ResolvedDate::default(), DatePreference::Now)
+}
+
+/// Resolve the naming date for a video target (original spec section 5.3).
+///
+/// The container's own recording timestamp comes first: like a photo's EXIF
+/// capture time it is the real signal, while the filesystem dates of a copied
+/// video are transfer times. Then creation, modification, now. Unparseable
+/// values are skipped; when every source is missing the current time is used.
+pub fn resolve_video_date(
+    created: Option<&str>,
+    modified: Option<&str>,
+    recorded: Option<&str>,
+) -> (ResolvedDate, DatePreference) {
+    if let Some(date) = parse_datetime(recorded, "recorded") {
+        return (date, DatePreference::Recorded);
     }
     if let Some(date) = parse_datetime(created, "created") {
         return (date, DatePreference::Created);
@@ -623,6 +654,43 @@ mod tests {
         );
         assert!(matches!(preference, DatePreference::Modified));
         assert_eq!(date.source, "modified");
+    }
+
+    #[test]
+    fn video_dates_prefer_the_container_timestamp() {
+        let (date, preference) = resolve_video_date(
+            Some("2026-10-15T08:00:00Z"),
+            Some("2026-10-16T08:00:00Z"),
+            Some("2026-10-14T09:30:00+0900"),
+        );
+        assert!(matches!(preference, DatePreference::Recorded));
+        assert_eq!(date.source, "recorded");
+        // The wall clock at the recorded offset is used as-is.
+        assert_eq!(date.format("YYYY-MM-DD").as_deref(), Some("2026-10-14"));
+        assert_eq!(date.time_label(), "09-30-00");
+    }
+
+    #[test]
+    fn video_dates_fall_through_to_the_filesystem() {
+        let (date, preference) = resolve_video_date(None, Some("2026-10-16T08:00:00Z"), None);
+        assert!(matches!(preference, DatePreference::Modified));
+        assert_eq!(date.source, "modified");
+        let (_, preference) = resolve_video_date(None, None, None);
+        assert!(matches!(preference, DatePreference::Now));
+    }
+
+    #[test]
+    fn offsets_without_a_colon_are_real_signals() {
+        // QuickTime containers write `+0900`; RFC 3339 requires the colon.
+        // The wall clock at that offset is what the camera recorded, so it is
+        // used as-is (no zone is guessed either way).
+        let (date, preference) = resolve_date(Some("2026-10-14T09:30:00+0900"), None, None, None);
+        assert!(matches!(preference, DatePreference::Created));
+        assert_eq!(date.format("YYYY-MM-DD").as_deref(), Some("2026-10-14"));
+        assert_eq!(date.time_label(), "09-30-00");
+        let (date, preference) = resolve_date(Some("2026-10-14T09:30:00+09:00"), None, None, None);
+        assert!(matches!(preference, DatePreference::Created));
+        assert_eq!(date.time_label(), "09-30-00");
     }
 
     #[test]

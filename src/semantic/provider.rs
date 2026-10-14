@@ -20,11 +20,12 @@ use std::time::Duration;
 use super::bridge::{FmBridge, FmBridgeError, SwiftFmBridge};
 use super::contract::{
     self, AnalysisFlags, Availability, ContractError, ErrorKind, FmErrorInfo, FmImageFacts,
-    FmInput, FmPerception, FmRequest, FmResponse, FmStatus, MAX_FILENAME_CHARS, MAX_LANGUAGE_CHARS,
-    MAX_PARENT_CHARS, MAX_PATH_CHARS, MAX_REQUEST_ID_CHARS, SCHEMA_VERSION, SemanticInfo,
-    TargetKind,
+    FmInput, FmPerception, FmRequest, FmResponse, FmStatus, FmVideoFacts, MAX_FILENAME_CHARS,
+    MAX_LANGUAGE_CHARS, MAX_PARENT_CHARS, MAX_PATH_CHARS, MAX_REQUEST_ID_CHARS, SCHEMA_VERSION,
+    SemanticInfo, TargetKind,
 };
 use super::perception::PerceptionError;
+use super::video::VideoPerception;
 use crate::models::file_context::{NormalizedFileContext, PerceptionInfo};
 
 /// Timeout for one generation (on-device inference plus scheduling).
@@ -112,6 +113,14 @@ pub trait SemanticProvider: Send + Sync {
     /// type on purpose, so it cannot be confused with model availability).
     fn perceive(&self, path: &Path) -> Result<PerceptionInfo, PerceptionError>;
 
+    /// Video perception for one path (AVFoundation + Apple Vision, Phase 6).
+    ///
+    /// Unlike the image add-on this one is a precondition: a video is only
+    /// worth a proposal when the frames could be seen (original spec sections
+    /// 5.3 and 12), so a failure holds the target with its reason instead of
+    /// proposing a name built from the file name alone.
+    fn perceive_video(&self, path: &Path) -> Result<VideoPerception, PerceptionError>;
+
     /// Extract the semantic fields for one observed file.
     fn analyze<'a>(
         &'a self,
@@ -185,6 +194,18 @@ impl<B: FmBridge> SemanticProvider for FoundationModelsProvider<B> {
         self.bridge.perceive(path)
     }
 
+    fn perceive_video(&self, path: &Path) -> Result<VideoPerception, PerceptionError> {
+        // Same defense in depth as the image path: only video extensions reach
+        // AVFoundation, so a document or a picture is refused here instead of
+        // being handed to a media framework that cannot read it.
+        if !crate::context::video::is_video_file(path) {
+            return Err(PerceptionError::Failed {
+                detail: format!("{} is not a video", path.display()),
+            });
+        }
+        self.bridge.video_perceive(path)
+    }
+
     fn analyze<'a>(
         &'a self,
         context: &'a NormalizedFileContext,
@@ -235,16 +256,18 @@ pub fn build_request(
             semantic_signals: contract::bound_signals(&context.semantic_signals),
             image: image_facts(context),
             perception: perception_facts(context),
+            video: video_facts(context),
         },
     }
 }
 
-/// The target kind Phase 2 can decide: images by extension, the rest is a
-/// document. Video and directory targets arrive with their own phases and will
-/// pass their kind explicitly.
+/// The target kind Phase 2 and later can decide: images and videos by
+/// extension, the rest is a document.
 pub fn target_kind(path: &Path) -> TargetKind {
     if crate::context::image_metadata::is_image_file(path) {
         TargetKind::Image
+    } else if crate::context::video::is_video_file(path) {
+        TargetKind::Video
     } else {
         TargetKind::Document
     }
@@ -274,15 +297,26 @@ fn image_facts(context: &NormalizedFileContext) -> Option<FmImageFacts> {
     })
 }
 
-/// Perception labels already extracted in Rust (Apple Vision, Phase 5b);
-/// `None` when the observation carries none (documents, degraded builds, or a
-/// classifier that found nothing).
+/// Perception labels already extracted in Rust (Apple Vision, Phase 5b and
+/// Phase 6); `None` when the observation carries none (documents, degraded
+/// builds, or a classifier that found nothing).
 fn perception_facts(context: &NormalizedFileContext) -> Option<FmPerception> {
     let info = context.perception.as_ref()?;
     if info.is_empty() {
         return None;
     }
     Some(FmPerception::from(info))
+}
+
+/// Video facts the bridge measured (AVFoundation, Phase 6); `None` when the
+/// observation carries nothing informative (documents, images, or a container
+/// that reported no value at all).
+fn video_facts(context: &NormalizedFileContext) -> Option<FmVideoFacts> {
+    let info = context.video.as_ref()?;
+    if info.is_empty() {
+        return None;
+    }
+    Some(FmVideoFacts::from(info))
 }
 
 /// `make model`, omitting empty parts.

@@ -8,9 +8,13 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::models::file_context::{NormalizedFileContext, PerceptionInfo, PerceptionLabel};
+use crate::models::file_context::{
+    NormalizedFileContext, PerceptionInfo, PerceptionLabel, VideoInfo,
+};
 use crate::semantic::contract::SemanticInfo;
+use crate::semantic::perception::PerceptionError;
 use crate::semantic::provider::{SemanticError, SemanticProvider};
+use crate::semantic::video::VideoPerception;
 use crate::storage::history::OperationHistory;
 
 use super::document::{
@@ -20,13 +24,15 @@ use super::document::{
 use super::image::{classify_image, is_image};
 use super::rules::{
     PresetDef, ResolvedDate, RuleInputs, bound_stem, find_preset, is_date_format, resolve_date,
-    resolve_image_date, resolve_template, strip_redundant_extension, underscore_whitespace,
+    resolve_image_date, resolve_template, resolve_video_date, strip_redundant_extension,
+    underscore_whitespace,
 };
 use super::store::RenameStore;
 use super::validate::{
     FileSnapshot, NameProblem, check_filename, is_symlink, recheck_before_execute, sibling_path,
     snapshot,
 };
+use super::video::{classify_video, is_video};
 
 /// How the naming rule was chosen.
 #[derive(Debug, Clone)]
@@ -90,15 +96,59 @@ pub struct RenamePlan {
     pub rule_label: String,
     pub date_source: &'static str,
     pub snapshot: FileSnapshot,
-    /// What the perception layer contributed (images only).
+    /// What the perception layer contributed (images and videos).
     pub perception: Option<PerceptionReport>,
+    /// What AVFoundation measured (videos only).
+    pub video: Option<VideoReport>,
+}
+
+/// What the video perception contributed to one plan (Phase 6).
+///
+/// The labels ride in [`PerceptionReport`] exactly like an image's, so the
+/// report shape and the model path stay shared; this type carries what is
+/// video-only: what the container reported and how many representative frames
+/// were classified (original spec sections 5.3 and 11.4).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoReport {
+    pub info: VideoInfo,
+    pub frames: usize,
+}
+
+impl VideoReport {
+    /// One bounded line for reports (metadata and the frame count).
+    ///
+    /// Only values the container actually reported are printed; nothing is
+    /// invented for a missing one (original spec section 6.5).
+    pub fn summary(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(duration) = self.info.duration_seconds {
+            parts.push(format!("{duration:.1}s"));
+        }
+        if let (Some(width), Some(height)) = (self.info.width, self.info.height) {
+            parts.push(format!("{width}x{height}"));
+        }
+        if let Some(rate) = self.info.frame_rate {
+            parts.push(format!("{rate:.1} fps"));
+        }
+        parts.push(format!("frames {}", self.frames));
+        let recorded = self
+            .info
+            .creation_date
+            .as_deref()
+            .filter(|value| !value.is_empty());
+        if let Some(recorded) = recorded {
+            parts.push(format!("recorded {recorded}"));
+        }
+        parts.join(", ")
+    }
 }
 
 /// What the perception layer contributed to one plan (Phase 5b).
 ///
 /// `Labels` with an empty vector means perception ran and the classifier named
 /// nothing; `Unavailable` means it could not run at all. The two stay apart so
-/// a report never claims a picture was understood when it was not.
+/// a report never claims a picture was understood when it was not. Videos
+/// carry the same shape: the labels merged across their frames.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PerceptionReport {
     Labels(Vec<PerceptionLabel>),
@@ -194,7 +244,7 @@ impl From<NameProblem> for RenameError {
     }
 }
 
-/// Plan a rename: observe, extract, analyze, resolve, validate.
+/// Plan a rename: observe, extract, perceive, analyze, resolve, validate.
 ///
 /// Reads the filesystem but changes nothing and writes no journal rows.
 pub async fn plan_rename(
@@ -208,6 +258,9 @@ pub async fn plan_rename(
     }
     if is_image(target) {
         return plan_image_rename(provider, store, target, options).await;
+    }
+    if is_video(target) {
+        return plan_video_rename(provider, store, target, options).await;
     }
     plan_document_rename(provider, store, target, options).await
 }
@@ -254,7 +307,7 @@ async fn plan_image_rename(
             reason,
         });
     }
-    let (date, _) = resolve_plan_date(&context, None, true);
+    let (date, _) = resolve_plan_date(&context, None, DateMode::Image);
     finish_plan(
         store,
         target,
@@ -265,6 +318,72 @@ async fn plan_image_rename(
         &PlanFacts {
             date,
             perception: Some(perception),
+            video: None,
+        },
+    )
+}
+
+/// Plan a video rename: observe, perceive the frames, analyze, resolve,
+/// validate.
+///
+/// Videos keep the naming rules (and the extension) exactly like documents
+/// and images; what differs is the observation: AVFoundation metadata plus a
+/// bounded set of representative frames, classified and merged into one label
+/// set that rides in the same request the image path uses (original spec
+/// sections 4.4 and 5.3). The perception layer is a precondition here: a
+/// video whose frames could not be perceived is held with its reason instead
+/// of being proposed from its file name (original spec section 12). Changes
+/// nothing and writes no journal rows.
+async fn plan_video_rename(
+    provider: &impl SemanticProvider,
+    store: &RenameStore,
+    target: &Path,
+    options: &RenameOptions,
+) -> Result<PlanOutcome, RenameError> {
+    classify_video(target).map_err(|error| RenameError::Unsupported(error.to_string()))?;
+    let mut context = observe(target)?;
+    // Cheap checks first: rule errors and poisoned names never spend
+    // extraction or inference.
+    let selection = select_rule(store, options)?;
+    if contains_prompt_injection(&context.target.filename) {
+        return Ok(PlanOutcome::Held {
+            current_name: context.target.filename.clone(),
+            rule_label: selection.label(),
+            reason: "probable prompt injection; proposal withheld".to_string(),
+        });
+    }
+    let (video, labels) = match perceive_video(provider, target) {
+        Ok(perceived) => perceived,
+        Err(reason) => {
+            return Ok(PlanOutcome::Held {
+                current_name: context.target.filename.clone(),
+                rule_label: selection.label(),
+                reason,
+            });
+        }
+    };
+    context.video = Some(video.info.clone());
+    context.perception = Some(labels.clone());
+    let semantic = analyze(provider, &context).await?;
+    if let Some(reason) = label_echo(&semantic, &labels.labels) {
+        return Ok(PlanOutcome::Held {
+            current_name: context.target.filename.clone(),
+            rule_label: selection.label(),
+            reason,
+        });
+    }
+    let (date, _) = resolve_plan_date(&context, None, DateMode::Video);
+    finish_plan(
+        store,
+        target,
+        &context,
+        &semantic,
+        &selection,
+        options,
+        &PlanFacts {
+            date,
+            perception: Some(PerceptionReport::Labels(labels.labels)),
+            video: Some(video),
         },
     )
 }
@@ -294,7 +413,7 @@ async fn plan_document_rename(
         });
     }
     let semantic = analyze(provider, &context).await?;
-    let (date, _) = resolve_plan_date(&context, document_ymd, false);
+    let (date, _) = resolve_plan_date(&context, document_ymd, DateMode::Document);
     finish_plan(
         store,
         target,
@@ -305,6 +424,7 @@ async fn plan_document_rename(
         &PlanFacts {
             date,
             perception: None,
+            video: None,
         },
     )
 }
@@ -317,6 +437,61 @@ fn perceive(provider: &impl SemanticProvider, target: &Path) -> PerceptionReport
     match provider.perceive(target) {
         Ok(info) => PerceptionReport::Labels(info.labels),
         Err(error) => PerceptionReport::Unavailable(error.to_string()),
+    }
+}
+
+/// Run the video perception layer for one path.
+///
+/// Unlike the image add-on this layer is a precondition: without frames there
+/// is nothing to perceive, and a video name must not be built from the file
+/// name alone. A failure therefore comes back as the reason the proposal is
+/// held (original spec sections 5.3 and 12).
+fn perceive_video(
+    provider: &impl SemanticProvider,
+    target: &Path,
+) -> Result<(VideoReport, PerceptionInfo), String> {
+    let perceived: VideoPerception = provider
+        .perceive_video(target)
+        .map_err(|error| video_hold_reason(&error))?;
+    let labels = perceived.merged_labels();
+    if labels.labels.is_empty() {
+        return Err(
+            "no visual content could be perceived in the frames; proposal withheld".to_string(),
+        );
+    }
+    let report = VideoReport {
+        info: perceived.info,
+        frames: perceived.frames.len(),
+    };
+    Ok((report, labels))
+}
+
+/// One bounded reason line for a video that could not be perceived.
+///
+/// The branches mirror the bridge's reason strings (original spec §12): a
+/// container without a video track is audio only, one AVFoundation cannot open
+/// is unreadable, and one whose frames could not be extracted or classified
+/// has nothing to perceive. Every branch holds the proposal back.
+fn video_hold_reason(error: &PerceptionError) -> String {
+    match error {
+        PerceptionError::Unavailable { reason } => {
+            format!("video perception is unavailable ({reason}); proposal withheld")
+        }
+        PerceptionError::Failed { detail } if detail.starts_with("video-no-video-track") => {
+            "the video has no video track (audio only); proposal withheld".to_string()
+        }
+        PerceptionError::Failed { detail } if detail.starts_with("video-unreadable") => {
+            "AVFoundation could not read the video; proposal withheld".to_string()
+        }
+        PerceptionError::Failed { detail } if detail.starts_with("video-frames-unavailable") => {
+            "no representative frame could be extracted; proposal withheld".to_string()
+        }
+        PerceptionError::Failed { detail } => {
+            format!("video perception failed ({detail}); proposal withheld")
+        }
+        PerceptionError::Malformed { detail } => {
+            format!("video perception answered something unexpected ({detail}); proposal withheld")
+        }
     }
 }
 
@@ -447,25 +622,38 @@ fn default_template(store: &RenameStore, reference: &str) -> Result<String, Rena
     }
 }
 
+/// Which date order a target follows (original spec sections 5.2, 5.3, 6.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DateMode {
+    /// Creation first, then modification, then the document text.
+    Document,
+    /// EXIF capture time first: filesystem dates of photos are transfer times.
+    Image,
+    /// The container's recording timestamp first (same reason as images).
+    Video,
+}
+
 /// Resolve the naming date for one plan.
 ///
-/// Images lead with the EXIF capture time; documents keep the
-/// creation-first order (original spec section 6.4).
+/// Images and videos lead with their real capture signal (EXIF capture time,
+/// the container's recording timestamp); documents keep the creation-first
+/// order (original spec sections 6.4 and 5.3).
 fn resolve_plan_date(
     context: &NormalizedFileContext,
     document_ymd: Option<(i32, u32, u32)>,
-    is_image: bool,
+    mode: DateMode,
 ) -> (super::rules::ResolvedDate, super::rules::DatePreference) {
     let created = context.creation_date.as_deref();
     let modified = context
         .modification_date
         .as_deref()
         .or(context.target.modified_at.as_deref());
-    let exif = exif_capture(context);
-    if is_image {
-        resolve_image_date(created, modified, exif)
-    } else {
-        resolve_date(created, modified, exif, document_ymd)
+    match mode {
+        DateMode::Document => resolve_date(created, modified, exif_capture(context), document_ymd),
+        DateMode::Image => resolve_image_date(created, modified, exif_capture(context)),
+        DateMode::Video => {
+            resolve_video_date(created, modified, video_recorded(context).as_deref())
+        }
     }
 }
 
@@ -478,13 +666,24 @@ fn exif_capture(context: &NormalizedFileContext) -> Option<&str> {
     })
 }
 
+/// The container's recording timestamp already extracted into the context, if
+/// any (AVFoundation, Phase 6).
+fn video_recorded(context: &NormalizedFileContext) -> Option<String> {
+    context
+        .video
+        .as_ref()
+        .and_then(|info| info.creation_date.clone())
+}
+
 /// The observation facts a plan carries beyond the model's answer.
 #[derive(Debug, Clone)]
 struct PlanFacts {
     /// The naming date (image order or document order, already resolved).
     date: ResolvedDate,
-    /// What perception contributed (images only; `None` for documents).
+    /// What perception contributed (images and videos; `None` for documents).
     perception: Option<PerceptionReport>,
+    /// What AVFoundation measured (videos only).
+    video: Option<VideoReport>,
 }
 
 /// Resolve the template and validate the proposal.
@@ -564,6 +763,7 @@ fn finish_plan(
         selection,
         date,
         facts.perception.clone(),
+        facts.video.clone(),
     )
 }
 
@@ -639,6 +839,7 @@ fn assemble_plan(
     selection: &RuleSelection,
     date: &ResolvedDate,
     perception: Option<PerceptionReport>,
+    video: Option<VideoReport>,
 ) -> Result<PlanOutcome, RenameError> {
     if proposal == current_name {
         return Ok(PlanOutcome::Noop {
@@ -665,6 +866,7 @@ fn assemble_plan(
         date_source: date.source,
         snapshot,
         perception,
+        video,
     }))
 }
 

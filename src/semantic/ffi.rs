@@ -75,6 +75,11 @@ pub mod raw {
         /// (`kaseifu_fm_free_result`). Synchronous: Vision classifies a
         /// bounded thumbnail in well under a second (measured 0.078-0.385 s).
         pub fn kaseifu_vision_perceive(image_path: *const c_char) -> *mut c_char;
+        /// Perception JSON for one video path, owned by the caller
+        /// (`kaseifu_fm_free_result`). Synchronous: the bridge measures the
+        /// metadata and classifies a bounded set of representative frames
+        /// (measured 0.027-0.24 s for 2 s and 130 s synthetic videos).
+        pub fn kaseifu_video_perceive(video_path: *const c_char) -> *mut c_char;
         /// Create a context, or null when `options_json` is not a JSON object.
         pub fn kaseifu_fm_create(options_json: *const c_char) -> *mut c_void;
         /// Start one generation; see the module contract for the return codes.
@@ -143,12 +148,27 @@ pub fn available() -> Result<String, FfiError> {
 /// decodes a bounded thumbnail with ImageIO and classifies it. A rejected
 /// path (not UTF-8, NUL byte) is an explicit error, never a panic.
 pub fn vision_perceive(path: &Path) -> Result<String, FfiError> {
+    let argument = path_argument(path, "image")?;
+    take_string(unsafe { raw::kaseifu_vision_perceive(argument.as_ptr()) })
+}
+
+/// The perception payload for one video path (parsed by `video::parse`).
+///
+/// Same ownership and error rules as [`vision_perceive`]. The bridge opens the
+/// video read-only, measures the metadata and classifies a bounded set of
+/// representative frames; neither the video nor the frames cross the ABI.
+pub fn video_perceive(path: &Path) -> Result<String, FfiError> {
+    let argument = path_argument(path, "video")?;
+    take_string(unsafe { raw::kaseifu_video_perceive(argument.as_ptr()) })
+}
+
+/// Turn one path into the C string the bridge expects.
+fn path_argument(path: &Path, what: &str) -> Result<CString, FfiError> {
     let text = path
         .to_str()
-        .ok_or_else(|| FfiError::Internal("the image path is not valid UTF-8".to_string()))?;
-    let argument = CString::new(text)
-        .map_err(|_| FfiError::Internal("the image path contains a NUL byte".to_string()))?;
-    take_string(unsafe { raw::kaseifu_vision_perceive(argument.as_ptr()) })
+        .ok_or_else(|| FfiError::Internal(format!("the {what} path is not valid UTF-8")))?;
+    CString::new(text)
+        .map_err(|_| FfiError::Internal(format!("the {what} path contains a NUL byte")))
 }
 
 /// An inference context. Dropping it destroys the bridge context.

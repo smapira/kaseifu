@@ -80,6 +80,40 @@ pub struct NormalizedFileContext {
     pub image_metadata: Option<ImageMetadata>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub perception: Option<PerceptionInfo>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub video: Option<VideoInfo>,
+}
+
+/// Video facts the Swift bridge measured through AVFoundation (Phase 6).
+///
+/// Rust never opens or decodes a video: the bridge reports what it measured
+/// (original spec section 5.3) and Rust carries the values into the request,
+/// the naming date and the report. Every field is optional on purpose: a
+/// container that does not report a value keeps it missing instead of
+/// inventing one (original spec section 6.5).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct VideoInfo {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub duration_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub frame_rate: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub creation_date: Option<String>,
+}
+
+impl VideoInfo {
+    /// True when the bridge measured nothing informative.
+    pub fn is_empty(&self) -> bool {
+        self.duration_seconds.is_none()
+            && self.width.is_none()
+            && self.height.is_none()
+            && self.frame_rate.is_none()
+            && self.creation_date.is_none()
+    }
 }
 
 /// Capture time with its origin (v3.2 image metadata).
