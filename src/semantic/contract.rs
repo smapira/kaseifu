@@ -95,6 +95,8 @@ pub struct FmInput {
     pub semantic_signals: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<FmImageFacts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perception: Option<FmPerception>,
 }
 
 /// Image facts already extracted in Rust (EXIF / Spotlight).
@@ -108,6 +110,41 @@ pub struct FmImageFacts {
     pub width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
+}
+
+/// Perception labels already extracted in Rust (Apple Vision, Phase 5b).
+///
+/// A compatible extension of `fm-rename-v1`: the field is optional, no key
+/// was removed or retyped, both sides ignore unknown fields, and the envelope
+/// version stays the same. Only image targets carry it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FmPerception {
+    pub labels: Vec<FmPerceptionLabel>,
+}
+
+/// One perception label as it travels to the bridge.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FmPerceptionLabel {
+    pub label: String,
+    pub confidence: f32,
+}
+
+impl From<&crate::models::file_context::PerceptionInfo> for FmPerception {
+    /// Bound again at the wire: the request never carries more than the
+    /// perception budget, whatever the observation held.
+    fn from(info: &crate::models::file_context::PerceptionInfo) -> Self {
+        let bounded = super::perception::bound_labels(info.labels.iter().cloned());
+        Self {
+            labels: bounded
+                .labels
+                .into_iter()
+                .map(|entry| FmPerceptionLabel {
+                    label: entry.label,
+                    confidence: entry.confidence,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// One generation request.
@@ -467,6 +504,7 @@ mod tests {
                 parent_directory: "/tmp".to_string(),
                 semantic_signals: vec!["F:a".to_string()],
                 image: None,
+                perception: None,
             },
         };
         let json = serde_json::to_value(&request).expect("serializes");
@@ -482,5 +520,89 @@ mod tests {
             assert!(json.get(key).is_some(), "request must carry {key}");
         }
         assert_eq!(json["analysis"]["project"], serde_json::json!(false));
+        assert!(
+            json["input"].get("perception").is_none(),
+            "a document request carries no perception key"
+        );
+    }
+
+    #[test]
+    fn perception_travels_under_fm_rename_v1_without_touching_image() {
+        let info = crate::models::file_context::PerceptionInfo {
+            labels: vec![
+                crate::models::file_context::PerceptionLabel {
+                    label: "sky".to_string(),
+                    confidence: 0.039,
+                },
+                crate::models::file_context::PerceptionLabel {
+                    label: "sunset_sunrise".to_string(),
+                    confidence: 0.038,
+                },
+            ],
+        };
+        let request = FmRequest {
+            schema_version: SCHEMA_VERSION.to_string(),
+            request_id: "rename-0002".to_string(),
+            target_type: TargetKind::Image,
+            path: "/tmp/IMG_1234.png".to_string(),
+            language: "ja".to_string(),
+            analysis: AnalysisFlags::default(),
+            input: FmInput {
+                filename: "IMG_1234.png".to_string(),
+                extension: Some("png".to_string()),
+                size_bytes: 3,
+                created_at: None,
+                modified_at: None,
+                parent_directory: "/tmp".to_string(),
+                semantic_signals: vec![],
+                image: Some(FmImageFacts {
+                    capture_time: Some("2025-08-10T15:30:00".to_string()),
+                    camera: Some("TestMake TestModel".to_string()),
+                    width: Some(64),
+                    height: Some(48),
+                }),
+                perception: Some(FmPerception::from(&info)),
+            },
+        };
+        let json = serde_json::to_value(&request).expect("serializes");
+        assert_eq!(json["schema_version"], serde_json::json!(SCHEMA_VERSION));
+        assert_eq!(json["target_type"], serde_json::json!("image"));
+        assert_eq!(json["input"]["perception"]["labels"][0]["label"], "sky");
+        assert_eq!(
+            json["input"]["perception"]["labels"]
+                .as_array()
+                .expect("labels")
+                .len(),
+            2
+        );
+        // The existing image object keeps its exact key set.
+        let mut keys: Vec<&str> = json["input"]["image"]
+            .as_object()
+            .expect("image")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["camera", "capture_time", "height", "width"]);
+    }
+
+    #[test]
+    fn perception_is_bounded_again_on_the_wire() {
+        let info = crate::models::file_context::PerceptionInfo {
+            labels: (0..40)
+                .map(|index| crate::models::file_context::PerceptionLabel {
+                    label: format!("label-{index}"),
+                    confidence: 0.5 + index as f32 / 100.0,
+                })
+                .collect(),
+        };
+        let wire = FmPerception::from(&info);
+        assert_eq!(
+            wire.labels.len(),
+            crate::semantic::perception::MAX_PERCEPTION_LABELS
+        );
+        assert!(wire.labels.iter().all(|entry| {
+            entry.label.chars().count() <= crate::semantic::perception::MAX_PERCEPTION_LABEL_CHARS
+        }));
     }
 }

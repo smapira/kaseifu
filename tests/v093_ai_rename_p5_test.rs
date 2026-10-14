@@ -204,6 +204,9 @@ fn v093_image_requests_serialize_under_fm_rename_v1() {
                 width: Some(64),
                 height: Some(48),
             }),
+            // Phase 5 keeps the text-equivalent path: no perception labels
+            // travel with this request (Phase 5b adds them).
+            perception: None,
         },
     };
     let json = serde_json::to_value(&request).expect("serializes");
@@ -619,6 +622,7 @@ fn v093_image_facts_carry_no_person_fields() {
             width: Some(64),
             height: Some(48),
         }),
+        perception: None,
     };
     let value = serde_json::to_value(&input).expect("serializes");
     let image = value.get("image").expect("image object present");

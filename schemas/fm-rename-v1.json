@@ -17,7 +17,43 @@
         "language",
         "analysis",
         "input"
-      ]
+      ],
+      "properties": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "image": {
+              "type": "object",
+              "description": "Image facts already extracted in Rust (EXIF / Spotlight)."
+            },
+            "perception": {
+              "type": "object",
+              "description": "Phase 5b: bounded Apple Vision labels. Optional and image-only; nothing is required and no existing key changes.",
+              "properties": {
+                "labels": {
+                  "type": "array",
+                  "maxItems": 12,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "label",
+                      "confidence"
+                    ],
+                    "properties": {
+                      "label": {
+                        "type": "string"
+                      },
+                      "confidence": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     },
     {
       "title": "Response",

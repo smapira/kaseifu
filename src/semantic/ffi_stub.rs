@@ -38,6 +38,37 @@ pub unsafe extern "C" fn kaseifu_fm_available() -> *mut c_char {
     into_c_string(json)
 }
 
+/// Perception JSON: this build has no Swift bridge, so perception reports
+/// itself unavailable with the same reason the model does.
+///
+/// # Safety
+/// `image_path` must be null or a valid NUL-terminated string, and the
+/// returned pointer must be freed exactly once with
+/// [`kaseifu_fm_free_result`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kaseifu_vision_perceive(image_path: *const c_char) -> *mut c_char {
+    let detail = if image_path.is_null() {
+        None
+    } else {
+        Some(
+            unsafe { CStr::from_ptr(image_path) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    };
+    let mut error = serde_json::json!({"kind": "unavailable", "reason": REASON});
+    if let Some(detail) = detail {
+        error["detail"] = serde_json::Value::String(detail);
+    }
+    let json = serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "status": "error",
+        "error": error,
+    })
+    .to_string();
+    into_c_string(json)
+}
+
 /// Create a context (null when `options_json` is not a JSON object).
 ///
 /// # Safety

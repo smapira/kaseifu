@@ -129,6 +129,7 @@ pub fn normalize_with_options(
         parent_directory,
         candidate_destinations: vec![],
         image_metadata,
+        perception: None,
     })
 }
 

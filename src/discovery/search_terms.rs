@@ -130,6 +130,7 @@ mod tests {
             candidate_destinations: Default::default(),
             directory_summary: DirectorySummary::default(),
             image_metadata: None,
+            perception: None,
         };
 
         let terms = extract_terms(&normalized);
@@ -153,6 +154,7 @@ mod tests {
             candidate_destinations: Default::default(),
             directory_summary: DirectorySummary::default(),
             image_metadata: None,
+            perception: None,
         };
 
         let terms = extract_terms(&normalized);

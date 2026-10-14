@@ -1,11 +1,14 @@
-// kaseifu Foundation Models bridge (C ABI).
+// kaseifu Apple-bridge (C ABI).
 //
-// This is the only Swift in the repository. It owns exactly two things:
+// This is the only Swift in the repository. It owns exactly three things:
 //
-// 1. the C ABI entry points (`kaseifu_fm_*`), called from Rust in-process,
-// 2. the Apple Foundation Models call (availability, prompt, guided answer).
+// 1. the C ABI entry points (`kaseifu_fm_*`, `kaseifu_vision_perceive`),
+// 2. the Apple Foundation Models call (availability, prompt, guided answer),
+// 3. the Apple Vision perception call (Phase 5b) for one image path.
 //
-// It never touches the filesystem, SQLite or the journal: those stay in Rust.
+// It never writes to the filesystem, SQLite or the journal: those stay in
+// Rust. The only file it reads is the image path Rust hands it through
+// `kaseifu_vision_perceive`, opened read-only through ImageIO.
 //
 // Threading and ownership contract (mirrored by the Rust wrapper):
 //
@@ -13,19 +16,27 @@
 //   callback is then invoked **exactly once**, on an arbitrary thread, possibly
 //   before `generate` returns. A non-zero return means the callback is never
 //   invoked.
+// - `kaseifu_vision_perceive` answers synchronously with a heap string; it
+//   never calls back and never throws.
 // - The callback receives a heap string it owns and must pass to
-//   `kaseifu_fm_free_result`.
+//   `kaseifu_fm_free_result`; perception strings are freed the same way.
 // - `kaseifu_fm_destroy` waits for the active generation to finish (bounded
 //   grace period) and never invokes the callback after it returns.
 // - Errors never cross the boundary as exceptions: every failure becomes an
-//   error JSON in the callback payload.
+//   error JSON in the callback payload (or in the perception string).
 //
 // The file compiles on any macOS SDK: without Foundation Models the model call
-// is replaced by an explicit `unavailable` answer (`foundation-models-sdk-missing`).
+// is replaced by an explicit `unavailable` answer (`foundation-models-sdk-missing`),
+// and without Vision perception reports `vision-framework-missing`.
 
 import Foundation
+import CoreGraphics
+import ImageIO
 #if canImport(FoundationModels)
 import FoundationModels
+#endif
+#if canImport(Vision)
+import Vision
 #endif
 
 // MARK: - Contract constants
@@ -48,6 +59,17 @@ private let kfMaxPromptChars = 2000
 
 /// The callback type shared with Rust.
 public typealias KaseifuFmCallback = @convention(c) (UnsafeMutablePointer<CChar>?, UnsafeMutableRawPointer?) -> Void
+
+/// Longest image side fed to Vision: keeps the decode bounded (2048^2 x 4 byte
+/// is about 16 MiB) and the aspect ratio untouched. The Rust side documents
+/// the same bound and never decodes pixels itself.
+private let kfVisionMaxPixelSize = 2048
+/// Labels forwarded per image: the classifier ranks far more.
+private let kfVisionMaxLabels = 12
+/// Confidence floor: below this the classifier's long tail starts.
+private let kfVisionMinConfidence: Float = 0.01
+/// Character budget for one label.
+private let kfVisionMaxLabelChars = 64
 
 // MARK: - Small helpers
 
@@ -141,6 +163,80 @@ public func kaseifu_fm_available() -> UnsafeMutablePointer<CChar>? {
     return kfString(kfJson(payload) ?? kfFallbackError(requestId: ""))
 }
 
+// MARK: - Perception (Apple Vision, Phase 5b)
+
+/// The envelope for a perception failure (same schema version as the rest).
+private func kfPerceptionError(kind: String, reason: String? = nil, detail: String? = nil) -> String {
+    var error: [String: Any] = ["kind": kind]
+    if let reason { error["reason"] = reason }
+    if let detail { error["detail"] = detail }
+    let envelope: [String: Any] = [
+        "schema_version": kfSchemaVersion,
+        "status": "error",
+        "error": error,
+    ]
+    return kfJson(envelope) ?? kfFallbackError(requestId: "")
+}
+
+/// Classify one image: read-only ImageIO open, bounded thumbnail, Vision.
+///
+/// The image bytes never cross the FFI: Rust passes the path, this function
+/// reads it. Everything is bounded (longest side, label count, label length)
+/// and the original file is never written to.
+private func kfPerceive(path: String) -> String {
+    #if canImport(Vision)
+    let url = URL(fileURLWithPath: path) as CFURL
+    guard let source = CGImageSourceCreateWithURL(url, [kCGImageSourceShouldCache: false] as CFDictionary) else {
+        return kfPerceptionError(kind: "image-unreadable", detail: path)
+    }
+    let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceShouldCacheImmediately: true,
+        kCGImageSourceThumbnailMaxPixelSize: kfVisionMaxPixelSize,
+    ]
+    guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+        return kfPerceptionError(kind: "image-undecodable", detail: path)
+    }
+    let request = VNClassifyImageRequest()
+    let handler = VNImageRequestHandler(cgImage: image, orientation: .up, options: [:])
+    do {
+        try handler.perform([request])
+    } catch {
+        return kfPerceptionError(kind: "inference-failed", detail: String(describing: error))
+    }
+    let observations = (request.results ?? []).sorted { $0.confidence > $1.confidence }
+    var labels: [[String: Any]] = []
+    var seen = Set<String>()
+    for observation in observations {
+        guard observation.confidence >= kfVisionMinConfidence else { break }
+        let identifier = kfTrim(observation.identifier, kfVisionMaxLabelChars)
+        let key = identifier.lowercased()
+        if identifier.isEmpty || seen.contains(key) { continue }
+        seen.insert(key)
+        labels.append(["label": identifier, "confidence": Double(observation.confidence)])
+        if labels.count == kfVisionMaxLabels { break }
+    }
+    let envelope: [String: Any] = [
+        "schema_version": kfSchemaVersion,
+        "status": "success",
+        "perception": ["labels": labels],
+    ]
+    return kfJson(envelope) ?? kfFallbackError(requestId: "")
+    #else
+    return kfPerceptionError(kind: "unavailable", reason: "vision-framework-missing")
+    #endif
+}
+
+/// Perception for one image path (synchronous, never throws).
+@_cdecl("kaseifu_vision_perceive")
+public func kaseifu_vision_perceive(_ imagePath: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
+    guard let imagePath else {
+        return kfString(kfPerceptionError(kind: "invalid-output", detail: "a null image path"))
+    }
+    return kfString(kfPerceive(path: String(cString: imagePath)))
+}
+
 // MARK: - Prompt and model call
 
 #if canImport(FoundationModels)
@@ -208,6 +304,18 @@ private func kfBuildPrompt(_ request: [String: Any]) -> String {
     }
     if let modified = input["modified_at"] as? String {
         lines.append("modified_at: \(kfData(kfTrim(modified, 64)))")
+    }
+    // Phase 5b: what an on-device classifier sees in the picture. The labels
+    // stay data, and the block sits before the `signals` line so the 2000
+    // character budget cannot cut the perception out of the prompt.
+    if let perception = input["perception"] as? [String: Any],
+       let entries = perception["labels"] as? [[String: Any]] {
+        let names = entries.compactMap { $0["label"] as? String }.filter { !$0.isEmpty }
+        if !names.isEmpty {
+            lines.append("visual_labels: \(kfData(names.joined(separator: ", ")))")
+            lines.append("The visual_labels data above is the picture's content, written as English identifiers.")
+            lines.append("Write the title as one short natural \(language) phrase that describes that content in \(language) words (for ja, Japanese words; never the English identifiers, never a list, never the file name or its stem).")
+        }
     }
     if let signals = input["semantic_signals"] as? [String], !signals.isEmpty {
         let bounded = signals.prefix(20).map { kfTrim($0, 120) }

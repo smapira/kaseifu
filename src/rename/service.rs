@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::models::file_context::NormalizedFileContext;
+use crate::models::file_context::{NormalizedFileContext, PerceptionInfo, PerceptionLabel};
 use crate::semantic::contract::SemanticInfo;
 use crate::semantic::provider::{SemanticError, SemanticProvider};
 use crate::storage::history::OperationHistory;
@@ -90,7 +90,57 @@ pub struct RenamePlan {
     pub rule_label: String,
     pub date_source: &'static str,
     pub snapshot: FileSnapshot,
+    /// What the perception layer contributed (images only).
+    pub perception: Option<PerceptionReport>,
 }
+
+/// What the perception layer contributed to one plan (Phase 5b).
+///
+/// `Labels` with an empty vector means perception ran and the classifier named
+/// nothing; `Unavailable` means it could not run at all. The two stay apart so
+/// a report never claims a picture was understood when it was not.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PerceptionReport {
+    Labels(Vec<PerceptionLabel>),
+    Unavailable(String),
+}
+
+impl PerceptionReport {
+    /// One bounded line for reports (the labels are ASCII identifiers).
+    ///
+    /// At most [`SHOWN_PERCEPTION_LABELS`] labels stay visible; the rest is
+    /// summarised so a report line never grows with the classifier's output.
+    pub fn summary(&self) -> String {
+        match self {
+            Self::Unavailable(reason) => format!("unavailable ({reason})"),
+            Self::Labels(labels) if labels.is_empty() => "no labels".to_string(),
+            Self::Labels(labels) => {
+                let shown: Vec<String> = labels
+                    .iter()
+                    .take(SHOWN_PERCEPTION_LABELS)
+                    .map(|entry| format!("{}({:.3})", entry.label, entry.confidence))
+                    .collect();
+                let hidden = labels.len().saturating_sub(shown.len());
+                if hidden == 0 {
+                    shown.join(" ")
+                } else {
+                    format!("{} (+{hidden} more)", shown.join(" "))
+                }
+            }
+        }
+    }
+
+    /// The labels for the request (`None` when perception did not run).
+    pub fn into_labels(self) -> Option<Vec<PerceptionLabel>> {
+        match self {
+            Self::Labels(labels) => Some(labels),
+            Self::Unavailable(_) => None,
+        }
+    }
+}
+
+/// Labels shown in one report line before the remainder is summarised.
+pub const SHOWN_PERCEPTION_LABELS: usize = 6;
 
 /// The outcome of planning a rename.
 #[derive(Debug, Clone)]
@@ -176,8 +226,9 @@ async fn plan_image_rename(
     options: &RenameOptions,
 ) -> Result<PlanOutcome, RenameError> {
     classify_image(target).map_err(|error| RenameError::Unsupported(error.to_string()))?;
-    let context = observe(target)?;
-    // Cheap checks first: rule errors and poisoned names never spend inference.
+    let mut context = observe(target)?;
+    // Cheap checks first: rule errors and poisoned names never spend inference
+    // (perception included).
     let selection = select_rule(store, options)?;
     if contains_prompt_injection(&context.target.filename) {
         return Ok(PlanOutcome::Held {
@@ -186,10 +237,35 @@ async fn plan_image_rename(
             reason: "probable prompt injection; proposal withheld".to_string(),
         });
     }
+    // Perception before the model call: the labels ride in the same request
+    // and the model turns them into a title (the naming rule stays here).
+    let perception = perceive(provider, target);
+    let labels = perception.clone().into_labels().unwrap_or_default();
+    if !labels.is_empty() {
+        context.perception = Some(PerceptionInfo {
+            labels: labels.clone(),
+        });
+    }
     let semantic = analyze(provider, &context).await?;
+    if let Some(reason) = label_echo(&semantic, &labels) {
+        return Ok(PlanOutcome::Held {
+            current_name: context.target.filename.clone(),
+            rule_label: selection.label(),
+            reason,
+        });
+    }
     let (date, _) = resolve_plan_date(&context, None, true);
     finish_plan(
-        store, target, &context, &semantic, &selection, options, &date,
+        store,
+        target,
+        &context,
+        &semantic,
+        &selection,
+        options,
+        &PlanFacts {
+            date,
+            perception: Some(perception),
+        },
     )
 }
 
@@ -220,8 +296,56 @@ async fn plan_document_rename(
     let semantic = analyze(provider, &context).await?;
     let (date, _) = resolve_plan_date(&context, document_ymd, false);
     finish_plan(
-        store, target, &context, &semantic, &selection, options, &date,
+        store,
+        target,
+        &context,
+        &semantic,
+        &selection,
+        options,
+        &PlanFacts {
+            date,
+            perception: None,
+        },
     )
+}
+
+/// Run the perception layer for one image path.
+///
+/// Perception is an add-on: a failure never fails the plan, it only leaves the
+/// labels out with an explicit reason (never a silent degradation).
+fn perceive(provider: &impl SemanticProvider, target: &Path) -> PerceptionReport {
+    match provider.perceive(target) {
+        Ok(info) => PerceptionReport::Labels(info.labels),
+        Err(error) => PerceptionReport::Unavailable(error.to_string()),
+    }
+}
+
+/// Hold a title that is exactly one perception label.
+///
+/// The classifier's English identifiers are data for the model, never a name
+/// (original spec sections 4.3 and 5.2). A copy means the model echoed the
+/// label instead of describing the picture, so the proposal is withheld with
+/// a reason rather than renamed. Comparison normalises case and separators;
+/// partial matches are not flagged.
+fn label_echo(semantic: &SemanticInfo, labels: &[PerceptionLabel]) -> Option<String> {
+    let title = normalize_echo(semantic.title.as_deref().unwrap_or_default());
+    if title.is_empty() {
+        return None;
+    }
+    labels
+        .iter()
+        .any(|entry| normalize_echo(&entry.label) == title)
+        .then(|| format!("title repeats a perception label ({title}); proposal withheld"))
+}
+
+/// Lowercase and collapse whitespace/underscores for the echo comparison.
+fn normalize_echo(value: &str) -> String {
+    value
+        .split(|character: char| character.is_whitespace() || character == '_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Observe a file through the existing pipeline.
@@ -354,6 +478,15 @@ fn exif_capture(context: &NormalizedFileContext) -> Option<&str> {
     })
 }
 
+/// The observation facts a plan carries beyond the model's answer.
+#[derive(Debug, Clone)]
+struct PlanFacts {
+    /// The naming date (image order or document order, already resolved).
+    date: ResolvedDate,
+    /// What perception contributed (images only; `None` for documents).
+    perception: Option<PerceptionReport>,
+}
+
 /// Resolve the template and validate the proposal.
 ///
 /// Image targets resolve `{date}` EXIF-first (filesystem dates of photos are
@@ -365,8 +498,9 @@ fn finish_plan(
     semantic: &SemanticInfo,
     selection: &RuleSelection,
     options: &RenameOptions,
-    date: &ResolvedDate,
+    facts: &PlanFacts,
 ) -> Result<PlanOutcome, RenameError> {
+    let date = &facts.date;
     let date_format = options
         .date_format
         .clone()
@@ -423,7 +557,14 @@ fn finish_plan(
             reason: problem.to_string(),
         });
     }
-    assemble_plan(target, &current_name, &proposal, selection, date)
+    assemble_plan(
+        target,
+        &current_name,
+        &proposal,
+        selection,
+        date,
+        facts.perception.clone(),
+    )
 }
 
 /// Build the template inputs from semantics, context and CLI overrides.
@@ -497,6 +638,7 @@ fn assemble_plan(
     proposal: &str,
     selection: &RuleSelection,
     date: &ResolvedDate,
+    perception: Option<PerceptionReport>,
 ) -> Result<PlanOutcome, RenameError> {
     if proposal == current_name {
         return Ok(PlanOutcome::Noop {
@@ -522,6 +664,7 @@ fn assemble_plan(
         rule_label: selection.label(),
         date_source: date.source,
         snapshot,
+        perception,
     }))
 }
 

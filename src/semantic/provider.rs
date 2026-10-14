@@ -20,11 +20,12 @@ use std::time::Duration;
 use super::bridge::{FmBridge, FmBridgeError, SwiftFmBridge};
 use super::contract::{
     self, AnalysisFlags, Availability, ContractError, ErrorKind, FmErrorInfo, FmImageFacts,
-    FmInput, FmRequest, FmResponse, FmStatus, MAX_FILENAME_CHARS, MAX_LANGUAGE_CHARS,
+    FmInput, FmPerception, FmRequest, FmResponse, FmStatus, MAX_FILENAME_CHARS, MAX_LANGUAGE_CHARS,
     MAX_PARENT_CHARS, MAX_PATH_CHARS, MAX_REQUEST_ID_CHARS, SCHEMA_VERSION, SemanticInfo,
     TargetKind,
 };
-use crate::models::file_context::NormalizedFileContext;
+use super::perception::PerceptionError;
+use crate::models::file_context::{NormalizedFileContext, PerceptionInfo};
 
 /// Timeout for one generation (on-device inference plus scheduling).
 pub const DEFAULT_FM_TIMEOUT: Duration = Duration::from_secs(20);
@@ -104,6 +105,13 @@ pub trait SemanticProvider: Send + Sync {
     /// Model availability with the explicit reason when it cannot run.
     fn availability(&self) -> Result<Availability, SemanticError>;
 
+    /// Image perception for one path (Apple Vision).
+    ///
+    /// Perception is an add-on, not a precondition: a failure never fails a
+    /// plan, it only leaves the labels out (`PerceptionError` is a separate
+    /// type on purpose, so it cannot be confused with model availability).
+    fn perceive(&self, path: &Path) -> Result<PerceptionInfo, PerceptionError>;
+
     /// Extract the semantic fields for one observed file.
     fn analyze<'a>(
         &'a self,
@@ -166,6 +174,17 @@ impl<B: FmBridge> SemanticProvider for FoundationModelsProvider<B> {
         self.bridge.available().map_err(SemanticError::from)
     }
 
+    fn perceive(&self, path: &Path) -> Result<PerceptionInfo, PerceptionError> {
+        // Defense in depth: only image extensions reach the classifier, so a
+        // PDF or a video is refused here instead of being handed to ImageIO.
+        if !crate::context::image_metadata::is_image_file(path) {
+            return Err(PerceptionError::Failed {
+                detail: format!("{} is not an image", path.display()),
+            });
+        }
+        self.bridge.perceive(path)
+    }
+
     fn analyze<'a>(
         &'a self,
         context: &'a NormalizedFileContext,
@@ -215,6 +234,7 @@ pub fn build_request(
             parent_directory: contract::bound_chars(&context.parent_directory, MAX_PARENT_CHARS),
             semantic_signals: contract::bound_signals(&context.semantic_signals),
             image: image_facts(context),
+            perception: perception_facts(context),
         },
     }
 }
@@ -252,6 +272,17 @@ fn image_facts(context: &NormalizedFileContext) -> Option<FmImageFacts> {
             .as_ref()
             .map(|dimensions| dimensions.height),
     })
+}
+
+/// Perception labels already extracted in Rust (Apple Vision, Phase 5b);
+/// `None` when the observation carries none (documents, degraded builds, or a
+/// classifier that found nothing).
+fn perception_facts(context: &NormalizedFileContext) -> Option<FmPerception> {
+    let info = context.perception.as_ref()?;
+    if info.is_empty() {
+        return None;
+    }
+    Some(FmPerception::from(info))
 }
 
 /// `make model`, omitting empty parts.

@@ -6,11 +6,14 @@
 //! inject [`super::fake::FakeFmBridge`].
 
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::time::Duration;
 
 use super::contract::{self, Availability, ContractError};
 use super::ffi::{self, FfiError};
+use super::perception::{self, PerceptionError};
+use crate::models::file_context::PerceptionInfo;
 
 /// Transport-level failure at the bridge boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,9 +56,17 @@ impl std::fmt::Display for FmBridgeError {
 }
 
 /// The Foundation Models boundary.
+///
+/// Phase 5b widens it to the two Apple calls a rename needs: the generation
+/// (`available` / `generate`) and the image perception (`perceive`). Both go
+/// through the same in-process C ABI, so a test that injects one fake covers
+/// the whole Apple side and never touches the OS.
 pub trait FmBridge: Send + Sync {
     /// Ask the on-device model's availability (with its explicit reason).
     fn available(&self) -> Result<Availability, FmBridgeError>;
+
+    /// Classify one image path (Apple Vision; the bridge reads the file).
+    fn perceive(&self, path: &Path) -> Result<PerceptionInfo, PerceptionError>;
 
     /// Run one generation and answer with the raw `fm-rename-v1` response JSON.
     fn generate<'a>(
@@ -80,6 +91,15 @@ impl FmBridge for SwiftFmBridge {
     fn available(&self) -> Result<Availability, FmBridgeError> {
         let json = ffi::available().map_err(FmBridgeError::from)?;
         contract::parse_availability(&json).map_err(FmBridgeError::from)
+    }
+
+    fn perceive(&self, path: &Path) -> Result<PerceptionInfo, PerceptionError> {
+        // A boundary failure (null result, non-UTF-8) is a failed perception,
+        // never a plan error: the caller keeps going without labels.
+        let json = ffi::vision_perceive(path).map_err(|error| PerceptionError::Failed {
+            detail: error.to_string(),
+        })?;
+        perception::parse(&json)
     }
 
     fn generate<'a>(

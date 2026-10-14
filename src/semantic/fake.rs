@@ -5,14 +5,16 @@
 //! the on-device model (or an Apple Intelligence enabled machine).
 
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::bridge::{FmBridge, FmBridgeError};
 use super::contract::{self, Availability, ErrorKind, SemanticFields, SemanticInfo};
+use super::perception::PerceptionError;
 use super::provider::{SemanticError, SemanticProvider};
-use crate::models::file_context::NormalizedFileContext;
+use crate::models::file_context::{NormalizedFileContext, PerceptionInfo, PerceptionLabel};
 
 /// A configured outcome for [`FakeFmBridge`].
 #[derive(Debug, Clone)]
@@ -44,6 +46,17 @@ struct FakeFmBridgeInner {
     availability: Result<Availability, FmBridgeError>,
     outcome: Mutex<Outcome>,
     requests: Mutex<Vec<String>>,
+    perception: Mutex<Result<PerceptionInfo, PerceptionError>>,
+    perceived: Mutex<Vec<PathBuf>>,
+}
+
+/// What a fake bridge answers when perception was not configured: the layer
+/// cannot run here (the plan then degrades exactly like on a machine without
+/// Vision, and no test ever reaches the OS).
+fn unconfigured_perception() -> Result<PerceptionInfo, PerceptionError> {
+    Err(PerceptionError::Unavailable {
+        reason: "perception-not-configured".to_string(),
+    })
 }
 
 impl FakeFmBridge {
@@ -95,8 +108,39 @@ impl FakeFmBridge {
                 availability,
                 outcome: Mutex::new(outcome),
                 requests: Mutex::new(Vec::new()),
+                perception: Mutex::new(unconfigured_perception()),
+                perceived: Mutex::new(Vec::new()),
             }),
         }
+    }
+
+    /// Answer perception with these labels (confidence pairs).
+    pub fn perceiving(self, labels: &[(&str, f32)]) -> Self {
+        let info = PerceptionInfo {
+            labels: labels
+                .iter()
+                .map(|(label, confidence)| PerceptionLabel {
+                    label: (*label).to_string(),
+                    confidence: *confidence,
+                })
+                .collect(),
+        };
+        self.set_perception(Ok(info))
+    }
+
+    /// Answer perception with an explicit failure (unavailable, failed, ...).
+    pub fn failing_perception(self, error: PerceptionError) -> Self {
+        self.set_perception(Err(error))
+    }
+
+    fn set_perception(self, result: Result<PerceptionInfo, PerceptionError>) -> Self {
+        *self.inner.perception.lock().expect("perception lock") = result;
+        self
+    }
+
+    /// The image paths perception was asked about, in order.
+    pub fn perceived_paths(&self) -> Vec<PathBuf> {
+        self.inner.perceived.lock().expect("perceived lock").clone()
     }
 
     /// Replace the answer after construction.
@@ -113,6 +157,19 @@ impl FakeFmBridge {
 impl FmBridge for FakeFmBridge {
     fn available(&self) -> Result<Availability, FmBridgeError> {
         self.inner.availability.clone()
+    }
+
+    fn perceive(&self, path: &Path) -> Result<PerceptionInfo, PerceptionError> {
+        self.inner
+            .perceived
+            .lock()
+            .expect("perceived lock")
+            .push(path.to_path_buf());
+        self.inner
+            .perception
+            .lock()
+            .expect("perception lock")
+            .clone()
     }
 
     fn generate<'a>(
@@ -193,6 +250,7 @@ fn kind_str(kind: &ErrorKind) -> &'static str {
 pub struct FakeSemanticProvider {
     availability: Result<Availability, SemanticError>,
     result: Mutex<Result<SemanticInfo, SemanticError>>,
+    perception: Mutex<Result<PerceptionInfo, PerceptionError>>,
 }
 
 impl FakeSemanticProvider {
@@ -201,6 +259,7 @@ impl FakeSemanticProvider {
         Self {
             availability: Ok(Availability::Available),
             result: Mutex::new(Ok(info)),
+            perception: Mutex::new(unconfigured_perception()),
         }
     }
 
@@ -213,13 +272,33 @@ impl FakeSemanticProvider {
                 detail: None,
             }),
             result: Mutex::new(Err(SemanticError::Unavailable { reason })),
+            perception: Mutex::new(unconfigured_perception()),
         }
+    }
+
+    /// Answer perception with these labels (confidence pairs).
+    pub fn with_perception(self, labels: &[(&str, f32)]) -> Self {
+        let info = PerceptionInfo {
+            labels: labels
+                .iter()
+                .map(|(label, confidence)| PerceptionLabel {
+                    label: (*label).to_string(),
+                    confidence: *confidence,
+                })
+                .collect(),
+        };
+        *self.perception.lock().expect("perception lock") = Ok(info);
+        self
     }
 }
 
 impl SemanticProvider for FakeSemanticProvider {
     fn availability(&self) -> Result<Availability, SemanticError> {
         self.availability.clone()
+    }
+
+    fn perceive(&self, _path: &Path) -> Result<PerceptionInfo, PerceptionError> {
+        self.perception.lock().expect("perception lock").clone()
     }
 
     fn analyze<'a>(

@@ -21,7 +21,7 @@ use kaseifu::presentation::{OutputFormat, resolve_mode};
 use kaseifu::rename::{
     document::classify_document,
     rules::{PRESETS, find_preset, is_date_format},
-    service::{PlanOutcome, RenameOptions, plan_rename},
+    service::{PerceptionReport, PlanOutcome, RenameOptions, plan_rename},
     store::RenameStore,
 };
 use kaseifu::semantic::provider::FoundationModelsProvider;
@@ -1129,6 +1129,27 @@ struct RenameReport<'a> {
     reason: Option<&'a str>,
     operation_id: Option<&'a str>,
     target: &'a Path,
+    perception: Option<&'a PerceptionReport>,
+}
+
+/// The `perception` object for the JSON report (images only).
+fn perception_json(report: &PerceptionReport) -> serde_json::Value {
+    match report {
+        PerceptionReport::Labels(labels) => serde_json::json!({
+            "status": "labels",
+            "labels": labels
+                .iter()
+                .map(|entry| serde_json::json!({
+                    "label": entry.label,
+                    "confidence": entry.confidence,
+                }))
+                .collect::<Vec<_>>(),
+        }),
+        PerceptionReport::Unavailable(reason) => serde_json::json!({
+            "status": "unavailable",
+            "reason": reason,
+        }),
+    }
 }
 
 /// Emit a `rename` file report (text lines plus the fixed JSON shape).
@@ -1147,6 +1168,9 @@ fn emit_rename_report(format: OutputFormat, report: &RenameReport) {
     if let Some(reason) = report.reason {
         lines.push(format!("reason: {reason}"));
     }
+    if let Some(perception) = report.perception {
+        lines.push(format!("perception: {}", perception.summary()));
+    }
     if let Some(operation_id) = report.operation_id {
         lines.push(format!("operation_id: {operation_id}"));
     }
@@ -1164,6 +1188,7 @@ fn emit_rename_report(format: OutputFormat, report: &RenameReport) {
             "pattern": report.pattern,
             "date_source": report.date_source,
             "operation_id": report.operation_id,
+            "perception": report.perception.map(perception_json),
         }
     })
     .to_string();
@@ -1232,6 +1257,7 @@ async fn rename_file(
                     reason: Some("name is already current"),
                     operation_id: Option::None,
                     target,
+                    perception: Option::None,
                 },
             );
             Ok(())
@@ -1252,6 +1278,7 @@ async fn rename_file(
                     reason: Some(&reason),
                     operation_id: Option::None,
                     target,
+                    perception: Option::None,
                 },
             );
             Ok(())
@@ -1279,6 +1306,7 @@ fn rename_ready(
                 reason: Option::None,
                 operation_id: Option::None,
                 target,
+                perception: plan.perception.as_ref(),
             },
         );
         return Ok(());
@@ -1296,6 +1324,7 @@ fn rename_ready(
             reason: Option::None,
             operation_id: Some(&operation_id),
             target,
+            perception: plan.perception.as_ref(),
         },
     );
     Ok(())

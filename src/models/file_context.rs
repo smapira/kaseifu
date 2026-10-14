@@ -78,6 +78,8 @@ pub struct NormalizedFileContext {
     pub candidate_destinations: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub image_metadata: Option<ImageMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub perception: Option<PerceptionInfo>,
 }
 
 /// Capture time with its origin (v3.2 image metadata).
@@ -122,6 +124,32 @@ pub struct ImageDimensions {
     pub height: u32,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source: Option<String>,
+}
+
+/// Names for the model that do not come from pixels or from EXIF: the
+/// on-device image classifier's labels (Phase 5b).
+///
+/// The labels never become a file name on their own: they ride to the model
+/// as bounded data and the naming rule engine stays in Rust (original spec
+/// sections 4.3 and 5.2). Omitted when the perception layer did not run.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct PerceptionInfo {
+    #[serde(default)]
+    pub labels: Vec<PerceptionLabel>,
+}
+
+impl PerceptionInfo {
+    /// True when the classifier contributed nothing.
+    pub fn is_empty(&self) -> bool {
+        self.labels.is_empty()
+    }
+}
+
+/// One classification label with the confidence the classifier reported.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct PerceptionLabel {
+    pub label: String,
+    pub confidence: f32,
 }
 
 /// Normalized image metadata (v3.2). Omitted for non-image files.

@@ -23,6 +23,7 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::future::Future;
+use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -70,6 +71,10 @@ pub mod raw {
     unsafe extern "C" {
         /// Availability JSON owned by the caller (`kaseifu_fm_free_result`).
         pub fn kaseifu_fm_available() -> *mut c_char;
+        /// Perception JSON for one image path, owned by the caller
+        /// (`kaseifu_fm_free_result`). Synchronous: Vision classifies a
+        /// bounded thumbnail in well under a second (measured 0.078-0.385 s).
+        pub fn kaseifu_vision_perceive(image_path: *const c_char) -> *mut c_char;
         /// Create a context, or null when `options_json` is not a JSON object.
         pub fn kaseifu_fm_create(options_json: *const c_char) -> *mut c_void;
         /// Start one generation; see the module contract for the return codes.
@@ -130,6 +135,20 @@ impl std::fmt::Display for FfiError {
 /// The availability payload as JSON (parsed by `contract::parse_availability`).
 pub fn available() -> Result<String, FfiError> {
     take_string(unsafe { raw::kaseifu_fm_available() })
+}
+
+/// The perception payload for one image path (parsed by `perception::parse`).
+///
+/// The path travels as a C string and Rust never opens the file: the bridge
+/// decodes a bounded thumbnail with ImageIO and classifies it. A rejected
+/// path (not UTF-8, NUL byte) is an explicit error, never a panic.
+pub fn vision_perceive(path: &Path) -> Result<String, FfiError> {
+    let text = path
+        .to_str()
+        .ok_or_else(|| FfiError::Internal("the image path is not valid UTF-8".to_string()))?;
+    let argument = CString::new(text)
+        .map_err(|_| FfiError::Internal("the image path contains a NUL byte".to_string()))?;
+    take_string(unsafe { raw::kaseifu_vision_perceive(argument.as_ptr()) })
 }
 
 /// An inference context. Dropping it destroys the bridge context.
