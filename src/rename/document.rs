@@ -67,14 +67,14 @@ pub fn classify_document(path: &Path) -> Result<DocumentKind, DocumentError> {
         ))),
         "jpg" | "jpeg" | "png" | "heic" | "heif" | "hif" | "tif" | "tiff" | "webp" => {
             Err(DocumentError::UnsupportedType(format!(
-                ".{raw} is an image; image rename arrives with Phase 5"
+                ".{raw} is an image, not a document (txt, md, pdf, html)"
             )))
         }
         "mp4" | "mov" | "m4v" => Err(DocumentError::UnsupportedType(format!(
-            ".{raw} is a video; video rename arrives with Phase 6"
+            ".{raw} is a video; video rename is not available yet"
         ))),
         _ => Err(DocumentError::UnsupportedType(format!(
-            ".{raw} is not a Phase 4 document (txt, md, pdf, html)"
+            ".{raw} is not a document (txt, md, pdf, html)"
         ))),
     }
 }

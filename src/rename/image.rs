@@ -45,7 +45,7 @@ pub fn is_image(path: &Path) -> bool {
 pub fn classify_image(path: &Path) -> Result<ImageKind, ImageError> {
     if !is_image(path) {
         return Err(ImageError::NotImage(format!(
-            "{} is not a Phase 5 image (jpg, jpeg, png, heic, heif, tif, tiff, webp)",
+            "{} is not an image (jpg, jpeg, png, heic, heif, tif, tiff, webp)",
             path.display()
         )));
     }

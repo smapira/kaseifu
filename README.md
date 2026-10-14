@@ -193,6 +193,68 @@ plan even if one arrives from somewhere else. Without a terminal, `--select`
 fails with guidance; `--select --format json` prints the candidate list
 instead of prompting.
 
+### Rename a file (AI naming)
+
+Propose a content-based name, and apply it on request:
+
+```bash
+kaseifu rename ~/Desktop/report.pdf            # dry run: print the proposal
+kaseifu rename ~/Desktop/report.pdf --execute  # rename it (journaled, undoable)
+```
+
+The name comes from the rule you pick, and the rule's variables come from the
+file itself: the on-device model supplies the title and category, the file
+supplies size, extension, parent directory and dates, and images also get
+scene labels from on-device Vision. Rules are the built-in presets `P01`-`P12`
+or your own template:
+
+```bash
+kaseifu rename ~/Desktop/report.pdf --patterns
+kaseifu rename ~/Desktop/report.pdf --pattern date-category-title
+kaseifu rename ~/Desktop/report.pdf --template "{date}_{title}"
+kaseifu rename ~/Desktop/report.pdf --pattern prefix-title --prefix WORK
+```
+
+Presets are stored in the same SQLite database as the journal, so no new
+configuration file appears:
+
+```bash
+kaseifu rename --save-preset work --pattern prefix-title --prefix WORK
+kaseifu rename ~/Desktop/report.pdf --preset work
+kaseifu rename --set-default work     # later renames need no flags
+kaseifu rename --patterns             # builtins plus stored presets
+kaseifu rename --delete-preset work
+```
+
+Behaviour worth knowing:
+
+- **Documents and images.** Documents are txt, md, pdf and html; images are
+  jpg, jpeg, png, heic, heif, tif, tiff and webp. Other types are refused with
+  the reason; video is not renamed yet.
+- **Images are described on device.** Apple Vision labels the scene (`outdoor`,
+  `moon`, ...) and the model turns those into the title, so `IMG_1234.png` can
+  become `2026-10-14_夜空の月.png`. The image is opened read-only and never
+  modified.
+- **Dates.** Images prefer the EXIF capture time (the Spotlight EXIF value,
+  then the EXIF inside the file); documents prefer the creation time, then the
+  modification time, then a date found in the text. `--date-format` picks the
+  rendering, and the display reports `date_source` so you can see which one
+  was used.
+- **Missing values hold the proposal back.** A rule whose required variable is
+  empty, a name collision, a dangerous name (`/`, `..`, an extension change) or
+  a document that looks like a prompt-injection payload is reported as
+  `status: held` with a reason; nothing is silently repaired or invented.
+- **Names stay shell friendly.** The stem is cut to 80 characters at a word
+  boundary, whitespace runs become `_`, and the extension never changes.
+- **Journal and undo.** An executed rename is one journal row, and
+  `kaseifu undo` reverses it exactly like an organize move.
+- **No model, no rename.** Without Apple Intelligence the command exits with
+  `model unavailable: ...`; it never falls back to another model.
+- `--format json` (with or without `--execute`) prints one object: `target`,
+  `current_name`, `pattern`, `proposal`, `date_source`, `status`, `reason`,
+  `operation_id`, and `perception` for images (the labels, or why they are
+  missing).
+
 ### Undo
 
 Restore the most recent move:
@@ -450,6 +512,7 @@ src/
 ├── main.rs              # CLI entry point (clap)
 ├── lib.rs               # Library root
 ├── auth/                # Keychain access + interactive prompts (v3.3)
+├── benchmark/           # TREC related-document harness (kaseifu-bench)
 ├── completion/          # zsh completion generation + installation
 ├── config/              # User TOML + resolution order (v3.3)
 ├── doctor.rs            # Environment diagnostics (v3.3)
@@ -461,6 +524,7 @@ src/
 ├── operations/          # Organize, plan, move, undo (Phase 5)
 ├── policy/              # Auto/review/refuse decisions
 ├── platform/            # macOS-specific code (FSEvents)
+├── rename/              # Naming rules, document + image rename
 ├── semantic/            # Foundation Models bridge + semantic provider (Phase 0-2)
 ├── storage/             # SQLite history + cache
 └── watch/               # FSEvents watcher + coordinator (Phase 6)
@@ -501,6 +565,19 @@ cargo run --example fm_bridge_smoke
 Real inference runs there only with Apple Intelligence enabled; the test suite
 stays model-independent (`cargo test --test v090_fm_bridge_test -- --ignored`
 runs the inference path manually).
+
+The TREC evaluation harness is a separate research binary (`kaseifu-bench`) that
+measures related-document selection against the official Robust04 qrels. It is
+not part of the user workflow:
+
+```bash
+cargo build --release --bin kaseifu-bench
+./target/release/kaseifu-bench --help
+```
+
+The document corpus comes from NIST (the qrels are public). When a dataset is
+missing the harness stops and says so; it never fabricates or substitutes data,
+and it only ever reads the corpus.
 
 ## Safety
 

@@ -439,13 +439,14 @@ fn v092_default_rule_round_trips() {
 fn v092_foreign_types_fail_before_any_model_call() {
     let home = isolated_home("foreign");
     let dir = work_dir("foreign");
-    // Images are Phase 5 scope (see v093): video still fails fast with the
-    // phase that owns it, before any model call.
+    // Images are renamed too (see v093); video still fails fast, and the
+    // refusal stays free of internal phase vocabulary.
     let clip = write_doc(&dir, "clip.mp4", "fake\n");
     let output = cli(&home, &["rename", clip.to_str().expect("utf8")]);
     assert!(!output.status.success(), "videos must fail");
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert!(stderr.contains("Phase 6"), "points at Phase 6: {stderr}");
+    assert!(stderr.contains("is a video"), "names the type: {stderr}");
+    assert!(!stderr.contains("Phase"), "no phase words: {stderr}");
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -237,13 +237,15 @@ enum Commands {
         yes: bool,
     },
 
-    /// Propose a content-based file name for a document (dry run by default).
+    /// Propose a content-based file name (dry run by default).
     ///
     /// Asks the on-device model for a title, applies the naming rule
     /// (--pattern, --template, --preset or the stored default), then either
     /// reports the proposal or renames with --execute. Every executed rename
     /// is journaled and can be reversed with `undo`. Use --patterns to list
-    /// the rules; documents are txt, md, pdf and html.
+    /// the rules. Documents are txt, md, pdf and html; images are jpg, jpeg,
+    /// png, heic, heif, tif, tiff and webp, and their scene is described by
+    /// on-device Vision labels.
     Rename(Box<RenameCli>),
 
     /// Print a shell completion script (only zsh can be installed).
@@ -876,7 +878,7 @@ fn handle_undo(last: usize, format: OutputFormat) -> Result<()> {
 /// Parsed `rename` arguments (boxed: the struct form keeps `Commands` small).
 #[derive(clap::Args, Debug)]
 struct RenameCli {
-    /// Document to rename (txt, md, pdf, html).
+    /// File to rename (a document, or an image).
     target: Option<PathBuf>,
     /// Rename the file (default is a dry run; cannot be combined with --dry-run).
     #[arg(long, conflicts_with = "dry_run")]

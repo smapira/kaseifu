@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-14
+
+### Added
+
+- **`kaseifu rename` - content-based naming, dry run by default.** The
+  on-device model supplies a title and category, the file supplies size,
+  extension, parent directory and dates, and the naming rule (`--pattern`,
+  `--template`, `--preset` or the stored default) turns them into a name.
+  Presets `P01`-`P12` cover date, category, prefix, suffix, sequence and
+  metadata shapes; `--patterns` lists them, `--save-preset` /
+  `--delete-preset` / `--set-default` manage your own and keep them in the
+  same SQLite database as the journal (no new configuration file). `--execute`
+  renames after the usual TOCTOU recheck, journals one row and `undo` reverses
+  it. A rule whose required variable is empty, a collision, a dangerous name or
+  a file that looks like a prompt-injection payload is reported as `held` with
+  a reason instead of being guessed at. `--format json` prints the proposal as
+  one structured object.
+- **Image rename with on-device scene labels.** Images (jpg, jpeg, png, heic,
+  heif, tif, tiff, webp) are opened read-only, scaled to a bounded thumbnail
+  for analysis and labelled by Apple Vision (`VNClassifyImageRequest`); the
+  labels (bounded: 12 labels, 0.01 floor, 64 characters) reach the model as
+  data, so `IMG_1234.png` can become `2026-10-14_夜空の月.png` instead of
+  echoing the file name. Images never cross the FFI as bytes: Rust passes the
+  path and Swift reads the file.
+- **Foundation Models bridge.** A Swift C ABI (`swift/kaseifu_fm_bridge.swift`,
+  built by `build.rs`) connects the binary to Apple Foundation Models in
+  process. `kaseifu_fm_available` reports the model state with its explicit
+  reason (`appleIntelligenceNotEnabled`, `modelNotReady`, `deviceNotEligible`,
+  `unsupported-os`, or the SDK/toolchain stubs) and the tool never falls back
+  to another model. `cargo run --example fm_bridge_smoke` prints what the
+  bridge answers on this machine.
+- **TREC related-document harness (`kaseifu-bench`).** A separate research
+  binary that derives a document-to-document ground truth from the official
+  Robust04 qrels, scopes every `mdfind` to the corpus (`-onlyin` plus a
+  normalized containment check), refuses to evaluate against an incomplete
+  Spotlight index, and writes JSON/CSV reports with reproducibility metadata
+  (commit, dataset and manifest checksums, macOS, index state). It is not part
+  of the user workflow.
+
+### Changed
+
+- **Images date themselves from real capture signals.** Capture time now comes
+  from the Spotlight EXIF value or the EXIF inside the file, and a filesystem
+  creation date is no longer reported as a capture time (it stays available as
+  the creation date). A photo with EXIF therefore keeps its shot date instead of
+  being labelled with the transfer date, and an image without EXIF falls through
+  to created/modified with `date_source` naming what was used.
+- **Generated names are shell friendly.** The stem is cut to 80 characters at a
+  word boundary and every whitespace run becomes `_`, so proposals do not break
+  tab completion; a trailing `.{extension}` the model echoes back is dropped
+  instead of doubling the extension.
+- **User-facing wording.** Help text and refusals no longer mention internal
+  phase numbers, and `rename` help documents images as well as documents.
+- **No new dependencies.** `Cargo.toml` gains one `[[bin]]` entry; the Swift
+  bridge is compiled by the build script and the binary is weak-linked against
+  FoundationModels.
+
+### Fixed
+
+- The proposed name could become `note.txt.txt` when the model echoed the file
+  name including its extension.
+- A document containing instruction-style text could steer the proposed name;
+  such documents (and file names) now hold the proposal before inference is
+  spent, and untrusted values are marked as data for the model.
+- `rename --format json` no longer mixes a human-readable line into the JSON
+  output, and the run output of the harness no longer overwrites an earlier run.
+
+Note: the binary now requires macOS 12.0 or later (the Swift concurrency
+runtime), while the rename feature itself needs macOS 26 with Apple
+Intelligence enabled.
+
 ## [0.8.0] - 2026-10-14
 
 ### Added
