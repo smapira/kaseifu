@@ -312,6 +312,21 @@ pub fn resolve_template(
     Ok(output)
 }
 
+/// Drop a trailing `.{extension}` the model echoed back into the title.
+///
+/// The extension is owned by the rule engine (`finish_plan` appends it), so a
+/// case-insensitive trailing match is the model's echo, not content: without
+/// this, a `note.txt` title becomes `note.txt.txt`.
+pub fn strip_redundant_extension(stem: &str, extension: &str) -> String {
+    if extension.is_empty() {
+        return stem.to_string();
+    }
+    match stem.rsplit_once('.') {
+        Some((head, tail)) if tail.eq_ignore_ascii_case(extension) => head.to_string(),
+        _ => stem.to_string(),
+    }
+}
+
 /// Check a template without producing a name (used when saving presets).
 ///
 /// Unknown variables and bad date formats are rejected; missing values are
@@ -530,5 +545,18 @@ mod tests {
         );
         assert!(matches!(preference, DatePreference::Modified));
         assert_eq!(date.source, "modified");
+    }
+
+    #[test]
+    fn an_echoed_extension_is_stripped_once() {
+        assert_eq!(strip_redundant_extension("note.txt", "txt"), "note");
+        assert_eq!(strip_redundant_extension("NOTE.TXT", "txt"), "NOTE");
+        assert_eq!(
+            strip_redundant_extension("archive.tar", "txt"),
+            "archive.tar"
+        );
+        assert_eq!(strip_redundant_extension("plain", "txt"), "plain");
+        assert_eq!(strip_redundant_extension("plain", ""), "plain");
+        assert_eq!(strip_redundant_extension(".txt", "txt"), "");
     }
 }

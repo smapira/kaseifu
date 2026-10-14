@@ -14,12 +14,12 @@ use crate::semantic::provider::{SemanticError, SemanticProvider};
 use crate::storage::history::OperationHistory;
 
 use super::document::{
-    DocumentDate, DocumentKind, MAX_DOCUMENT_BYTES, classify_document, extract_signals,
-    read_bounded, scan_document_date,
+    DocumentDate, DocumentKind, MAX_DOCUMENT_BYTES, classify_document, contains_prompt_injection,
+    extract_signals, read_bounded, scan_document_date,
 };
 use super::rules::{
     PresetDef, ResolvedDate, RuleInputs, find_preset, is_date_format, resolve_date,
-    resolve_template,
+    resolve_template, strip_redundant_extension,
 };
 use super::store::RenameStore;
 use super::validate::{
@@ -62,8 +62,9 @@ impl RuleSelection {
     }
 }
 
-/// Bounded document text plus an optional unambiguous calendar date.
-type DocumentSignals = (Vec<String>, Option<(i32, u32, u32)>);
+/// Bounded document text, an optional unambiguous calendar date, and whether
+/// the text looks like a prompt-injection payload.
+type DocumentSignals = (Vec<String>, Option<(i32, u32, u32)>, bool);
 
 /// Caller-supplied overrides (mirrors the CLI flags).
 #[derive(Debug, Clone, Default)]
@@ -157,10 +158,18 @@ pub async fn plan_rename(
     let kind =
         classify_document(target).map_err(|error| RenameError::Unsupported(error.to_string()))?;
     let mut context = observe(target)?;
-    let (signals, document_ymd) = read_document_signals(target, kind)?;
+    let (signals, document_ymd, injection) = read_document_signals(target, kind)?;
     context.semantic_signals.extend(signals);
-    let semantic = analyze(provider, &context).await?;
+    // Cheap checks first: rule errors and poisoned documents never spend inference.
     let selection = select_rule(store, options)?;
+    if injection || contains_prompt_injection(&context.target.filename) {
+        return Ok(PlanOutcome::Held {
+            current_name: context.target.filename.clone(),
+            rule_label: selection.label(),
+            reason: "probable prompt injection; proposal withheld".to_string(),
+        });
+    }
+    let semantic = analyze(provider, &context).await?;
     finish_plan(
         store,
         target,
@@ -180,7 +189,8 @@ fn observe(target: &Path) -> Result<NormalizedFileContext, RenameError> {
         .map_err(|error| RenameError::Unreadable(error.to_string()))
 }
 
-/// Read the bounded document text into signals plus an optional date.
+/// Read the bounded document text into signals, an optional date, and whether
+/// the text looks like a prompt-injection payload.
 fn read_document_signals(
     target: &Path,
     kind: DocumentKind,
@@ -193,7 +203,7 @@ fn read_document_signals(
         DocumentDate::One(year, month, day) => Some((year, month, day)),
         DocumentDate::None | DocumentDate::Ambiguous => Option::None,
     };
-    Ok((signals, document_ymd))
+    Ok((signals, document_ymd, contains_prompt_injection(&text)))
 }
 
 /// Run the semantic provider, mapping unavailability explicitly.
@@ -315,7 +325,10 @@ fn finish_plan(
         }
     };
     let stem = match resolve_template(&template, &inputs, &date_format) {
-        Ok(stem) => stem,
+        // The model sometimes echoes the file name including its extension;
+        // the extension is owned by the rule engine, so a trailing match is
+        // the model's echo, not a second extension.
+        Ok(stem) => strip_redundant_extension(&stem, &current_extension),
         Err(error) => {
             return Ok(PlanOutcome::Held {
                 current_name,
@@ -324,6 +337,16 @@ fn finish_plan(
             });
         }
     };
+    // Trailing dots and spaces are model punctuation, not name content
+    // ("Budget memo. " must not become "Budget memo. .txt").
+    let stem = stem.trim_end_matches(&['.', ' '][..]).to_string();
+    if stem.is_empty() {
+        return Ok(PlanOutcome::Held {
+            current_name,
+            rule_label: selection.label(),
+            reason: "title is empty after removing the echoed extension".to_string(),
+        });
+    }
     let proposal = format!("{stem}.{current_extension}");
     if let Err(problem) = check_filename(&proposal, &current_extension) {
         return Ok(PlanOutcome::Held {
