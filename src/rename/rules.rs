@@ -312,6 +312,26 @@ pub fn resolve_template(
     Ok(output)
 }
 
+/// Maximum stem length (the extension is extra): model titles longer than
+/// this are cut back to a word boundary instead of becoming sentences.
+pub const MAX_STEM_CHARS: usize = 80;
+
+/// Bound a resolved stem to [`MAX_STEM_CHARS`] characters.
+///
+/// Over-long titles are cut at the last space inside the budget so words are
+/// never split; a single word longer than the budget is hard-cut (still a
+/// valid, bounded name). Short stems pass through untouched.
+pub fn bound_stem(stem: &str) -> String {
+    if stem.chars().count() <= MAX_STEM_CHARS {
+        return stem.to_string();
+    }
+    let head: String = stem.chars().take(MAX_STEM_CHARS).collect();
+    match head.rfind(' ') {
+        Some(index) => head[..index].to_string(),
+        Option::None => head,
+    }
+}
+
 /// Drop a trailing `.{extension}` the model echoed back into the title.
 ///
 /// The extension is owned by the rule engine (`finish_plan` appends it), so a
@@ -558,5 +578,18 @@ mod tests {
         assert_eq!(strip_redundant_extension("plain", "txt"), "plain");
         assert_eq!(strip_redundant_extension("plain", ""), "plain");
         assert_eq!(strip_redundant_extension(".txt", "txt"), "");
+    }
+
+    #[test]
+    fn long_stems_are_cut_at_a_word_boundary() {
+        assert_eq!(bound_stem("short"), "short");
+        let long = "word ".repeat(30);
+        let bounded = bound_stem(&long);
+        assert!(bounded.chars().count() <= MAX_STEM_CHARS);
+        assert!(!bounded.ends_with(' '));
+        assert!(long.starts_with(&bounded));
+        let word = "x".repeat(100);
+        assert_eq!(bound_stem(&word).len(), MAX_STEM_CHARS);
+        assert_eq!(bound_stem(""), "");
     }
 }

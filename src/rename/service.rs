@@ -18,7 +18,7 @@ use super::document::{
     extract_signals, read_bounded, scan_document_date,
 };
 use super::rules::{
-    PresetDef, ResolvedDate, RuleInputs, find_preset, is_date_format, resolve_date,
+    PresetDef, ResolvedDate, RuleInputs, bound_stem, find_preset, is_date_format, resolve_date,
     resolve_template, strip_redundant_extension,
 };
 use super::store::RenameStore;
@@ -338,8 +338,9 @@ fn finish_plan(
         }
     };
     // Trailing dots and spaces are model punctuation, not name content
-    // ("Budget memo. " must not become "Budget memo. .txt").
-    let stem = stem.trim_end_matches(&['.', ' '][..]).to_string();
+    // ("Budget memo. " must not become "Budget memo. .txt"), and over-long
+    // titles are cut back to MAX_STEM_CHARS at a word boundary.
+    let stem = bound_stem(stem.trim_end_matches(&['.', ' '][..]));
     if stem.is_empty() {
         return Ok(PlanOutcome::Held {
             current_name,
