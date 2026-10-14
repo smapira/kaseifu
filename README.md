@@ -509,6 +509,7 @@ runs the inference path manually).
 - **Journaled moves.** Every executed move is recorded in a SQLite database.
 - **Undo.** Reverse any move with `kaseifu undo`.
 - **Collision detection.** If a file already exists at the destination, the move is refused and flagged for review.
+- **Model attribution.** File meaning and attributes (including who or what is pictured) come from Apple's on-device model and the Jev classifier. This tool does not restrict what those models may describe: it validates only the shape of their answers, and nothing moves without review.
 
 ## Development stages
 

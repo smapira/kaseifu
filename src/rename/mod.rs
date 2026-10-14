@@ -16,6 +16,7 @@
 //! back with its reason.
 
 pub mod document;
+pub mod image;
 pub mod rules;
 pub mod service;
 pub mod store;

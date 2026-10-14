@@ -309,11 +309,13 @@ async fn v092_symlinks_and_foreign_types_are_refused() {
             .expect_err("symlink must fail");
         assert!(matches!(error, RenameError::Precondition(_)), "got {error}");
     }
-    let photo = write_doc(&dir, "photo.jpg", "fake\n");
+    // Images are Phase 5 scope (see v093): the remaining foreign type here
+    // is video, which still points at its owning phase.
+    let clip = write_doc(&dir, "clip.mp4", "fake\n");
     let store = RenameStore::open_in_memory().expect("store");
-    let error = plan_rename(&answering("title"), &store, &photo, &pattern_options("P02"))
+    let error = plan_rename(&answering("title"), &store, &clip, &pattern_options("P02"))
         .await
-        .expect_err("image must fail");
+        .expect_err("video must fail");
     assert!(matches!(error, RenameError::Unsupported(_)), "got {error}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -437,11 +439,13 @@ fn v092_default_rule_round_trips() {
 fn v092_foreign_types_fail_before_any_model_call() {
     let home = isolated_home("foreign");
     let dir = work_dir("foreign");
-    let photo = write_doc(&dir, "photo.jpg", "fake\n");
-    let output = cli(&home, &["rename", photo.to_str().expect("utf8")]);
-    assert!(!output.status.success(), "images must fail");
+    // Images are Phase 5 scope (see v093): video still fails fast with the
+    // phase that owns it, before any model call.
+    let clip = write_doc(&dir, "clip.mp4", "fake\n");
+    let output = cli(&home, &["rename", clip.to_str().expect("utf8")]);
+    assert!(!output.status.success(), "videos must fail");
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    assert!(stderr.contains("Phase 5"), "points at Phase 5: {stderr}");
+    assert!(stderr.contains("Phase 6"), "points at Phase 6: {stderr}");
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&dir);
 }

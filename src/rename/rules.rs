@@ -5,7 +5,7 @@
 //! whose required variable has no value is held back, never fabricated
 //! (original spec 6.5).
 
-use chrono::{DateTime, Datelike, Local, Timelike};
+use chrono::{DateTime, Datelike, Local, NaiveDateTime, Timelike};
 
 /// One builtin preset (original spec section 6.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,13 +213,13 @@ pub fn resolve_date(
     exif: Option<&str>,
     document_ymd: Option<(i32, u32, u32)>,
 ) -> (ResolvedDate, DatePreference) {
-    if let Some(date) = parse_rfc3339(created, "created") {
+    if let Some(date) = parse_datetime(created, "created") {
         return (date, DatePreference::Created);
     }
-    if let Some(date) = parse_rfc3339(modified, "modified") {
+    if let Some(date) = parse_datetime(modified, "modified") {
         return (date, DatePreference::Modified);
     }
-    if let Some(date) = parse_rfc3339(exif, "exif") {
+    if let Some(date) = parse_datetime(exif, "exif") {
         return (date, DatePreference::Exif);
     }
     if let Some((year, month, day)) = document_ymd {
@@ -239,14 +239,39 @@ pub fn resolve_date(
     (ResolvedDate::default(), DatePreference::Now)
 }
 
-/// Parse one RFC 3339 timestamp into a [`ResolvedDate`].
-fn parse_rfc3339(value: Option<&str>, source: &'static str) -> Option<ResolvedDate> {
+/// Parse one timestamp into a [`ResolvedDate`].
+///
+/// RFC 3339 first, then zone-less wall-clock forms (`YYYY-MM-DDTHH:MM:SS`
+/// and `YYYY-MM-DD HH:MM:SS`, the EXIF normalized shape). Zones are never
+/// guessed: wall-clock fields are used as-is, no offset is invented.
+fn parse_datetime(value: Option<&str>, source: &'static str) -> Option<ResolvedDate> {
     let text = value?.trim();
     if text.is_empty() {
         return None;
     }
-    let parsed = DateTime::parse_from_rfc3339(text).ok()?;
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(text) {
+        return Some(resolved_from(parsed, source));
+    }
+    let naive = NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S")
+        .or_else(|_| NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S"))
+        .ok()?;
     Some(ResolvedDate {
+        year: naive.date().year(),
+        month: naive.date().month(),
+        day: naive.date().day(),
+        hour: naive.time().hour(),
+        minute: naive.time().minute(),
+        second: naive.time().second(),
+        source,
+    })
+}
+
+/// Build a [`ResolvedDate`] from an offset-aware timestamp.
+fn resolved_from<Tz>(parsed: DateTime<Tz>, source: &'static str) -> ResolvedDate
+where
+    Tz: chrono::TimeZone,
+{
+    ResolvedDate {
         year: parsed.year(),
         month: parsed.month(),
         day: parsed.day(),
@@ -254,7 +279,31 @@ fn parse_rfc3339(value: Option<&str>, source: &'static str) -> Option<ResolvedDa
         minute: parsed.minute(),
         second: parsed.second(),
         source,
-    })
+    }
+}
+
+/// Resolve the naming date for an image target (original spec section 5.2).
+///
+/// EXIF capture comes first: filesystem dates of photos are transfer times,
+/// not capture times. Then creation, modification, now. No document date:
+/// images have no text scan, so the caller always passes no document value.
+/// Unparseable values are skipped; when every source is missing the current
+/// time is used.
+pub fn resolve_image_date(
+    created: Option<&str>,
+    modified: Option<&str>,
+    exif: Option<&str>,
+) -> (ResolvedDate, DatePreference) {
+    if let Some(date) = parse_datetime(exif, "exif") {
+        return (date, DatePreference::Exif);
+    }
+    if let Some(date) = parse_datetime(created, "created") {
+        return (date, DatePreference::Created);
+    }
+    if let Some(date) = parse_datetime(modified, "modified") {
+        return (date, DatePreference::Modified);
+    }
+    (ResolvedDate::default(), DatePreference::Now)
 }
 
 /// Why a template could not produce a name.

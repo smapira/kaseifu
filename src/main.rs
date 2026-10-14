@@ -1171,17 +1171,29 @@ fn emit_rename_report(format: OutputFormat, report: &RenameReport) {
 }
 
 /// `rename <file>`: dry-run proposal or `--execute` rename.
+/// Reject rename targets that are neither documents nor images.
+///
+/// Video and unknown types fail fast here with the phase that owns them, so
+/// no model call is spent on them.
+fn reject_foreign_rename_target(target: &Path) -> Result<()> {
+    if kaseifu::context::image_metadata::is_image_file(target) {
+        return Ok(());
+    }
+    classify_document(target)
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!("{error}"))
+}
+
 async fn rename_file(
     store: &RenameStore,
     target: &Path,
     args: &RenameCli,
     format: OutputFormat,
 ) -> Result<()> {
-    // Classify the extension before touching the model: images, video and
-    // unknown types fail fast with the phase that owns them.
-    if let Err(error) = classify_document(target) {
-        anyhow::bail!("{error}");
-    }
+    // Classify the extension before touching the model: documents and
+    // images are renamed here, video and unknown types fail fast with the
+    // phase that owns them.
+    reject_foreign_rename_target(target)?;
     let options = RenameOptions {
         pattern: args.pattern.clone(),
         template: args.template.clone(),

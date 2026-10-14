@@ -17,9 +17,10 @@ use super::document::{
     DocumentDate, DocumentKind, MAX_DOCUMENT_BYTES, classify_document, contains_prompt_injection,
     extract_signals, read_bounded, scan_document_date,
 };
+use super::image::{classify_image, is_image};
 use super::rules::{
     PresetDef, ResolvedDate, RuleInputs, bound_stem, find_preset, is_date_format, resolve_date,
-    resolve_template, strip_redundant_extension, underscore_whitespace,
+    resolve_image_date, resolve_template, strip_redundant_extension, underscore_whitespace,
 };
 use super::store::RenameStore;
 use super::validate::{
@@ -155,6 +156,53 @@ pub async fn plan_rename(
     if is_symlink(target) {
         return Err(RenameError::Precondition(NameProblem::Symlink));
     }
+    if is_image(target) {
+        return plan_image_rename(provider, store, target, options).await;
+    }
+    plan_document_rename(provider, store, target, options).await
+}
+
+/// Plan an image rename: observe, select the rule, analyze, resolve, validate.
+///
+/// Images carry no text body, so no bounded read and no document-date scan
+/// happen here: only the file name is checked for prompt-injection markers.
+/// EXIF facts already ride along in the observed context (capture time feeds
+/// `{date}` first, the camera feeds `{device}`). Changes nothing and writes
+/// no journal rows.
+async fn plan_image_rename(
+    provider: &impl SemanticProvider,
+    store: &RenameStore,
+    target: &Path,
+    options: &RenameOptions,
+) -> Result<PlanOutcome, RenameError> {
+    classify_image(target).map_err(|error| RenameError::Unsupported(error.to_string()))?;
+    let context = observe(target)?;
+    // Cheap checks first: rule errors and poisoned names never spend inference.
+    let selection = select_rule(store, options)?;
+    if contains_prompt_injection(&context.target.filename) {
+        return Ok(PlanOutcome::Held {
+            current_name: context.target.filename.clone(),
+            rule_label: selection.label(),
+            reason: "probable prompt injection; proposal withheld".to_string(),
+        });
+    }
+    let semantic = analyze(provider, &context).await?;
+    let (date, _) = resolve_plan_date(&context, None, true);
+    finish_plan(
+        store, target, &context, &semantic, &selection, options, &date,
+    )
+}
+
+/// Plan a document rename: observe, extract bounded signals, analyze,
+/// resolve, validate.
+///
+/// Reads the filesystem but changes nothing and writes no journal rows.
+async fn plan_document_rename(
+    provider: &impl SemanticProvider,
+    store: &RenameStore,
+    target: &Path,
+    options: &RenameOptions,
+) -> Result<PlanOutcome, RenameError> {
     let kind =
         classify_document(target).map_err(|error| RenameError::Unsupported(error.to_string()))?;
     let mut context = observe(target)?;
@@ -170,14 +218,9 @@ pub async fn plan_rename(
         });
     }
     let semantic = analyze(provider, &context).await?;
+    let (date, _) = resolve_plan_date(&context, document_ymd, false);
     finish_plan(
-        store,
-        target,
-        &context,
-        &semantic,
-        &selection,
-        options,
-        document_ymd,
+        store, target, &context, &semantic, &selection, options, &date,
     )
 }
 
@@ -280,7 +323,41 @@ fn default_template(store: &RenameStore, reference: &str) -> Result<String, Rena
     }
 }
 
+/// Resolve the naming date for one plan.
+///
+/// Images lead with the EXIF capture time; documents keep the
+/// creation-first order (original spec section 6.4).
+fn resolve_plan_date(
+    context: &NormalizedFileContext,
+    document_ymd: Option<(i32, u32, u32)>,
+    is_image: bool,
+) -> (super::rules::ResolvedDate, super::rules::DatePreference) {
+    let created = context.creation_date.as_deref();
+    let modified = context
+        .modification_date
+        .as_deref()
+        .or(context.target.modified_at.as_deref());
+    let exif = exif_capture(context);
+    if is_image {
+        resolve_image_date(created, modified, exif)
+    } else {
+        resolve_date(created, modified, exif, document_ymd)
+    }
+}
+
+/// The EXIF capture value already extracted into the context, if any.
+fn exif_capture(context: &NormalizedFileContext) -> Option<&str> {
+    context.image_metadata.as_ref().and_then(|meta| {
+        meta.capture_time
+            .as_ref()
+            .map(|capture| capture.value.as_str())
+    })
+}
+
 /// Resolve the template and validate the proposal.
+///
+/// Image targets resolve `{date}` EXIF-first (filesystem dates of photos are
+/// transfer times); document targets keep the creation-first order.
 fn finish_plan(
     store: &RenameStore,
     target: &Path,
@@ -288,7 +365,7 @@ fn finish_plan(
     semantic: &SemanticInfo,
     selection: &RuleSelection,
     options: &RenameOptions,
-    document_ymd: Option<(i32, u32, u32)>,
+    date: &ResolvedDate,
 ) -> Result<PlanOutcome, RenameError> {
     let date_format = options
         .date_format
@@ -301,20 +378,7 @@ fn finish_plan(
     }
     let current_name = context.target.filename.clone();
     let current_extension = context.target.extension.clone().unwrap_or_default();
-    let (date, _) = resolve_date(
-        context.creation_date.as_deref(),
-        context
-            .modification_date
-            .as_deref()
-            .or(context.target.modified_at.as_deref()),
-        context.image_metadata.as_ref().and_then(|meta| {
-            meta.capture_time
-                .as_ref()
-                .map(|capture| capture.value.as_str())
-        }),
-        document_ymd,
-    );
-    let inputs = rule_inputs(semantic, context, options, &date, &current_extension);
+    let inputs = rule_inputs(semantic, context, options, date, &current_extension);
     let template = match selection.template() {
         Some(template) => template.to_string(),
         Option::None => {
@@ -359,7 +423,7 @@ fn finish_plan(
             reason: problem.to_string(),
         });
     }
-    assemble_plan(target, &current_name, &proposal, selection, &date)
+    assemble_plan(target, &current_name, &proposal, selection, date)
 }
 
 /// Build the template inputs from semantics, context and CLI overrides.
