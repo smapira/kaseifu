@@ -1,8 +1,9 @@
 # 残タスク: リリースタグ（Phase 6〜9 が未タグ）
 
-- status: waiting-user
+- status: done
 - milestone: M4 - Measurement and release hygiene
-- waiting on: release/tag decision
+- completed: 2026-10-15 (owner said "release")
+- decision: tag `v0.10.0` covering Phase 6-9 and the M1-M4 backlog
 - 出典: スレッドのリリース運用（v0.5.0〜v0.9.0 は annotated タグを `origin` へ push 済み）
 - 優先度: 中（履歴は push 済みだが、区切りがないと「どの時点の動作か」の参照点がない）
 
@@ -30,3 +31,10 @@
 ## 検証
 
 - `git ls-remote --tags origin` と `git tag -n` で確認。
+
+## Verification (2026-10-15)
+
+- `chore: release v0.10.0` versions the tree (Cargo.toml/lock, CHANGELOG,
+  v106 version pin). Annotated tag `v0.10.0` pushed to `origin`; no force
+  push, no tag replacement.
+- Full suite 873 passed / 0 failed, quality gate OVERALL PASS at release.

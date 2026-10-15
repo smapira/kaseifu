@@ -9,8 +9,8 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 | Status | Count | Directory |
 |---|---:|---|
 | Open | 0 | `../issues/open/` |
-| Waiting for user/external resource | 5 | `../issues/waiting-user/` |
-| Done | 12 | `../issues/done/` |
+| Waiting for user/external resource | 4 | `../issues/waiting-user/` |
+| Done | 13 | `../issues/done/` |
 
 ## M1 - Reliability and CLI clarity
 
@@ -52,7 +52,7 @@ Goal: keep measured claims and release boundaries reproducible.
 | Status | Issue | Exit criterion |
 |---|---|---|
 | Done | [`perf-measurement-gaps`](../issues/done/20261015-done-perf-measurement-gaps.md) | Cold start, large batch, memory, and concurrency gaps have repeatable measurements. |
-| Waiting-user | [`release-tagging`](../issues/waiting-user/20261015-waiting-release-tagging.md) | User decides whether to tag the Phase 6-9 work, and the decision is recorded. |
+| Done | [`release-tagging`](../issues/done/20261015-done-release-tagging.md) | Tagged `v0.10.0` and pushed to `origin`. |
 
 ## M5 - User/external blockers
 

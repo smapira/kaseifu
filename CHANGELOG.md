@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-15
+
+### Added
+
+- **Video rename through on-device perception.** Videos (mp4, mov) are read
+  with AVFoundation metadata plus a bounded set of representative frames,
+  classified and merged into one label set that rides the same request the
+  image path uses. A video with no perceivable frames is held with its
+  reason instead of being named from the file name.
+- **Folder rename from child contents.** A folder is named from the bounded
+  observation of its children (never its own name); dangerous shapes
+  (system roots, bundles, Library trees, OS areas, cache areas, hidden
+  folders, home/cwd ancestors) are refused with reasons, and batch undo
+  reverses newest-first.
+- **Batch rename.** `rename <folder> --recursive` plans a bounded walk
+  (depth 3, 50 targets), holds same-name conflicts across the set before
+  anything is applied, and applies deepest-first. `undo --batch <id>`
+  reverses exactly one batch; Unicode NFC folds prevent normalization
+  collisions.
+- **Add-only JSON for `undo`/`scan` and JSON Lines for `watch`.**
+  `organize --to <dir>` moves non-interactively with undo; bounded Vision
+  OCR text reaches image proposals with injection holds; PDF text strings
+  feed folder excerpts instead of container noise.
+- **Reliability holds.** A timed-out generation is retried once and reported
+  as a user-facing sentence; filename echoes, child-name echoes and
+  internal-looking titles are held with reasons; noise-name matching is
+  exact so `my-target` stays listed.
+
 ## [0.9.0] - 2026-10-14
 
 ### Added

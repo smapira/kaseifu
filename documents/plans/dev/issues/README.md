@@ -23,7 +23,6 @@ None. Every actionable issue is complete.
 | Issue | Milestone | Waiting on |
 |---|---|---|
 | [`20261015-waiting-real-media-quality.md`](waiting-user/20261015-waiting-real-media-quality.md) | M2 | User-provided real media sample set and privacy boundary. |
-| [`20261015-waiting-release-tagging.md`](waiting-user/20261015-waiting-release-tagging.md) | M4 | Decision whether to tag the Phase 6-9 work. |
 | [`20261015-waiting-trec-corpus-evaluation.md`](waiting-user/20261015-waiting-trec-corpus-evaluation.md) | M5 | NIST corpus agreement and evaluation-direction decision. |
 | [`20261015-waiting-snapshot-cleanup.md`](waiting-user/20261015-waiting-snapshot-cleanup.md) | M5 | Decision to delete or retain the Phase 5b snapshot outside the worktree. |
 | [`20261015-waiting-local-checkout-pull.md`](waiting-user/20261015-waiting-local-checkout-pull.md) | M5 | Permission/action to update the non-Delta local checkout. |
@@ -44,6 +43,7 @@ None. Every actionable issue is complete.
 | [`20261015-done-model-output-degeneracy.md`](done/20261015-done-model-output-degeneracy.md) | M1 | Centralized title-echo holds with user-facing reasons. |
 | [`20261015-done-noise-name-overmatch.md`](done/20261015-done-noise-name-overmatch.md) | M1 | Exact-match noise names; `my-target` stays listed. |
 | [`20261015-done-cache-name-refusal.md`](done/20261015-done-cache-name-refusal.md) | M1 | Own-name cache refusals, visible held items in batch. |
+| [`20261015-done-release-tagging.md`](done/20261015-done-release-tagging.md) | M4 | Tagged `v0.10.0` and pushed to `origin`. |
 
 ## Maintenance rules
 
