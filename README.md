@@ -415,8 +415,13 @@ Show or update general settings (the API key cannot be set this way):
 ```bash
 kaseifu config show
 kaseifu config set jev.model jev-latest
-kaseifu config set jev.endpoint https://api.typesafe.ai/v1/systemone
+kaseifu config set jev.endpoint [REDACTED]
+kaseifu config set language ja
 ```
+
+The rename response language defaults to English (`en`). Set it to another
+language tag (for example `ja`) with `kaseifu config set language <tag>`;
+`kaseifu config show` prints the effective value.
 
 ### Doctor
 

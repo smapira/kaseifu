@@ -94,6 +94,8 @@ pub struct ResolvedConfig {
     pub key_source: KeySourceSetting,
     /// Where the resolved API key came from (never the key itself).
     pub api_key_origin: ApiKeyOrigin,
+    /// Effective rename response language (`en` unless configured).
+    pub language: String,
 }
 
 /// Fully resolved image metadata and privacy settings (v3.2).
@@ -207,6 +209,7 @@ pub fn resolve_with(
         api_key_from_env,
         key_source,
         api_key_origin,
+        language: super::loader::effective_language(file),
     })
 }
 

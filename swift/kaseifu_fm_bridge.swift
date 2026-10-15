@@ -530,7 +530,7 @@ private func kfBuildPrompt(_ request: [String: Any]) -> String {
     // folder data so the 2000 character budget cannot cut them away.
     if targetType == "directory" {
         lines.append("The target is a folder. Name the collection from what is inside it, never from the folder's current name.")
-        lines.append("Write the title as one short natural \(language) phrase that names the collection, in \(language) words (for ja, Japanese words; never a list, never a file name, never a type or field name).")
+        lines.append("Write the title as one short natural \(language) phrase that names the collection, in \(language) words (never a list, never a file name, never a type or field name).")
         lines.append("If the files inside have no common theme, leave the title empty instead of inventing one.")
     } else {
         lines.append("filename: \(kfData(kfTrim(input["filename"] as? String ?? "", 512)))")
@@ -609,11 +609,11 @@ private func kfBuildPrompt(_ request: [String: Any]) -> String {
             lines.append("visual_labels: \(kfData(names.joined(separator: ", ")))")
             if request["target_type"] as? String == "video" {
                 lines.append("The visual_labels data above was sampled from a few representative frames of the video, not from the whole video and not from its audio.")
-                lines.append("Write the title as one short natural \(language) phrase that describes only what those frames show, in \(language) words (for ja, Japanese words; never the English identifiers, never a list, never the file name or its stem).")
+                lines.append("Write the title as one short natural \(language) phrase that describes only what those frames show, in \(language) words (never the English identifiers, never a list, never the file name or its stem).")
                 lines.append("Never state motion, sound or an event that a few still frames cannot tell.")
             } else {
                 lines.append("The visual_labels data above is the picture's content, written as English identifiers.")
-                lines.append("Write the title as one short natural \(language) phrase that describes that content in \(language) words (for ja, Japanese words; never the English identifiers, never a list, never the file name or its stem).")
+                lines.append("Write the title as one short natural \(language) phrase that describes that content in \(language) words (never the English identifiers, never a list, never the file name or its stem).")
             }
         }
     }

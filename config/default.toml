@@ -10,6 +10,10 @@
 # journal never used. The journal lives at
 # ~/Library/Application Support/kaseifu/kaseifu.db (`kaseifu doctor` shows it).
 
+# Rename response language (BCP47 tag). Changed with
+# `kaseifu config set language <tag>`; the default is English.
+language = "en"
+
 [classifier]
 provider = "jev"
 

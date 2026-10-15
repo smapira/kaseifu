@@ -31,8 +31,8 @@ use crate::models::file_context::{NormalizedFileContext, PerceptionInfo};
 /// Timeout for one generation (on-device inference plus scheduling).
 pub const DEFAULT_FM_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Language tag sent with every request.
-pub const DEFAULT_FM_LANGUAGE: &str = "ja";
+/// Language tag sent with every request (English unless overridden).
+pub const DEFAULT_FM_LANGUAGE: &str = "en";
 
 /// Why a semantic request did not produce fields (original spec §12).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -407,6 +407,25 @@ mod tests {
             semantic_signals: vec!["F:proposal".to_string()],
             ..NormalizedFileContext::default()
         }
+    }
+
+    #[test]
+    fn the_provider_defaults_to_english_and_accepts_an_override() {
+        use super::super::fake::FakeFmBridge;
+        use crate::semantic::contract::SemanticInfo;
+
+        assert_eq!(DEFAULT_FM_LANGUAGE, "en");
+        let plain =
+            FoundationModelsProvider::with_bridge(FakeFmBridge::answering(SemanticInfo::default()));
+        assert_eq!(plain.language, "en");
+        let request = build_request(&context("proposal.pdf"), "rename-0001", &plain.language);
+        assert_eq!(request.language, "en");
+        let japanese =
+            FoundationModelsProvider::with_bridge(FakeFmBridge::answering(SemanticInfo::default()))
+                .with_language("ja");
+        assert_eq!(japanese.language, "ja");
+        let request = build_request(&context("proposal.pdf"), "rename-0002", &japanese.language);
+        assert_eq!(request.language, "ja");
     }
 
     #[test]

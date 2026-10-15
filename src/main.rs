@@ -1607,7 +1607,8 @@ async fn rename_file(
     // that names what the command accepts.
     reject_foreign_rename_target(target)?;
     let options = rename_options(args);
-    let provider = FoundationModelsProvider::production();
+    let provider =
+        FoundationModelsProvider::production().with_language(effective_rename_language());
     let history = OperationHistory::open(journal_path())?;
     let outcome = plan_rename(&provider, store, target, &options)
         .await
@@ -1668,6 +1669,13 @@ async fn rename_file(
     }
 }
 
+/// Rename response language for this invocation: the configured tag, or
+/// English when unset or unreadable (a corrupt TOML never breaks rename).
+fn effective_rename_language() -> String {
+    let file = load_user().unwrap_or_default();
+    kaseifu::config::loader::effective_language(&file)
+}
+
 /// Report a ready plan: preview it, or execute and report the journal id.
 /// The naming options one `rename` invocation carries.
 fn rename_options(args: &RenameCli) -> RenameOptions {
@@ -1700,7 +1708,8 @@ async fn rename_batch(
     if !root.is_dir() {
         anyhow::bail!("--recursive needs a folder: {}", root.display());
     }
-    let provider = FoundationModelsProvider::production();
+    let provider =
+        FoundationModelsProvider::production().with_language(effective_rename_language());
     let options = rename_options(args);
     let walk = kaseifu::rename::batch::walk(root)?;
     // An empty folder is an empty batch: nothing to plan means nothing to ask
@@ -2748,6 +2757,7 @@ fn handle_config_show(format: OutputFormat) -> Result<()> {
             resolved.metadata.send_capture_time_to_jev
         ),
         format!("send_gps_to_jev = {}", resolved.metadata.send_gps_to_jev),
+        format!("language = {}", resolved.language),
         format!("API key: {state}"),
     ];
     let json = serde_json::json!({
@@ -2762,6 +2772,7 @@ fn handle_config_show(format: OutputFormat) -> Result<()> {
             "operations.dry_run",
             "operations.enable_undo",
         ],
+        "language": resolved.language,
         "metadata": {
             "image": {
                 "enabled": resolved.metadata.image_enabled,

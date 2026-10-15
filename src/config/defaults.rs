@@ -36,3 +36,6 @@ pub const DEFAULT_SEND_CAPTURE_TIME_TO_JEV: bool = true;
 pub const DEFAULT_SEND_GPS_TO_JEV: bool = false;
 /// Default weather enrichment (Phase 8 reserved; stays disabled).
 pub const DEFAULT_WEATHER_ENABLED: bool = false;
+
+/// Default rename response language (BCP47 tag; English).
+pub const DEFAULT_LANGUAGE: &str = "en";

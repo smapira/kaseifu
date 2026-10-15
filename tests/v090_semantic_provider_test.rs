@@ -134,7 +134,9 @@ async fn analyze_sends_a_bounded_contract_request() {
     assert_eq!(request["schema_version"], "fm-rename-v1");
     assert_eq!(request["request_id"], "rename-0001");
     assert_eq!(request["target_type"], "document");
-    assert_eq!(request["language"], "ja");
+    // The provider default language is English; an explicit override travels
+    // on the same wire key (see the language round-trip test below).
+    assert_eq!(request["language"], "en");
     assert_eq!(request["analysis"]["title"], true);
     assert_eq!(request["analysis"]["project"], false);
     assert_eq!(request["input"]["filename"], "proposal.pdf");

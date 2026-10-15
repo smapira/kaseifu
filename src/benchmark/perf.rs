@@ -270,7 +270,11 @@ fn request_json(path: &Path, request_id: &str) -> Result<String> {
     let file_context = crate::context::builder::build(path)?;
     let normalized =
         crate::normalize::normalize_with_options(file_context, &MetadataOptions::default())?;
-    let request = crate::semantic::provider::build_request(&normalized, request_id, "ja");
+    let request = crate::semantic::provider::build_request(
+        &normalized,
+        request_id,
+        crate::semantic::provider::DEFAULT_FM_LANGUAGE,
+    );
     Ok(serde_json::to_string(&request)?)
 }
 
@@ -681,7 +685,10 @@ mod tests {
         assert_eq!(value["schema_version"], "fm-rename-v1");
         assert_eq!(value["request_id"], "perf-test");
         assert_eq!(value["target_type"], "document");
-        assert_eq!(value["language"], "ja");
+        assert_eq!(
+            value["language"],
+            crate::semantic::provider::DEFAULT_FM_LANGUAGE
+        );
         assert!(value["input"]["filename"].is_string());
         let _ = std::fs::remove_dir_all(&work);
     }

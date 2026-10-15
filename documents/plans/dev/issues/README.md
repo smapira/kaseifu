@@ -44,6 +44,7 @@ None. Every actionable issue is complete.
 | [`20261015-done-noise-name-overmatch.md`](done/20261015-done-noise-name-overmatch.md) | M1 | Exact-match noise names; `my-target` stays listed. |
 | [`20261015-done-cache-name-refusal.md`](done/20261015-done-cache-name-refusal.md) | M1 | Own-name cache refusals, visible held items in batch. |
 | [`20261015-done-release-tagging.md`](done/20261015-done-release-tagging.md) | M4 | Tagged `v0.10.0` and pushed to `origin`. |
+| [`20261016-done-rename-language.md`](done/20261016-done-rename-language.md) | n/a (user request) | Rename language defaults to `en`, settable via `config set language <tag>`. |
 
 ## Maintenance rules
 

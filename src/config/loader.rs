@@ -12,6 +12,13 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UserConfig {
+    /// Rename response language (BCP47 tag such as `en` or `ja`).
+    ///
+    /// Top-level on purpose: the user-facing key is exactly `language`
+    /// (`kaseifu config set language <tag>`), so the TOML shape mirrors the
+    /// key one-to-one instead of hiding behind an alias.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     /// Jev endpoint/model section.
     pub jev: JevSection,
     /// Classifier thresholds section.
@@ -157,6 +164,7 @@ pub fn parse_toml(text: &str) -> Result<UserConfig> {
 
 /// Validate every set value; unset values are always valid.
 pub fn validate(config: &UserConfig) -> Result<()> {
+    validate_language(config.language.as_deref())?;
     validate_endpoint(config.jev.endpoint.as_deref())?;
     validate_model(config.jev.model.as_deref())?;
     validate_threshold(
@@ -172,6 +180,77 @@ pub fn validate(config: &UserConfig) -> Result<()> {
         config.classifier.thresholds.review_confidence,
     )?;
     Ok(())
+}
+
+fn validate_language(value: Option<&str>) -> Result<()> {
+    let Some(tag) = value.map(str::trim) else {
+        return Ok(());
+    };
+    validate_language_value(tag)
+}
+
+/// Check one rename response language tag (shared by the loader and `config set`).
+///
+/// Accepted shape is BCP47-like: ASCII alphanumeric subtags of up to 8
+/// characters joined by single hyphens, starting with a letter (`en`, `ja`,
+/// `en-US`, `zh-Hant`). The character budget mirrors the wire contract so a
+/// stored tag always fits the request the bridge sends.
+///
+/// The value must already be trimmed (see [`set_language`]); an empty string
+/// is rejected here so hand-edited files fail loudly like every other setting.
+pub fn validate_language_value(tag: &str) -> Result<()> {
+    if tag.is_empty() {
+        anyhow::bail!("invalid language (must not be empty)");
+    }
+    if tag.chars().count() > crate::semantic::contract::MAX_LANGUAGE_CHARS {
+        anyhow::bail!(
+            "invalid language `{tag}` (expected 1-{} characters)",
+            crate::semantic::contract::MAX_LANGUAGE_CHARS
+        );
+    }
+    if !is_language_tag(tag) {
+        anyhow::bail!("invalid language `{tag}` (expected a tag such as en or ja)");
+    }
+    Ok(())
+}
+
+/// True for BCP47-shaped tags: ASCII alphanumeric subtags joined by single
+/// hyphens, starting with a letter.
+pub fn is_language_tag(tag: &str) -> bool {
+    if tag.is_empty() {
+        return false;
+    }
+    let mut first = true;
+    for subtag in tag.split('-') {
+        if subtag.is_empty() || subtag.len() > 8 {
+            return false;
+        }
+        if !subtag.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+            return false;
+        }
+        if first
+            && !subtag
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_alphabetic())
+        {
+            return false;
+        }
+        first = false;
+    }
+    true
+}
+
+/// Effective rename response language: the configured tag, or English.
+///
+/// A hand-edited invalid tag falls back to English here (loading still
+/// rejects it, so the fallback only covers callers that read a defaulted
+/// configuration instead of failing the run).
+pub fn effective_language(config: &UserConfig) -> String {
+    match config.language.as_deref().map(str::trim) {
+        Some(tag) if validate_language_value(tag).is_ok() => tag.to_string(),
+        _ => super::defaults::DEFAULT_LANGUAGE.to_string(),
+    }
 }
 
 fn validate_endpoint(value: Option<&str>) -> Result<()> {
@@ -259,6 +338,7 @@ pub const SUPPORTED_KEYS: &[&str] = &[
     "metadata.privacy.send_capture_time_to_jev",
     "metadata.privacy.send_gps_to_jev",
     "metadata.weather.enabled",
+    "language",
 ];
 
 /// Apply one `config set` update (typed parsing plus validation).
@@ -297,6 +377,17 @@ pub fn apply_setting(config: &mut UserConfig, key: &str, value: &str) -> Result<
             set_flag(&mut config.metadata.privacy.send_gps_to_jev, key, value)
         }
         "metadata.weather.enabled" => set_flag(&mut config.metadata.weather.enabled, key, value),
+        _ => apply_other_setting(config, key, value),
+    }
+}
+
+/// Apply a setting that is not one of the original hierarchical keys.
+///
+/// Splitting this arm out keeps [`apply_setting`] at its existing complexity:
+/// the `_` arm delegates here instead of growing the main match.
+fn apply_other_setting(config: &mut UserConfig, key: &str, value: &str) -> Result<()> {
+    match key {
+        "language" => set_language(&mut config.language, value),
         _ => reject_unknown_key(key),
     }
 }
@@ -312,6 +403,13 @@ fn set_model(slot: &mut Option<String>, value: &str) -> Result<()> {
         anyhow::bail!("invalid jev.model (must not be empty)");
     }
     *slot = Some(value.to_string());
+    Ok(())
+}
+
+fn set_language(slot: &mut Option<String>, value: &str) -> Result<()> {
+    let tag = value.trim();
+    validate_language_value(tag)?;
+    *slot = Some(tag.to_string());
     Ok(())
 }
 
