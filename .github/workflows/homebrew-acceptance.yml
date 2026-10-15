@@ -34,7 +34,27 @@ jobs:
             echo "xcode=$(xcodebuild -version | tr '\n' ' ')"
             echo "macos=$(sw_vers -productVersion)"
             echo "runner=$RUNNER_OS-$RUNNER_ARCH"
+            echo "xcode_select=$(xcode-select -p)"
+            echo "swiftc=$(xcrun --find swiftc)"
           } | tee -a "$GITHUB_STEP_SUMMARY"
+          # The macro plugin that the Swift bridge needs ships only with
+          # Xcode.app (measured: a Command Line Tools selection fails the
+          # build), so the selection is recorded above and checked here.
+          ls /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/ 2>/dev/null \
+            | grep -c FoundationModelsMacros | sed 's/^/xcode_macro_plugin_files=/' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Make sure Xcode itself is selected
+        run: |
+          # Homebrew only checks that Xcode is installed; the build needs the
+          # Xcode developer directory to be the selected one.
+          if xcode-select -p | grep -q '^/Applications/Xcode.*\.app/'; then
+            echo "Xcode is already selected: $(xcode-select -p)" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            xcode="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+            echo "selecting $xcode (was: $(xcode-select -p))" | tee -a "$GITHUB_STEP_SUMMARY"
+            sudo xcode-select -s "$xcode"
+            xcode-select -p
+          fi
 
       - name: Tap and trust the formula
         run: |
