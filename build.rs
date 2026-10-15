@@ -82,15 +82,26 @@ struct Toolchain {
 
 impl Toolchain {
     /// A command that runs the Swift compiler.
+    ///
+    /// `SDKROOT` is dropped on purpose. Homebrew exports it pointing at the
+    /// Command Line Tools SDK, and under that SDK the `@Generable` macro
+    /// plugin (which only Xcode ships) cannot be resolved: measured
+    /// `plugin for module 'FoundationModelsMacros' not found`, exit 101, with
+    /// `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`. Without
+    /// it the compiler uses its own default SDK, which for an Xcode toolchain
+    /// is the Xcode one, and the same compile succeeds (measured). The probe
+    /// below shares this command, so it judges the same SDK the build uses.
     fn command(&self) -> Command {
-        match self.compiler {
+        let mut command = match self.compiler {
             Compiler::Xcrun => {
                 let mut command = Command::new("xcrun");
                 command.arg("swiftc");
                 command
             }
             Compiler::Direct => Command::new(&self.swiftc),
-        }
+        };
+        command.env_remove("SDKROOT");
+        command
     }
 }
 
