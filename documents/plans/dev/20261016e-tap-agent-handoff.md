@@ -103,8 +103,8 @@ filled in, so the two cannot drift silently. Reconcile rather than replace.
 class Kaseifu < Formula
   desc "Semantic file organization for macOS"
   homepage "https://github.com/smapira/kaseifu"
-  url "https://github.com/smapira/kaseifu/archive/refs/tags/v0.12.0.tar.gz"
-  sha256 "e8e5c9046c61038440e5b9dedfc6f970a986b961d27c9b690149f6d7df3cdfb4"
+  url "https://github.com/smapira/kaseifu/archive/refs/tags/v0.12.1.tar.gz"
+  sha256 "b96bff50517dcba827ae78ea9e799c87e98b14a3db8c5eca8c4d4caed095333f"
   license "MIT"
 
   # A source build compiles swift/kaseifu_fm_bridge.swift, so Xcode itself is
@@ -150,6 +150,8 @@ Points the tool side verified about this text:
   docs are maintained in the other thread.
 - If the clean-machine Xcode prerequisite cannot be met, stop and report
   exactly what is missing instead of working around it.
-- Measured reference values (2026-10-16): latest tag `v0.12.0`, tarball
-  sha256 `e8e5c9046c61038440e5b9dedfc6f970a986b961d27c9b690149f6d7df3cdfb4`,
-  Homebrew 7.0.9, Xcode 26.6. Re-measure the hash for the version you ship.
+- Measured reference values (2026-10-16): latest tag `v0.12.1`, tarball
+  sha256 `b96bff50517dcba827ae78ea9e799c87e98b14a3db8c5eca8c4d4caed095333f`
+  (the v0.12.0 tarball was `e8e5c904...cdfb4` but carried no `LICENSE`; use
+  v0.12.1 or newer), Homebrew 7.0.9, Xcode 26.6. Re-measure the hash for the
+  version you ship.

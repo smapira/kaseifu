@@ -47,7 +47,7 @@
   - `livecheck` ブロックは **書かない**（既定の Git 戦略がタグを追う。明示するなら `strategy :git`）。GitHub Releases が 0 件なので `GithubLatest` は使えない。
   - `depends_on macos:` は付けない（バイナリは FoundationModels を weak link するため macOS < 26 でも起動する設計）。
   - `test do` は副作用なしで終わるものだけ: `kaseifu --version`、引数なし `kaseifu` のガイダンス終了コード、`label --help` の ASCII 性。journal/Keychain/実ファイルに触れない。
-- 検証値の記録: v0.12.0 の自動 tarball sha256 = `e8e5c9046c61038440e5b9dedfc6f970a986b961d27c9b690149f6d7df3cdfb4`（`shasum -a 256`、2026-10-16 実測）。版上げのたびに実測し直す。
+- 検証値の記録: v0.12.1 の自動 tarball sha256 = `b96bff50517dcba827ae78ea9e799c87e98b14a3db8c5eca8c4d4caed095333f`（`shasum -a 256`、2026-10-16 実測）。v0.12.0 は `e8e5c904...` だが `LICENSE` を含まないため、**v0.12.1 以降を pin する**。版上げのたびに実測し直す。
 - 禁止: force push、tap 履歴の書き換え。初回 push 先は tap の `origin` のみ（**branch 作成**になる）。
 
 ### T2 導入手順を書く (kaseifu 側 README)
