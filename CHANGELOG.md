@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-10-16
+
+### Fixed
+
+- **The Swift bridge builds under Homebrew.** Homebrew exports `SDKROOT`
+  pointing at the Command Line Tools SDK, and under that SDK the
+  `@Generable` macro plugin cannot be resolved (`plugin for module
+  'FoundationModelsMacros' not found`, exit 101), so `brew install kaseifu`
+  failed on a machine where a plain `cargo install` succeeded. `build.rs` now
+  drops `SDKROOT` for its Swift compiler invocations, so the compiler uses
+  its own default SDK (the Xcode one for an Xcode toolchain). Measured before
+  and after with `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`.
+
 ## [0.12.1] - 2026-10-16
 
 ### Added
