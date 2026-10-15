@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-16
+
+### Added
+
+- **Rename response language setting.** Rename requests default to English
+  (`en`); users persist a choice with `kaseifu config set language <tag>`
+  in the existing user TOML. Invalid tags are rejected with a user-facing
+  error, and a corrupt or missing configuration falls back to English.
+
 ## [0.10.0] - 2026-10-15
 
 ### Added

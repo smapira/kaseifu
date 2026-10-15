@@ -353,7 +353,7 @@ fn w4_s20_version_and_command_surface() {
     let (dir, home) = cli_fixture("s20-version");
     let output = run(&dir, &home, &["--version"]);
     assert!(output.status.success());
-    assert_eq!(stdout_of(&output).trim(), "kaseifu 0.10.0");
+    assert_eq!(stdout_of(&output).trim(), "kaseifu 0.11.0");
     assert!(stderr_of(&output).is_empty());
 }
 
