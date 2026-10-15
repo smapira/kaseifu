@@ -1,6 +1,8 @@
 # 残タスク: 本家チェックアウトの更新（`~/OS/home/Codes/github.com/smapira/kaseifu`）
 
-- status: open（**ユーザーの作業**）
+- status: waiting-user
+- milestone: M5 - User/external blockers
+- waiting on: permission/action outside Delta worktree
 - 出典: 本スレッドで確認した事実
 - 優先度: 低（開発は Delta の worktree で行えており、実害はない）
 

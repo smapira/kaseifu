@@ -1,6 +1,9 @@
 # 残タスク: Phase 9 の測定の残り（コールドスタート・大規模計画・セッション効果）
 
-- status: open
+- status: done (moved from `open/` 2026-10-15)
+- milestone: M4 - Measurement and release hygiene
+- next owner: none (verify at merge time)
+- blocker: actionable
 - 出典: `documents/plans/dev/20261015e-ai-rename-p9-perf.md` §7、`20261015-reviewer-ai-rename-p9-perf.md` R1 / R3 / R4
 - 優先度: 低（現在の測定で主要な結論は出ている。精度を上げる作業）
 
@@ -29,3 +32,21 @@
 ## 検証
 
 - 同コマンドを複数回実行し、同じ桁の値を得ることを確認。
+
+## Verification (2026-10-15, worktree `kaseifu`, this Mac)
+
+- `kaseifu-bench perf --batch-plan N` added (synthetic docs, model-free prep +
+  one real product-path generation each); first calls always split out
+  (`generation_cold_first`, `ffi_available_cold_first`); `--help` documents
+  the flag. No new crates, no harness processes (concurrency run by hand).
+- Numbers (all `exit 0`, same machine): cold gen 8711 ms vs steady ~3999 ms;
+  cold avail 979 µs vs steady 595 µs; batch-plan 3: prep 193.93 ms + gens
+  7279/7411/10348 ms, peak RSS 54.6 MB (vs 26.9 MB base, 26.0 MB reuse);
+  reuse shows no time/memory win this run; folder 5000 capped at 200 reads in
+  377.7 µs; Vision+OCR single 274.41 ms; 2 concurrent runs both succeed at
+  ~14.2 s each. Full table in `20261015e-ai-rename-p9-perf.md` §9.
+- 50-item projection stays a labeled projection (prep + 50 x steady gen =
+  4-8 min); tokens unmeasurable through the bridge (recorded).
+- Tests: new `split_cold` unit test + existing 4 perf unit tests green
+  (52 benchmark lib tests pass); clippy `-D warnings` clean,
+  `cargo fmt --check` clean.

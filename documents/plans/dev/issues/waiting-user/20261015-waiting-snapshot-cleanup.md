@@ -1,6 +1,8 @@
 # 残タスク: スナップショットの削除判断
 
-- status: open（**ユーザー判断**）
+- status: waiting-user
+- milestone: M5 - User/external blockers
+- waiting on: delete or retain snapshot
 - 出典: 本スレッドで Phase 5b 前に取得した退避（ユーザーの指示による）
 - 優先度: 低（ディスクを少し使うだけ。履歴は `origin` にある）
 

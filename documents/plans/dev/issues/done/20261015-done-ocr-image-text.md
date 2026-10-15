@@ -1,6 +1,9 @@
 # 残タスク: 画像内文字の認識（OCR）を `text` 配列として追加
 
-- status: open
+- status: done (moved from `open/` 2026-10-15)
+- milestone: M2 - Media quality
+- next owner: none (verify at merge time)
+- blocker: actionable
 - 出典: `documents/plans/dev/20261014k-ai-rename-p5b-vision.md` D5（次回条件）
 - 優先度: 中（原典 §5.2 の「必要時」条件。看板・書類・スクリーンショットの題名が伸びる）
 
@@ -34,3 +37,31 @@
 
 - 単体: 応答のパースと bound（既存 `semantic::perception` のテストに追加）。
 - 実機: 合成画像 2 種（文字あり・なし）で `kaseifu rename --format json` を実行し、`text` と題名の差を記録。
+
+## Verification (2026-10-15, worktree `kaseifu`)
+
+- Swift `kfPerceive` runs `VNRecognizeTextRequest` (`.fast`, no language
+  correction) on the same bounded thumbnail and answers `"text": [...]`
+  (additive, `schema_version` unchanged, empty on any OCR failure so OCR never
+  fails perception). Video frames intentionally excluded (per-frame cost
+  multiplier; recorded).
+- Rust: `PerceptionInfo.text` (`#[serde(default)]`, always serialized),
+  `bound_texts` (trim, printable-ASCII-only, 8 x 120 chars, case-insensitive
+  dedupe), `FmPerception.text` (rebounded at the wire), Swift prompt
+  `image_text:` data line marked untrusted, `PerceptionReport::Labels {
+  labels, text }`, `rename --format json` gains additive `"text"`.
+- Injection: OCR fragments go through `contains_prompt_injection` in
+  `plan_image_rename`; a hit withholds the proposal with the existing reason
+  before any inference (`bridge.requests()` stays empty).
+- Tests: `perception.rs` unit (parse alongside labels, legacy payloads,
+  trim/ASCII/bound/dedupe), `contract.rs` (text travels, rebounded),
+  `tests/v100_ocr_image_text_test.rs` (3 pass + 1 manual `#[ignore]`).
+  Necessary adaptations only in v094/v095 asserts (struct variant).
+- Real device (this Mac, PIL fixtures in `/tmp`, nothing committed): sign
+  image yields 3 fragments in 2.672 s (fast-level misreads recorded); blank
+  image yields 12 labels and 0 fragments with perception succeeding. Invoice
+  fixture: 3/3 runs read clean text and title `2026-10-15_インボイス.png`;
+  textless twins yield generic/wrong titles (`印刷されたページのイラスト` /
+  `画像` / `手書きのアート作品`). Titles move from generic to specific.
+- `cargo test --lib` 223 passed; v094 16 passed; v095 24 passed; v100 passed.
+  clippy `-D warnings` clean, `cargo fmt --check` clean.

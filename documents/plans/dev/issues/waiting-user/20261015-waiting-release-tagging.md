@@ -1,6 +1,8 @@
 # 残タスク: リリースタグ（Phase 6〜9 が未タグ）
 
-- status: open（**ユーザー判断**）
+- status: waiting-user
+- milestone: M4 - Measurement and release hygiene
+- waiting on: release/tag decision
 - 出典: スレッドのリリース運用（v0.5.0〜v0.9.0 は annotated タグを `origin` へ push 済み）
 - 優先度: 中（履歴は push 済みだが、区切りがないと「どの時点の動作か」の参照点がない）
 

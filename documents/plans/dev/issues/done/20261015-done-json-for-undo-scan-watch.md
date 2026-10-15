@@ -1,6 +1,9 @@
 # 残タスク: `undo` / `scan` / `watch` の `--format json`
 
-- status: open
+- status: done (moved from `open/` 2026-10-15)
+- milestone: M1 - Reliability and CLI clarity
+- next owner: none (verify at merge time)
+- blocker: actionable
 - 出典: `documents/plans/dev/20261014d-debug-scenario-design.md` R9（および F-07）、`20261014d-cli-scenarios-C01-C12.md` C07
 - 優先度: 中（自動化・CI からの構造化取得ができない。スクリプトが人間向け文言に依存してしまう）
 
@@ -33,3 +36,32 @@
 ## 検証
 
 - 各コマンドで stdout を `json.loads` できることのテスト + 既存キーの不変テスト。
+
+## Verification (2026-10-15, worktree `kaseifu`)
+
+Implemented add-only JSON per `documents/plans/dev/20261015j-backlog-bdd-plan.md`
+(M1 section):
+
+- `undo --format json` prints one document with `restored`, `failures`,
+  `status` (`restored|empty|partial|failed`) and `pending_warning`; the pending
+  warning moves to stderr in JSON mode. Text lines byte-identical otherwise
+  (`UndoStep` refactor in `src/main.rs`).
+- `scan --format json` prints one honest document (`status: not-implemented`);
+  scan stays a banner-only placeholder.
+- `watch --format json` prints JSON Lines via new `generic::watch_start_json` /
+  `generic::watch_event_json` (`src/presentation/renderers/generic.rs`) and
+  `runner::outcome_json` + `WatchRunOptions { json }` threading
+  (`src/watch/runner.rs`, `run_loop` keeps text).
+- `--help` format paragraph updated (no internal phase words); README gained
+  the stdout/stderr contract note (C07).
+- Tests: `tests/v099_json_undo_scan_watch_test.rs` (10 tests: empty/one/last-2
+  partial/pending-row JSON, text unchanged x2, scan JSON+text, JSON Lines unit
+  checks, live `watch` start banner parsed from the real binary) +
+  `tests/v070_zero_config_p1_help_test.rs` sentence updated.
+- `cargo test --test v099_json_undo_scan_watch_test`: 10 passed.
+- `cargo clippy --all-targets --all-features -- -D warnings`: clean.
+  `cargo fmt --all -- --check`: clean.
+- Full `cargo test --all-targets --all-features`: all suites green EXCEPT the
+  pre-existing parent-owned conflict `v092_plan_reports_noop_for_current_names`
+  (parent's uncommitted `model-output-degeneracy` hook holds exact-current-name
+  titles while v092 pins Noop; parent to decide, not touched here).

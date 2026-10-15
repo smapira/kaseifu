@@ -1,6 +1,9 @@
 # 残タスク: フォルダ命名の品質（子が PDF のとき）
 
-- status: open
+- status: done (moved from `open/` 2026-10-15)
+- milestone: M2 - Media quality
+- next owner: none (verify at merge time)
+- blocker: actionable
 - 出典: `documents/plans/dev/20261015c-ai-rename-p7.md` §9.3 / §10、`20261015-reviewer-ai-rename-p8.md` R3
 - 優先度: 中（実利用で最も多い「書類フォルダ」で題名が弱い）
 
@@ -28,3 +31,31 @@
 ## 検証
 
 - 合成フォルダ 3 種で複数回実行し、題名の分布を記録（モデルは非決定的なので 1 回では判断しない）。
+
+## Verification (2026-10-15, worktree `kaseifu`)
+
+Chose the extraction fix (no new crate, so FlateDecode streams stay opaque;
+recorded limitation), not the prompt-instruction fallback.
+
+- `extract_signals(Pdf, _)` now decodes `(...)` literals (nesting, backslash
+  escapes incl. octal and line continuations, UTF-16BE BOM) and `<...>` hex
+  strings, strips `xref`...`%%EOF` sections (trailer ID hex), and falls back
+  to printable runs only when no string decodes. Dictionary keywords, stream
+  operators and object wrappers never sit inside strings, so they contribute
+  nothing. `strongest_signals` doc comment updated.
+- Signals before (same 3 fixtures, old code): 6 noise signals per file
+  (`T:%PDF-1.4 1 0 obj << /Type /Catalog ...`, xref rows, trailer IDs).
+  After: pdf1 `T:Quarterly Report Q3`; pdf2
+  `T:Annual Summary Jane Doe Quarterly Report Q3` (metadata + body);
+  compressed pdf3 `T:Compressed Report` (metadata only, no garbage).
+- Real-model folder runs (this Mac, 3 synthetic PDFs, 3 runs): all specific
+  content titles with body words (`Quarterly_Report_Q3_revenue...` etc.); no
+  type-list title in any run (the `model-output-degeneracy` holds stay on as
+  backstop). Folder evidence flows through the same `extract_signals`
+  (`document_child`), so no folder-code change was needed.
+- Tests: 4 new `document.rs` unit tests (body-beats-noise, hex+escapes,
+  compressed-opaque, UTF-16BE) + `tests/v101_pdf_excerpt_quality_test.rs`
+  (2 pass, file-backed, children do not bleed). Existing
+  `pdf_printable_runs_are_scanned` passes unchanged (fallback path).
+- `cargo test --lib` document suite 18 passed; clippy `-D warnings` clean;
+  `cargo fmt --check` clean.

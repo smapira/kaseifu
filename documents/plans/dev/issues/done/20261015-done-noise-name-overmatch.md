@@ -1,6 +1,8 @@
 # 残タスク: `is_noise_file` の部分一致による過剰除外
 
-- status: open
+- status: done
+- milestone: M1 - Reliability and CLI clarity
+- completed: 2026-10-15 (parent thread)
 - 出典: 本スレッドの Phase 7/8 レビューで検出（`20261015-reviewer-ai-rename-p7.md` の「`is_noise_file` の `ends_with` 過剰一致はテストで固定」の記述）
 - 優先度: 中（利用者の普通のフォルダが一括リネームの対象から黙って消える）
 
@@ -31,3 +33,14 @@
 
 - 単体テストで境界（完全一致は除外、部分一致は除外しない）を固定。
 - 実機: `my-target/` を含むツリーで一括のプレビューに現れること。
+
+## Verification (2026-10-15, parent thread)
+
+- `src/normalize/noise.rs::is_noise_file` is now an exact case-insensitive
+  match (`.DS_Store` kept via an explicit dotted entry). `my-target/`,
+  `dist-target/`, `my-ds_store-backup/` stay listed; `target/` stays out.
+- Unit tests in `noise.rs` + walk tests in `src/rename/batch.rs`.
+- Real CLI: `rename <tree> --recursive` preview lists `my-target ->
+  2026-10-15_launch_plan_note` (dry run, isolated HOME).
+- `cargo test --all-targets --all-features`: 873 passed / 0 failed;
+  `bash scripts/quality_check.sh`: OVERALL PASS.

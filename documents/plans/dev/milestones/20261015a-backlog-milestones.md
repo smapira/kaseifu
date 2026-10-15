@@ -1,0 +1,73 @@
+# Backlog milestones after AI rename Phase 9
+
+Last updated: 2026-10-15.
+
+Purpose: group the remaining plan issues into milestones and make each issue's status discoverable from the directory path. Status directories are documented in `../issues/README.md`.
+
+## Status summary
+
+| Status | Count | Directory |
+|---|---:|---|
+| Open | 0 | `../issues/open/` |
+| Waiting for user/external resource | 5 | `../issues/waiting-user/` |
+| Done | 12 | `../issues/done/` |
+
+## M1 - Reliability and CLI clarity
+
+Goal: reduce confusing user-visible behavior before adding larger features.
+
+| Status | Issue | Exit criterion |
+|---|---|---|
+| Done | [`generation-timeout`](../issues/done/20261015-done-generation-timeout.md) | One retry and user-facing timeout text are implemented and verified. |
+| Done | [`json-for-undo-scan-watch`](../issues/done/20261015-done-json-for-undo-scan-watch.md) | `undo`, `scan`, and `watch` have documented add-only JSON behavior (watch: JSON Lines). |
+| Done | [`model-output-degeneracy`](../issues/done/20261015-done-model-output-degeneracy.md) | Filename echoes, child-name echoes, and internal-looking titles hold with user-facing reasons. |
+| Done | [`noise-name-overmatch`](../issues/done/20261015-done-noise-name-overmatch.md) | Ordinary names such as `my-target` are no longer silently excluded. |
+| Done | [`cache-name-refusal`](../issues/done/20261015-done-cache-name-refusal.md) | Cache/temp refusals are target-specific and visible in batch output. |
+
+## M2 - Media quality
+
+Goal: improve rename quality from real visual and document evidence.
+
+| Status | Issue | Exit criterion |
+|---|---|---|
+| Done | [`ocr-image-text`](../issues/done/20261015-done-ocr-image-text.md) | Bounded OCR text is added to perception without opening a prompt-injection path. |
+| Done | [`pdf-child-excerpt-quality`](../issues/done/20261015-done-pdf-child-excerpt-quality.md) | PDF-heavy folders no longer degrade to type-list names in measured cases. |
+| Waiting-user | [`real-media-quality`](../issues/waiting-user/20261015-waiting-real-media-quality.md) | User-provided dry-run evaluation set is available and summarized without committing private paths or content. |
+
+## M3 - Workflow semantics
+
+Goal: complete workflow affordances and document the exact behavior of multi-item operations.
+
+| Status | Issue | Exit criterion |
+|---|---|---|
+| Done | [`rename-to-directory`](../issues/done/20261015-done-rename-to-directory.md) | ZC-14 `organize --to <dir>` works non-interactively with undo. |
+| Done | [`debug-scenarios-w2-w5`](../issues/done/20261015-done-debug-scenarios-w2-w5.md) | Remaining debug scenarios are rechecked against current code and added as tests. |
+| Done | [`batch-undo-scope`](../issues/done/20261015-done-batch-undo-scope.md) | Batch undo gets either a migration-backed command or an explicit documented limitation. |
+| Done | [`unicode-normalization-conflicts`](../issues/done/20261015-done-unicode-normalization-conflicts.md) | User chooses dependency exception, in-house limited normalization, or documented limitation. |
+
+## M4 - Measurement and release hygiene
+
+Goal: keep measured claims and release boundaries reproducible.
+
+| Status | Issue | Exit criterion |
+|---|---|---|
+| Done | [`perf-measurement-gaps`](../issues/done/20261015-done-perf-measurement-gaps.md) | Cold start, large batch, memory, and concurrency gaps have repeatable measurements. |
+| Waiting-user | [`release-tagging`](../issues/waiting-user/20261015-waiting-release-tagging.md) | User decides whether to tag the Phase 6-9 work, and the decision is recorded. |
+
+## M5 - User/external blockers
+
+Goal: track tasks that cannot be completed from the Delta worktree alone.
+
+| Status | Issue | Exit criterion |
+|---|---|---|
+| Waiting-user | [`trec-corpus-evaluation`](../issues/waiting-user/20261015-waiting-trec-corpus-evaluation.md) | NIST corpus is available and the evaluation direction is chosen. |
+| Waiting-user | [`snapshot-cleanup`](../issues/waiting-user/20261015-waiting-snapshot-cleanup.md) | Snapshot is deleted or retained with a recorded reason. |
+| Waiting-user | [`local-checkout-pull`](../issues/waiting-user/20261015-waiting-local-checkout-pull.md) | Non-Delta checkout is updated or intentionally left stale. |
+
+## Milestone order
+
+1. M1 first: these affect trust in day-to-day output and error handling.
+2. M2 next when evaluation material is available: quality changes should be driven by measured cases.
+3. M3 in parallel when workflow scope is chosen: it is mostly CLI/test work and schema decisions.
+4. M4 after feature decisions settle: it records performance and release boundaries.
+5. M5 remains blocked until the user or an external organization supplies the missing input.

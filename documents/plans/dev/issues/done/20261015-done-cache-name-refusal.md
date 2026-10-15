@@ -1,6 +1,8 @@
 # 残タスク: 利用者のフォルダ名 `Cache` / `Caches` が改名できない
 
-- status: open
+- status: done
+- milestone: M1 - Reliability and CLI clarity
+- completed: 2026-10-15 (parent thread)
 - 出典: `documents/plans/dev/20261015c-ai-rename-p7.md` D8（「destination 規則は不変」として意図的に残した差分）
 - 優先度: 中（理由文は出るので危険ではないが、利用者には理不尽に見える。一括では黙って除外される）
 
@@ -29,3 +31,17 @@
 ## 検証
 
 - 実機: `Cache/` / `my-cache/project/` / `Library/` を単発と一括の両方で試し、結果を記録。
+
+## Verification (2026-10-15, parent thread)
+
+- New `src/context/directory.rs::is_cache_or_temp_name` (single-name check).
+  `refuse_reason` refuses only the folder's own cache-like name, so
+  `.../Cache` stays refused while `.../Cache/project` is allowed. The
+  destination rule (`is_cache_or_temp`, whole subtree) is unchanged.
+- Batch walk lists a cache/temp folder but never descends into it, so the
+  plan holds it with its reason instead of dropping it silently.
+- Real CLI: preview shows `Cache [held: ... folders inside a cache or
+  temporary area are not renamed]`; single `rename` of `Cache` keeps the
+  same refusal (dry run, isolated HOME).
+- `cargo test --all-targets --all-features`: 873 passed / 0 failed;
+  `bash scripts/quality_check.sh`: OVERALL PASS.

@@ -1,6 +1,8 @@
 # 残タスク: 実写真・実動画での命名品質評価
 
-- status: open（素材の用意が必要）
+- status: waiting-user
+- milestone: M2 - Media quality
+- waiting on: real media sample set and privacy boundary
 - 出典: `documents/plans/dev/20261015c-ai-rename-p7.md` §9.4 / §9.5、`20261015e-ai-rename-p9-perf.md` §2
 - 優先度: 高（機能はできているが、実データでの品質が未評価のまま）
 
@@ -20,7 +22,7 @@
 | `vape_ad_20260913_v2_final.MP4` | `2026-09-13_木の家具を販売する広告.MP4` | modified | 内容由来だが**主題が誤り**（実際は VAPE 広告） |
 
 - このセッションで `--execute` を 2 件実施し、`operation_id` 付きで改名された（journal に残る）。
-- 観測の型: **採用 2 / 写し 1 / 主題の誤り 1**。後者 2 件はそれぞれ `20261015-open-model-output-degeneracy.md`、下の「動画の限界」に対応する。
+- 観測の型: **採用 2 / 写し 1 / 主題の誤り 1**。後者 2 件はそれぞれ `../open/20261015-open-model-output-degeneracy.md`、下の「動画の限界」に対応する。
 - 事例としての限界: 1 回・4 件なので統計ではない。素材を集めて種別ごとに評価する必要がある。
 
 ## やること

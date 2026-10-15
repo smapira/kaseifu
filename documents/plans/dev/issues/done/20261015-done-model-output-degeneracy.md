@@ -1,6 +1,8 @@
 # 残タスク: モデル出力の退化（ファイル名の音写・型名の出力）への一般防御
 
-- status: open
+- status: done
+- milestone: M1 - Reliability and CLI clarity
+- completed: 2026-10-15 (parent thread)
 - 出典: `documents/plans/dev/20261015-reviewer-ai-rename-p7.md` R4、`20261014k-ai-rename-p5b-vision.md` D6
 - 優先度: 中（再現した形はふさいだか、一般則がない）
 
@@ -31,3 +33,16 @@
 ## 検証
 
 - 合成入力で複数回実行し、タイトルの分布を記録（1 回の成功を根拠にしない）。
+
+## Verification (2026-10-15, parent thread)
+
+- `src/rename/rules.rs::degenerate_title_reason` (one central check) + hooks
+  in `src/rename/service.rs` (`file_title_hold` on the image/video/document
+  paths, `folder_echo_hold` on the folder path).
+- Filename echo: holds separator-variant echoes (measured THCO case) while a
+  title identical to the file name/stem up to case keeps the established
+  Noop flow (pins `v092_plan_reports_noop_for_current_names`).
+- Child echo (full child-name match only) and internal-type-name titles are
+  held; reasons never quote internal names.
+- `cargo test --all-targets --all-features`: 873 passed / 0 failed;
+  `bash scripts/quality_check.sh`: OVERALL PASS.

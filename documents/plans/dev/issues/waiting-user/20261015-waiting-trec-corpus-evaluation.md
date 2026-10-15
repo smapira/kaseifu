@@ -1,6 +1,8 @@
 # 残タスク: TREC 本評価（コーパス入手が前提）
 
-- status: blocked（**ユーザー作業待ち**: NIST のコーパス合意手続き）
+- status: waiting-user
+- milestone: M5 - User/external blockers
+- waiting on: NIST corpus and evaluation direction
 - 出典: `documents/plans/user/20261014b.md`、`documents/plans/dev/20261014g-trec-benchmark-d2d.md`
 - 優先度: 低（評価基盤は着地済み。実評価だけが残っている）
 

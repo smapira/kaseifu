@@ -1,6 +1,8 @@
 # 完了: 生成のタイムアウトを 1 回再試行し、文言を利用者向けにした
 
-- status: **done**（2026-10-15 実装。利用者の選択は B）
+- status: done
+- milestone: M1 - Reliability and CLI clarity
+- completed: 2026-10-15
 - 出典: `documents/plans/dev/20261014l-ai-rename-p6.md` D6（「超過を観測したときだけ根拠付きで見直す」）、2026-10-15 の実機セッション
 
 ## 実測（2026-10-15、利用者の実写真。これが発火の根拠）
