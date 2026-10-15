@@ -222,7 +222,8 @@ pub struct FmImageFacts {
     pub height: Option<u32>,
 }
 
-/// Perception labels already extracted in Rust (Apple Vision, Phase 5b).
+/// Perception labels already extracted in Rust (Apple Vision, Phase 5b),
+/// plus the OCR text read from still images.
 ///
 /// A compatible extension of `fm-rename-v1`: the field is optional, no key
 /// was removed or retyped, both sides ignore unknown fields, and the envelope
@@ -230,6 +231,9 @@ pub struct FmImageFacts {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FmPerception {
     pub labels: Vec<FmPerceptionLabel>,
+    /// Bounded OCR fragments (empty when the picture carries no text).
+    #[serde(default)]
+    pub text: Vec<String>,
 }
 
 /// One perception label as it travels to the bridge.
@@ -253,6 +257,7 @@ impl From<&crate::models::file_context::PerceptionInfo> for FmPerception {
                     confidence: entry.confidence,
                 })
                 .collect(),
+            text: super::perception::bound_texts(info.text.clone()),
         }
     }
 }
@@ -651,6 +656,7 @@ mod tests {
                     confidence: 0.038,
                 },
             ],
+            text: vec!["OPEN".to_string()],
         };
         let request = FmRequest {
             schema_version: SCHEMA_VERSION.to_string(),
@@ -688,6 +694,11 @@ mod tests {
                 .expect("labels")
                 .len(),
             2
+        );
+        // The OCR text rides along under the same perception key (add-only).
+        assert_eq!(
+            json["input"]["perception"]["text"],
+            serde_json::json!(["OPEN"])
         );
         // The existing image object keeps its exact key set.
         let mut keys: Vec<&str> = json["input"]["image"]
@@ -780,8 +791,10 @@ mod tests {
                     confidence: 0.5 + index as f32 / 100.0,
                 })
                 .collect(),
+            text: (0..40).map(|index| format!("sign-{index}")).collect(),
         };
         let wire = FmPerception::from(&info);
+        assert_eq!(wire.text.len(), crate::semantic::perception::MAX_OCR_TEXTS);
         assert_eq!(
             wire.labels.len(),
             crate::semantic::perception::MAX_PERCEPTION_LABELS

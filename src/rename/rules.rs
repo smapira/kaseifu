@@ -436,6 +436,93 @@ pub fn strip_redundant_extension(stem: &str, extension: &str) -> String {
     }
 }
 
+/// This tool's own type names in echo-folded form.
+///
+/// The model sometimes answers with the schema it was asked to fill instead of
+/// a description (seen with folders of PDF files). The list stays small and
+/// exact: only names this tool actually uses, so ordinary words never match.
+const INTERNAL_TITLE_FOLDS: [&str; 5] = [
+    "kfsemanticpayload",
+    "kbsemantics",
+    "semanticinfo",
+    "perceptionlabel",
+    "semanticfields",
+];
+
+/// Why a model title must be withheld, or `None` when it may name the target.
+///
+/// One rule for every rename path (files and folders): a title that only
+/// repeats the current file name, one of the folder's child names, or this
+/// tool's own type names is the model's echo, not a description, so the
+/// proposal is withheld with a reason instead of renamed. Comparison folds
+/// case and separator runs (spaces, underscores, hyphens, dots), which is
+/// what the observed echoes differ by (`THCO-COA-Non-Detect Updated` versus
+/// `THCO-COA-Non-Detect_Updated`). It is always a full-title match: a title
+/// that merely contains a file name still passes, so content-derived titles
+/// are never held for quoting a name. A title identical to the file name or
+/// its stem up to case keeps the established flow instead: the proposal then
+/// equals the current name and reports Noop, exactly as before. The reasons
+/// never quote an internal name. An empty title returns `None`: missing
+/// titles are held elsewhere.
+///
+/// `current_filename` is the file's full name (the stem is derived inside);
+/// pass an empty string for a folder, whose own name is not evidence.
+pub fn degenerate_title_reason(
+    title: &str,
+    current_filename: &str,
+    child_names: &[String],
+) -> Option<String> {
+    let folded = fold_title_echo(title);
+    if folded.is_empty() {
+        return None;
+    }
+    if !current_filename.is_empty() {
+        let stem = current_filename
+            .rsplit_once('.')
+            .map(|(head, _)| head)
+            .unwrap_or(current_filename);
+        // An identical title (up to case) is not withheld: the proposal
+        // equals the current name and the plan reports Noop, as it always
+        // has. Only echoes that differ past case reach the hold below.
+        let identical = same_title(title, current_filename) || same_title(title, stem);
+        if !identical
+            && (folded == fold_title_echo(current_filename) || folded == fold_title_echo(stem))
+        {
+            return Some("title repeats the current file name; proposal withheld".to_string());
+        }
+    }
+    if child_names
+        .iter()
+        .any(|name| folded == fold_title_echo(name))
+    {
+        return Some("title repeats one of the folder's file names; proposal withheld".to_string());
+    }
+    if INTERNAL_TITLE_FOLDS.contains(&folded.as_str()) {
+        return Some(
+            "title looks like an internal label, not a description; proposal withheld".to_string(),
+        );
+    }
+    None
+}
+
+/// True when the title is the name up to case (extension echoes aside).
+fn same_title(title: &str, name: &str) -> bool {
+    title == name || title.to_lowercase() == name.to_lowercase()
+}
+
+/// Fold a title and a file name to the same comparison shape.
+///
+/// Lowercase with every separator run (spaces, underscores, hyphens, dots)
+/// removed, so only the words themselves decide an echo match.
+fn fold_title_echo(value: &str) -> String {
+    value
+        .to_lowercase()
+        .split([' ', '_', '-', '.'])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .concat()
+}
+
 /// Check a template without producing a name (used when saving presets).
 ///
 /// Unknown variables and bad date formats are rejected; missing values are
@@ -668,6 +755,64 @@ mod tests {
         // The wall clock at the recorded offset is used as-is.
         assert_eq!(date.format("YYYY-MM-DD").as_deref(), Some("2026-10-14"));
         assert_eq!(date.time_label(), "09-30-00");
+    }
+
+    #[test]
+    fn filename_echoes_are_held_across_separator_styles() {
+        // The measured case: the stem differs from the title only by
+        // separators, so the old extension-strip comparison missed it.
+        let reason = degenerate_title_reason(
+            "THCO-COA-Non-Detect_Updated",
+            "THCO-COA-Non-Detect Updated.pdf",
+            &[],
+        )
+        .expect("a stem echo must be held");
+        assert!(reason.contains("repeats the current file name"), "{reason}");
+        assert!(!reason.contains("THCO"), "no file content in: {reason}");
+        // An identical title (up to case) keeps the established Noop flow.
+        assert_eq!(degenerate_title_reason("note.txt", "note.txt", &[]), None);
+        assert_eq!(degenerate_title_reason("Title", "title.txt", &[]), None);
+        assert_eq!(degenerate_title_reason("TITLE", "title.txt", &[]), None);
+        // A title that merely quotes the name still passes.
+        assert_eq!(
+            degenerate_title_reason("notes about note taking", "note.txt", &[]),
+            None
+        );
+        assert_eq!(
+            degenerate_title_reason("Budget review", "notes.txt", &[]),
+            None
+        );
+        assert_eq!(degenerate_title_reason("", "note.txt", &[]), None);
+    }
+
+    #[test]
+    fn child_name_and_internal_echoes_are_held() {
+        let children = vec!["note.txt".to_string(), "archive".to_string()];
+        let reason = degenerate_title_reason("note.txt", "", &children)
+            .expect("a child-name echo must be held");
+        assert!(
+            reason.contains("repeats one of the folder's file names"),
+            "{reason}"
+        );
+        // The child's stem alone is not an echo: it may be a real theme.
+        assert_eq!(degenerate_title_reason("note", "", &children), None);
+        for token in ["KfSemanticPayload", "KB_Semantics", "SemanticInfo"] {
+            let reason = degenerate_title_reason(token, "folder", &[])
+                .expect("an internal-looking title must be held");
+            assert!(
+                reason.contains("internal label"),
+                "no internal name may leak: {reason}"
+            );
+            assert!(
+                !reason.contains(token),
+                "no internal name may leak: {reason}"
+            );
+        }
+        // Ordinary words never match the internal list.
+        assert_eq!(
+            degenerate_title_reason("payload report", "folder", &[]),
+            None
+        );
     }
 
     #[test]

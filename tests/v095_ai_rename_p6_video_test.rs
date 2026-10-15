@@ -162,11 +162,10 @@ async fn v095_a_video_plan_sends_metadata_and_merged_labels() {
     );
     assert_eq!(
         plan.perception,
-        Some(PerceptionReport::Labels(labels(&[
-            ("ocean", 0.7),
-            ("beach", 0.6),
-            ("sky", 0.3)
-        ]))),
+        Some(PerceptionReport::Labels {
+            labels: labels(&[("ocean", 0.7), ("beach", 0.6), ("sky", 0.3)]),
+            text: Vec::new(),
+        }),
         "the frames merged into one ranked set"
     );
     assert_eq!(bridge.video_perceived_paths(), vec![target.clone()]);

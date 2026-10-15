@@ -81,3 +81,48 @@ pub fn watch_line(event: &str, path: &str, dry_run: bool, color: bool) -> String
         dry_run_banner(!dry_run, color)
     )
 }
+
+/// The `watch` start line as one JSON object (`--format json` is JSON Lines:
+/// every line the watcher prints is exactly one newline-terminated object,
+/// never pretty-printed, because the stream has no end to wrap in an array).
+///
+/// The keys mirror [`watch_line`]: the same roots and the same mode words
+/// (`dry-run` / `execute`).
+pub fn watch_start_json(roots: &[String], dry_run: bool) -> String {
+    serde_json::json!({
+        "watch": {
+            "event": "start",
+            "roots": roots,
+            "mode": if dry_run { "dry-run" } else { "execute" },
+        }
+    })
+    .to_string()
+}
+
+/// One `watch` event line as one JSON object (see [`watch_start_json`]).
+///
+/// `detail` carries the human sentence the text line would show (the
+/// suppression reason, the destination of a move); `None` leaves the key out.
+pub fn watch_event_json(event: &str, path: &str, detail: Option<&str>) -> String {
+    let mut inner = serde_json::Map::new();
+    inner.insert(
+        "event".to_string(),
+        serde_json::Value::String(event.to_string()),
+    );
+    inner.insert(
+        "path".to_string(),
+        serde_json::Value::String(path.to_string()),
+    );
+    if let Some(detail) = detail {
+        inner.insert(
+            "detail".to_string(),
+            serde_json::Value::String(detail.to_string()),
+        );
+    }
+    serde_json::Value::Object({
+        let mut outer = serde_json::Map::new();
+        outer.insert("watch".to_string(), serde_json::Value::Object(inner));
+        outer
+    })
+    .to_string()
+}

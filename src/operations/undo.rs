@@ -81,9 +81,18 @@ pub fn undo_last_move(history: &OperationHistory) -> Result<UndoOutcome, UndoErr
         .last_successful_move()
         .map_err(|error| UndoError::History(error.to_string()))?
         .ok_or(UndoError::NothingToUndo)?;
+    undo_entry(history, &entry)
+}
 
-    let paths = validate_undo_preconditions(&entry)?;
-    commit_undo(history, &entry, &paths)
+/// Undo one journaled move (batch undo reverses each batch row through here,
+/// newest first; the per-row preconditions are identical to the last-move
+/// path, so a batch stops at the same refusals instead of skipping them).
+pub fn undo_entry(
+    history: &OperationHistory,
+    entry: &crate::storage::history::HistoryEntry,
+) -> Result<UndoOutcome, UndoError> {
+    let paths = validate_undo_preconditions(entry)?;
+    commit_undo(history, entry, &paths)
 }
 
 /// Journaled locations for the reverse move (validated before any mutation).

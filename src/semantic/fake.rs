@@ -139,6 +139,25 @@ impl FakeFmBridge {
                     confidence: *confidence,
                 })
                 .collect(),
+            text: Vec::new(),
+        };
+        self.set_perception(Ok(info))
+    }
+
+    /// Answer perception with these labels plus OCR text fragments.
+    pub fn perceiving_text(self, labels: &[(&str, f32)], text: &[&str]) -> Self {
+        let info = PerceptionInfo {
+            labels: labels
+                .iter()
+                .map(|(label, confidence)| PerceptionLabel {
+                    label: (*label).to_string(),
+                    confidence: *confidence,
+                })
+                .collect(),
+            text: text
+                .iter()
+                .map(|fragment| (*fragment).to_string())
+                .collect(),
         };
         self.set_perception(Ok(info))
     }
@@ -347,6 +366,7 @@ impl FakeSemanticProvider {
                     confidence: *confidence,
                 })
                 .collect(),
+            text: Vec::new(),
         };
         *self.perception.lock().expect("perception lock") = Ok(info);
         self

@@ -56,6 +56,53 @@ fn menu_row(number: usize, candidate: &CandidateDestination, rich: bool, color: 
     )
 }
 
+/// Render an explicit `--to <dir>` plan (dry run or the mode about to run).
+///
+/// Same rows as [`render_plan`], but the basis names the flag: nothing was
+/// selected from a menu, the destination was named on the command line.
+pub fn render_explicit_plan(
+    plan: &MovePlan,
+    destination: &Path,
+    execute_requested: bool,
+    rich: bool,
+    color: bool,
+) -> String {
+    let lines = vec![
+        format!("From: {}", shown_path(&plan.source, rich, color)),
+        format!(
+            "Destination: {}",
+            shown_path(&plan.destination_path, rich, color)
+        ),
+        format!(
+            "Basis: {} (named with --to; you chose it)",
+            shown_path(destination, rich, color)
+        ),
+        format!(
+            "Mode: {}",
+            generic::dry_run_banner(execute_requested, color)
+        ),
+    ];
+    frame("KASEIFU / TO [MANUAL]", &lines, rich, color)
+}
+
+/// Render a completed explicit `--to <dir>` move.
+pub fn render_explicit_moved(
+    plan: &MovePlan,
+    operation_id: &str,
+    rich: bool,
+    color: bool,
+) -> String {
+    let lines = vec![
+        row(
+            "Destination",
+            &shown_path(&plan.destination_path, rich, color),
+        ),
+        row("Operation", operation_id),
+        row("Undo", "kaseifu undo reverses this move"),
+    ];
+    frame("KASEIFU / TO [MANUAL] / MOVED", &lines, rich, color)
+}
+
 /// Render the chosen move plan (dry run or the mode about to run).
 pub fn render_plan(
     plan: &MovePlan,

@@ -172,12 +172,19 @@ pub struct ImageDimensions {
 pub struct PerceptionInfo {
     #[serde(default)]
     pub labels: Vec<PerceptionLabel>,
+    /// Text printed inside the picture (Vision OCR, still images only).
+    ///
+    /// Bounded like the labels and equally untrusted: image text is data for
+    /// the model, checked for prompt-injection markers before any proposal.
+    /// Older payloads without the key parse with an empty vector.
+    #[serde(default)]
+    pub text: Vec<String>,
 }
 
 impl PerceptionInfo {
     /// True when the classifier contributed nothing.
     pub fn is_empty(&self) -> bool {
-        self.labels.is_empty()
+        self.labels.is_empty() && self.text.is_empty()
     }
 }
 

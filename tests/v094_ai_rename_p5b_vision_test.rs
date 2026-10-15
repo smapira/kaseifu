@@ -103,11 +103,10 @@ async fn v094_image_plans_send_perception_labels_and_report_them() {
     assert_eq!(plan.proposal, "夕焼けの空.png");
     assert_eq!(
         plan.perception,
-        Some(PerceptionReport::Labels(labels(&[
-            ("sun", 0.94),
-            ("sky", 0.71),
-            ("sunset_sunrise", 0.42)
-        ])))
+        Some(PerceptionReport::Labels {
+            labels: labels(&[("sun", 0.94), ("sky", 0.71), ("sunset_sunrise", 0.42)]),
+            text: Vec::new(),
+        })
     );
     assert_eq!(bridge.perceived_paths(), vec![target.clone()]);
     let requests = bridge.requests();
@@ -255,7 +254,13 @@ async fn v094_a_classifier_that_finds_nothing_still_proposes() {
     let PlanOutcome::Ready(plan) = outcome else {
         panic!("expected a ready plan, got {outcome:?}");
     };
-    assert_eq!(plan.perception, Some(PerceptionReport::Labels(Vec::new())));
+    assert_eq!(
+        plan.perception,
+        Some(PerceptionReport::Labels {
+            labels: Vec::new(),
+            text: Vec::new(),
+        })
+    );
     assert_eq!(
         plan.perception.as_ref().expect("perception").summary(),
         "no labels"
@@ -432,7 +437,11 @@ fn v094_perception_summaries_stay_bounded() {
             confidence: 0.5,
         })
         .collect();
-    let summary = PerceptionReport::Labels(many).summary();
+    let summary = PerceptionReport::Labels {
+        labels: many,
+        text: Vec::new(),
+    }
+    .summary();
     assert!(summary.contains("label-0(0.500)"), "{summary}");
     assert!(
         summary.contains(&format!(
@@ -445,7 +454,14 @@ fn v094_perception_summaries_stay_bounded() {
         PerceptionReport::Unavailable("unavailable: x".to_string()).summary(),
         "unavailable (unavailable: x)"
     );
-    assert_eq!(PerceptionReport::Labels(Vec::new()).summary(), "no labels");
+    assert_eq!(
+        PerceptionReport::Labels {
+            labels: Vec::new(),
+            text: Vec::new(),
+        }
+        .summary(),
+        "no labels"
+    );
 }
 
 fn swift_bridge_source() -> String {

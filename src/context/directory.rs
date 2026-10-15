@@ -218,11 +218,22 @@ pub fn is_library_tree(components: &[&str]) -> bool {
 }
 
 /// True when any component marks a cache or temporary area.
+///
+/// This is the destination-eligibility shape: a moved file must never land
+/// anywhere inside such an area.
 pub fn is_cache_or_temp(components: &[&str]) -> bool {
-    components.iter().any(|name| {
-        let lowered = name.to_lowercase();
-        CACHE_COMPONENT_NAMES.contains(&lowered.as_str()) || lowered.ends_with(".cache")
-    })
+    components.iter().any(|name| is_cache_or_temp_name(name))
+}
+
+/// True when one folder name marks a cache or temporary area.
+///
+/// This is the rename-eligibility shape: only the folder's own name refuses a
+/// rename, so `~/Documents/Cache` stays refused while a folder inside a
+/// user-made `Cache` folder (or beside one) is still a rename target. The
+/// destination rule above keeps the whole-subtree shape.
+pub fn is_cache_or_temp_name(name: &str) -> bool {
+    let lowered = name.to_lowercase();
+    CACHE_COMPONENT_NAMES.contains(&lowered.as_str()) || lowered.ends_with(".cache")
 }
 
 /// True when any component names an OS-reserved area (trash, Spotlight index,
@@ -299,7 +310,7 @@ pub enum DirectoryRefusal {
     Library,
     /// An OS-reserved area (trash, Spotlight index, volume metadata).
     SystemArea,
-    /// Inside a cache or temporary area.
+    /// The folder itself is named like a cache or temporary area.
     CacheOrTemp,
     /// A hidden folder (its own name starts with `.`).
     Hidden,
@@ -335,16 +346,18 @@ impl std::fmt::Display for DirectoryRefusal {
 /// Why `dir` may not be renamed, or `None` when it may.
 ///
 /// The rules follow the destination authority for the shapes that are equally
-/// unsafe as a rename source (bundles, macOS library trees, OS areas, cache
-/// and temporary areas, hidden folders), and diverge in one deliberate way:
-/// the system roots are refused **themselves** (and the volume root, and the
-/// home directory with its ancestors, and the working directory with its
-/// ancestors) while a folder *inside* a system root is allowed. The
-/// destination policy refuses the whole `/var/**` and `/tmp/**` subtree, which
-/// would also refuse the folder macOS hands out as `$TMPDIR`
-/// (`/var/folders/<xx>/<yy>/T/...`) and every scratch folder a build or test
-/// run creates. Renaming such a folder touches nothing but the user's own
-/// scratch data, so it stays allowed here.
+/// unsafe as a rename source (bundles, macOS library trees, OS areas, hidden
+/// folders), and diverge in two deliberate ways: the system roots are refused
+/// **themselves** (and the volume root, and the home directory with its
+/// ancestors, and the working directory with its ancestors) while a folder
+/// *inside* a system root is allowed. The destination policy refuses the whole
+/// `/var/**` and `/tmp/**` subtree, which would also refuse the folder macOS
+/// hands out as `$TMPDIR` (`/var/folders/<xx>/<yy>/T/...`) and every scratch
+/// folder a build or test run creates. Renaming such a folder touches nothing
+/// but the user's own scratch data, so it stays allowed here. Likewise only
+/// the folder's own name refuses a rename for cache and temporary areas
+/// ([`is_cache_or_temp_name`]): the destination rule still refuses the whole
+/// subtree as a move target.
 pub fn refuse_reason(dir: &Path, env: &RefusalEnv) -> Option<DirectoryRefusal> {
     let text = dir.to_string_lossy();
     if text == "/" {
@@ -376,7 +389,10 @@ pub fn refuse_reason(dir: &Path, env: &RefusalEnv) -> Option<DirectoryRefusal> {
     if is_system_area(&components) {
         return Some(DirectoryRefusal::SystemArea);
     }
-    if is_cache_or_temp(&components) {
+    // Only the folder's own name refuses the rename here: an ancestor called
+    // `Cache` does not make this folder app-managed, and the destination rule
+    // (`is_cache_or_temp`) still refuses the whole subtree as a move target.
+    if is_cache_or_temp_name(name) {
         return Some(DirectoryRefusal::CacheOrTemp);
     }
     if is_hidden_name(name) {
@@ -628,6 +644,39 @@ mod tests {
             refuse_reason(Path::new("/tmp/work"), &env),
             Some(DirectoryRefusal::WorkingDirectory)
         );
+    }
+
+    #[test]
+    fn only_the_folders_own_name_refuses_a_cache_rename() {
+        let env = RefusalEnv {
+            home: Some(PathBuf::from("/Users/test")),
+            cwd: Some(PathBuf::from("/Users/test/dev/repo")),
+        };
+        let refused = |path: &str| refuse_reason(Path::new(path), &env);
+        // The folder itself is named like a cache area: still refused.
+        assert_eq!(
+            refused("/tmp/issue-work/Cache"),
+            Some(DirectoryRefusal::CacheOrTemp)
+        );
+        assert_eq!(
+            refused("/Volumes/Work/TemporaryItems"),
+            Some(DirectoryRefusal::CacheOrTemp)
+        );
+        // The folder itself keeps its refusal even under a user tree.
+        assert_eq!(
+            refused("/Users/test/Documents/Cache"),
+            Some(DirectoryRefusal::CacheOrTemp)
+        );
+        // An ancestor called Cache does not make this folder app-managed.
+        for path in [
+            "/tmp/issue-work/Cache/project",
+            "/tmp/issue-work/my-cache/project",
+        ] {
+            assert_eq!(refused(path), None, "must stay renameable: {path}");
+        }
+        // The destination rule keeps the whole-subtree shape.
+        assert!(is_cache_or_temp(&["Users", "me", "Cache", "project"]));
+        assert!(!is_cache_or_temp_name("project"));
     }
 
     #[test]

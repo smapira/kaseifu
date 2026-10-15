@@ -33,6 +33,13 @@ pub const MAX_PERCEPTION_LABEL_CHARS: usize = 64;
 /// Measured: the tail runs down to 0.002 ("no idea" territory) while real
 /// bands sit at 0.03-0.9, so the floor only drops noise.
 pub const MIN_PERCEPTION_CONFIDENCE: f32 = 0.01;
+/// Maximum number of OCR text fragments forwarded (still images only).
+///
+/// Eight fragments of bounded length ride in one short prompt line next to
+/// the labels; more would push the labels out of the prompt budget.
+pub const MAX_OCR_TEXTS: usize = 8;
+/// Character budget for one OCR fragment (signs and headings are short).
+pub const MAX_OCR_CHARS: usize = 120;
 /// Longest image side the bridge feeds to Vision (aspect ratio kept).
 ///
 /// 2048^2 x 4 byte is about 16 MiB: a memory bound for the decode. Measured
@@ -76,6 +83,9 @@ struct Envelope {
 struct Payload {
     #[serde(default)]
     labels: Vec<RawLabel>,
+    /// OCR fragments; missing in older payloads (empty, never an error).
+    #[serde(default)]
+    text: Vec<String>,
 }
 
 /// One raw label; a missing or wrongly typed field is treated as missing.
@@ -121,14 +131,16 @@ pub fn parse(json: &str) -> Result<PerceptionInfo, PerceptionError> {
         });
     }
     match envelope.status.as_str() {
-        "success" => Ok(bound_labels(
-            envelope
-                .perception
-                .unwrap_or(Payload { labels: Vec::new() })
-                .labels
-                .into_iter()
-                .filter_map(usable_label),
-        )),
+        "success" => {
+            let payload = envelope.perception.unwrap_or(Payload {
+                labels: Vec::new(),
+                text: Vec::new(),
+            });
+            Ok(PerceptionInfo {
+                labels: bound_labels(payload.labels.into_iter().filter_map(usable_label)).labels,
+                text: bound_texts(payload.text),
+            })
+        }
         "error" => Err(classify_failure(envelope.error)),
         other => Err(PerceptionError::Malformed {
             detail: format!("unknown status: {other}"),
@@ -181,7 +193,46 @@ pub fn bound_labels(labels: impl IntoIterator<Item = PerceptionLabel>) -> Percep
     cleaned.sort_by(by_confidence);
     PerceptionInfo {
         labels: dedupe(cleaned),
+        text: Vec::new(),
     }
+}
+
+/// Bound OCR fragments: trim, drop empties, keep printable ASCII only, bound
+/// the length and de-duplicate case-insensitively up to the budget.
+///
+/// The CLI output contract is ASCII-only, so non-ASCII characters are
+/// stripped from fragments (recorded limitation: a sign in another script
+/// contributes only its ASCII remainder). Like the labels, fragments are
+/// untrusted data: bounding here does not replace the injection check at
+/// plan time.
+pub fn bound_texts(texts: Vec<String>) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut kept: Vec<String> = Vec::new();
+    for fragment in texts {
+        let trimmed = fragment.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let ascii = trimmed
+            .chars()
+            .filter(|ch| *ch >= ' ' && *ch <= '~')
+            .collect::<String>();
+        let cleaned = ascii.trim();
+        if cleaned.is_empty() {
+            continue;
+        }
+        let bounded = contract::bound_chars(cleaned, MAX_OCR_CHARS);
+        let key = bounded.to_ascii_lowercase();
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        kept.push(bounded);
+        if kept.len() == MAX_OCR_TEXTS {
+            break;
+        }
+    }
+    kept
 }
 
 /// True for a label that survives the floor and carries text.
@@ -294,6 +345,61 @@ mod tests {
         let mut expected = ranked.clone();
         expected.sort_by(|left, right| right.partial_cmp(left).unwrap_or(Ordering::Equal));
         assert_eq!(ranked, expected, "the ranking is highest confidence first");
+    }
+
+    #[test]
+    fn ocr_text_parses_alongside_labels_and_old_payloads_stay_empty() {
+        let parsed = parse(
+            r#"{"schema_version":"fm-rename-v1","status":"success",
+                "perception":{"labels":[{"label":"sign","confidence":0.5}],
+                "text":["OPEN", "9:00 - 18:00"]}}"#,
+        )
+        .expect("a text payload parses");
+        assert_eq!(parsed.labels, vec![label("sign", 0.5)]);
+        assert_eq!(parsed.text, vec!["OPEN", "9:00 - 18:00"]);
+        assert!(!parsed.is_empty());
+        // Older bridge answers without the key keep working (empty text).
+        let legacy = parse(
+            r#"{"schema_version":"fm-rename-v1","status":"success",
+                "perception":{"labels":[{"label":"sky","confidence":0.9}]}}"#,
+        )
+        .expect("a legacy payload parses");
+        assert!(legacy.text.is_empty());
+    }
+
+    #[test]
+    fn ocr_text_is_trimmed_ascii_bounded_and_deduped() {
+        let fragments = vec![
+            "  OPEN  ".to_string(),
+            "open".to_string(),
+            String::new(),
+            "   ".to_string(),
+            "caf\u{e9}".to_string(),
+            "x".repeat(500),
+        ];
+        let mut many = fragments;
+        many.extend((0..20).map(|index| format!("sign-{index}")));
+        let bounded = bound_texts(many);
+        assert_eq!(bounded.len(), MAX_OCR_TEXTS, "the budget holds");
+        assert_eq!(bounded[0], "OPEN", "trimmed, first spelling wins");
+        assert!(
+            bounded.iter().all(|fragment| fragment.is_ascii()),
+            "non-ASCII contributes nothing"
+        );
+        assert!(
+            bounded
+                .iter()
+                .all(|fragment| fragment.chars().count() <= MAX_OCR_CHARS),
+            "every fragment is bounded"
+        );
+        assert_eq!(
+            bounded
+                .iter()
+                .filter(|fragment| fragment.eq_ignore_ascii_case("open"))
+                .count(),
+            1,
+            "the case-insensitive duplicate is dropped"
+        );
     }
 
     #[test]

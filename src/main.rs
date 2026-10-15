@@ -59,8 +59,8 @@ struct Cli {
     /// Output format for commands with structured output.
     ///
     /// `json` applies to inspect, classify, organize, doctor, setup, auth,
-    /// config, completions --install and uninstall. `scan`, `undo` and
-    /// `watch` always render text.
+    /// config, completions --install, uninstall, undo and scan. `watch`
+    /// emits one JSON object per line with --format json.
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Auto)]
     format: OutputFormat,
     /// Override the Jev endpoint URL (highest priority).
@@ -114,6 +114,9 @@ enum Commands {
         /// Pick the destination yourself from the candidate folders (needs a terminal).
         #[arg(long, conflicts_with = "explain")]
         select: bool,
+        /// Move the file into this directory without asking (non-interactive).
+        #[arg(long, value_name = "DIR", conflicts_with_all = ["select", "explain"])]
+        to: Option<PathBuf>,
         /// Skip the confirmation prompt when `--select --execute` moves a file.
         #[arg(long, requires = "select")]
         yes: bool,
@@ -125,11 +128,14 @@ enum Commands {
     /// Restore files moved by earlier runs (newest first).
     ///
     /// Reverses the last successful move; `--last N` reverses up to N moves.
-    /// The original location must be free: a collision stops the undo
-    /// instead of overwriting anything.
+    /// `--batch <id>` reverses exactly the moves of one rename batch (the id
+    /// a batch prints when it applies). The original location must be free:
+    /// a collision stops the undo instead of overwriting anything.
     Undo {
-        #[arg(long, default_value_t = 1)]
-        last: usize,
+        #[arg(long, conflicts_with = "batch")]
+        last: Option<usize>,
+        #[arg(long, value_name = "ID")]
+        batch: Option<String>,
     },
 
     /// List candidate destination directories for one file (diagnostic view).
@@ -354,6 +360,7 @@ async fn dispatch(
             select,
             yes,
             explain,
+            to,
         } => {
             dispatch_organize(
                 OrganizeOptions {
@@ -363,6 +370,7 @@ async fn dispatch(
                     select,
                     yes,
                     explain,
+                    to,
                 },
                 format,
                 overrides,
@@ -375,7 +383,7 @@ async fn dispatch(
             dry_run,
         } => handle_watch(&paths, execute, dry_run, format, overrides).await,
         Commands::Rename(boxed) => handle_rename(*boxed, format).await,
-        Commands::Undo { last } => handle_undo(last, format),
+        Commands::Undo { last, batch } => handle_undo(last, batch.as_deref(), format),
         Commands::Discover { file, all, verbose } => handle_discover(&file, all, verbose, format),
         Commands::Classify {
             file,
@@ -439,6 +447,7 @@ struct OrganizeOptions {
     select: bool,
     yes: bool,
     explain: bool,
+    to: Option<PathBuf>,
 }
 
 /// `organize` with or without the interactive selection (ZC-13).
@@ -447,6 +456,15 @@ async fn dispatch_organize(
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
+    if let Some(destination) = options.to {
+        return handle_organize_to(
+            &options.file,
+            &destination,
+            options.execute,
+            options.dry_run,
+            format,
+        );
+    }
     if options.select {
         handle_organize_select(
             &options.file,
@@ -586,7 +604,23 @@ fn fallback_metadata() -> kaseifu::config::ResolvedMetadata {
 }
 
 /// `scan`: target banner only (no mutation, no discovery).
+///
+/// With `--format json` the same banner is one parseable document; the scan
+/// itself stays a placeholder, so the status says so honestly.
 fn handle_scan(path: &Path, format: OutputFormat) {
+    if format == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "scan": {
+                    "target": path.display().to_string(),
+                    "status": "not-implemented",
+                    "detail": "scanning is not implemented yet",
+                }
+            })
+        );
+        return;
+    }
     let mode = resolve_mode(format);
     if mode.rich {
         println!(
@@ -741,9 +775,129 @@ fn run_selected_move(
 /// Non-TTY guidance for `organize --select` (ZC-13).
 ///
 /// `discover` is deliberately not named: it stays a hidden diagnostic view.
-const SELECT_NON_TTY_GUIDANCE: &str = "interactive selection needs a terminal (stdin is not a TTY)\n\
-list the candidate destinations in JSON: kaseifu organize <file> --select --format json\n\
-a future release will add --to <dir> for non-interactive selection";
+const SELECT_NON_TTY_GUIDANCE: &str = "interactive selection needs a terminal (stdin is not a TTY)\nlist the candidate destinations in JSON: kaseifu organize <file> --select --format json\nmove into a chosen directory without asking: kaseifu organize <file> --to <dir> [--execute]";
+
+/// `organize --to <dir>`: move the file into a named directory (ZC-14).
+///
+/// Non-interactive by design: the destination comes from the flag, so no
+/// terminal is needed and no confirmation is asked (`--execute` is the
+/// explicit request, like the batch path). Validation reuses the manual-move
+/// plan (excluded destinations, missing sources, collisions), and the move
+/// is journaled on the manual path so `undo` reverses it. `--format json`
+/// prints one additive `organize_to` document instead of the text plan.
+fn handle_organize_to(
+    file: &Path,
+    destination: &Path,
+    execute: bool,
+    dry_run: bool,
+    format: OutputFormat,
+) -> Result<()> {
+    let actually_move = execute && !dry_run;
+    let mode = resolve_mode(format);
+    let json = format == OutputFormat::Json;
+    if is_noop_to(file, destination) {
+        anyhow::bail!("already in {}; nothing to move", destination.display());
+    }
+    let candidate = kaseifu::models::candidate::CandidateDestination {
+        id: "--to".to_string(),
+        path: destination.to_path_buf(),
+        score: 0.0,
+        evidence_count: 0,
+        reasons: vec!["named with --to".to_string()],
+    };
+    let move_plan = match plan::build_manual_move_plan(file, &candidate) {
+        Ok(move_plan) => move_plan,
+        Err(error) => {
+            anyhow::bail!(
+                "cannot move this file: {}",
+                organize_view::plan_error_message(&error, mode.rich, mode.color)
+            );
+        }
+    };
+    if !actually_move {
+        if json {
+            println!(
+                "{}",
+                organize_to_json(file, destination, &move_plan, false, None)
+            );
+        } else {
+            print!(
+                "{}",
+                select_view::render_explicit_plan(
+                    &move_plan,
+                    destination,
+                    false,
+                    mode.rich,
+                    mode.color
+                )
+            );
+        }
+        return Ok(());
+    }
+    let history = OperationHistory::open(journal_path())?;
+    match mover::execute_manual_move(&move_plan, &history) {
+        Ok(mover::MoveOutcome::Moved { operation_id }) => {
+            if json {
+                println!(
+                    "{}",
+                    organize_to_json(file, destination, &move_plan, true, Some(&operation_id))
+                );
+            } else {
+                print!(
+                    "{}",
+                    select_view::render_explicit_moved(
+                        &move_plan,
+                        &operation_id,
+                        mode.rich,
+                        mode.color
+                    )
+                );
+            }
+            Ok(())
+        }
+        Ok(mover::MoveOutcome::WouldMove) => {
+            // execute_manual_move always performs the move; this arm only
+            // keeps the outcome match exhaustive.
+            anyhow::bail!("the move was not performed")
+        }
+        Err(error) => anyhow::bail!("move failed: {error:?}"),
+    }
+}
+
+/// True when `--to` names the directory the file already sits in.
+///
+/// Compared by canonical path so `./docs`, `docs/` and symlinked spellings
+/// of the same directory all read as a no-op (a move there would collide
+/// with the source itself).
+fn is_noop_to(file: &Path, destination: &Path) -> bool {
+    let parent = file.parent().map(Path::to_path_buf).unwrap_or_default();
+    match (
+        std::fs::canonicalize(&parent),
+        std::fs::canonicalize(destination),
+    ) {
+        (Ok(current), Ok(named)) => current == named,
+        _ => false,
+    }
+}
+
+/// The `--to` JSON document (additive shape, only this flag prints it).
+fn organize_to_json(
+    file: &Path,
+    destination: &Path,
+    plan: &plan::MovePlan,
+    executed: bool,
+    operation_id: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "organize_to": {
+            "file": file.display().to_string(),
+            "destination": destination.display().to_string(),
+            "destination_path": plan.destination_path.display().to_string(),
+            "executed": executed,
+            "operation_id": operation_id,
+        }
+    })
+}
 
 /// `--select --format json`: the candidate list, no interaction, no Jev.
 fn print_select_candidates(file: &Path, execute: bool, overrides: &CliOverrides) -> Result<()> {
@@ -849,14 +1003,30 @@ async fn handle_watch(
         actually_move,
         WatchConfig::default(),
         policy_thresholds(&resolved),
-        &kaseifu::context::image_metadata::MetadataOptions::from_resolved(&resolved.metadata),
+        runner::WatchRunOptions {
+            image_options: &kaseifu::context::image_metadata::MetadataOptions::from_resolved(
+                &resolved.metadata,
+            ),
+            json: format == OutputFormat::Json,
+        },
     )
     .await?;
     Ok(())
 }
 
 /// `watch` start banner (the mode is always stated, ZC-9).
+///
+/// With `--format json` the banner is one JSON object (JSON Lines: the loop
+/// that follows prints one object per line).
 fn print_watch_start(paths: &[PathBuf], actually_move: bool, format: OutputFormat) {
+    if format == OutputFormat::Json {
+        let roots = paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>();
+        println!("{}", generic::watch_start_json(&roots, !actually_move));
+        return;
+    }
     let roots = paths
         .iter()
         .map(|path| path.display().to_string())
@@ -870,20 +1040,141 @@ fn print_watch_start(paths: &[PathBuf], actually_move: bool, format: OutputForma
 }
 
 /// `undo`: restore up to `last` moves, newest first.
-fn handle_undo(last: usize, format: OutputFormat) -> Result<()> {
-    let mode = resolve_mode(format);
-    if mode.rich {
-        println!("{}", generic::header("KASEIFU / UNDO", mode.color));
-    }
+///
+/// With `--format json` the whole run is one parseable document (the pending
+/// warning moves to stderr so stdout stays parseable); otherwise the
+/// historical per-step lines are printed unchanged.
+fn handle_undo(last: Option<usize>, batch: Option<&str>, format: OutputFormat) -> Result<()> {
+    let json = format == OutputFormat::Json;
     let history = OperationHistory::open(journal_path())?;
-    print_pending_warning(&history);
+    let warnings = pending_warning_lines(&history);
+    if json {
+        for line in &warnings {
+            eprintln!("{line}");
+        }
+    } else {
+        let mode = resolve_mode(format);
+        if mode.rich {
+            println!("{}", generic::header("KASEIFU / UNDO", mode.color));
+        }
+        for line in &warnings {
+            println!("{line}");
+        }
+    }
 
+    let steps = match batch {
+        Some(batch_id) => undo_batch_steps(&history, batch_id),
+        None => undo_last_steps(&history, last.unwrap_or(1)),
+    };
+    emit_undo_steps(&steps, !warnings.is_empty(), json);
+    Ok(())
+}
+
+/// Up to `last` newest-first steps, stopping at the first refusal.
+fn undo_last_steps(history: &OperationHistory, last: usize) -> Vec<UndoStep> {
+    let mut steps = Vec::new();
     for _ in 0..last {
-        if !apply_single_undo(&history) {
+        let step = undo_step(history);
+        let stop = !matches!(step, UndoStep::Restored { .. });
+        steps.push(step);
+        if stop {
             break;
         }
     }
-    Ok(())
+    steps
+}
+/// Every move of one batch, newest first, stopping at the first refusal.
+///
+/// An unknown batch id (or a batch whose rows are all undone) reads as
+/// nothing to undo, exactly like an empty journal.
+fn undo_batch_steps(history: &OperationHistory, batch_id: &str) -> Vec<UndoStep> {
+    let entries = history
+        .successful_moves_in_batch(batch_id)
+        .unwrap_or_default();
+    if entries.is_empty() {
+        return vec![UndoStep::NothingLeft];
+    }
+    let mut steps = Vec::new();
+    for entry in &entries {
+        let step = entry_step(history, entry);
+        let stop = !matches!(step, UndoStep::Restored { .. });
+        steps.push(step);
+        if stop {
+            break;
+        }
+    }
+    steps
+}
+
+/// Report collected steps: the historical per-step lines, or one JSON
+/// document when asked (the same shape for `--last` and `--batch`).
+fn emit_undo_steps(steps: &[UndoStep], pending_warning: bool, json: bool) {
+    let mut restored: Vec<serde_json::Value> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+    for step in steps {
+        match step {
+            UndoStep::Restored {
+                to,
+                undone_move_id,
+                operation_id,
+            } => {
+                if json {
+                    restored.push(serde_json::json!({
+                        "to": to,
+                        "undone_move_id": undone_move_id,
+                        "operation_id": operation_id,
+                    }));
+                } else {
+                    println!("restored: {to}\n  (undid {undone_move_id})");
+                }
+            }
+            UndoStep::NothingLeft => {
+                if json {
+                    failures.push("nothing left to undo".to_string());
+                } else {
+                    println!("nothing left to undo");
+                }
+            }
+            UndoStep::Failed { error } => {
+                if json {
+                    failures.push(error.clone());
+                } else {
+                    println!("undo failed: {error}");
+                }
+            }
+        }
+    }
+    if json {
+        // No stop and no restore means nothing was asked (`--last 0`) or
+        // nothing was journaled: both read as empty, never as failed.
+        let status = if restored.is_empty() && failures.is_empty() {
+            "empty"
+        } else if restored.is_empty() {
+            if failures == ["nothing left to undo".to_string()] {
+                "empty"
+            } else {
+                "failed"
+            }
+        } else if failures.is_empty() {
+            "restored"
+        } else {
+            "partial"
+        };
+        println!(
+            "{}",
+            serde_json::json!({
+                "undo": {
+                    "restored": restored,
+                    "failures": failures
+                        .iter()
+                        .map(|error| serde_json::json!({ "error": error }))
+                        .collect::<Vec<_>>(),
+                    "status": status,
+                    "pending_warning": pending_warning,
+                }
+            })
+        );
+    }
 }
 
 /// Parsed `rename` arguments (boxed: the struct form keeps `Commands` small).
@@ -1161,9 +1452,12 @@ struct RenameReport<'a> {
 }
 
 /// The `perception` object for the JSON report (images and videos).
+///
+/// The `text` key is an addition: reports without OCR text carry an empty
+/// array, and every older key keeps its shape.
 fn perception_json(report: &PerceptionReport) -> serde_json::Value {
     match report {
-        PerceptionReport::Labels(labels) => serde_json::json!({
+        PerceptionReport::Labels { labels, text } => serde_json::json!({
             "status": "labels",
             "labels": labels
                 .iter()
@@ -1172,6 +1466,7 @@ fn perception_json(report: &PerceptionReport) -> serde_json::Value {
                     "confidence": entry.confidence,
                 }))
                 .collect::<Vec<_>>(),
+            "text": text,
         }),
         PerceptionReport::Unavailable(reason) => serde_json::json!({
             "status": "unavailable",
@@ -1545,6 +1840,11 @@ fn batch_summary_lines(report: &BatchReport, phase: BatchPhase) -> Vec<String> {
             if recorded > 0 {
                 lines.push(format!("undo: kaseifu undo --last {recorded}"));
             }
+            if recorded > 0
+                && let Some(batch_id) = report.batch_id.as_deref()
+            {
+                lines.push(format!("batch: kaseifu undo --batch {batch_id}"));
+            }
         }
     }
     lines
@@ -1622,6 +1922,7 @@ fn batch_json(report: &BatchReport, phase: BatchPhase) -> serde_json::Value {
             "truncated": report.truncated,
             "applied": report.recorded(),
             "undo_last": report.recorded(),
+            "undo_batch": report.batch_id,
             "items": report.items.iter().map(batch_item_json).collect::<Vec<_>>(),
         }
     })
@@ -1705,21 +2006,20 @@ fn rename_ready(
     Ok(())
 }
 
-/// Report `pending` rows before undoing, without touching them.
+/// Pending-row warning lines, without touching the rows.
 ///
 /// A pending row means a mutation was recorded but its result was never
 /// written: the process was interrupted, or another process is performing the
 /// operation right now. Neither case is auto-recoverable from the journal
-/// alone — rewriting the row (or moving the file back) could destroy a state
-/// that is actually correct — so this only makes the situation visible and
-/// leaves the decision to the user (`pending` stays out of Undo's selection,
-/// which requires `result='success'`).
-fn print_pending_warning(history: &OperationHistory) {
+/// alone, so this only makes the situation visible and leaves the decision
+/// to the user. Building the lines separately lets `--format json` move them
+/// to stderr while stdout stays one parseable document.
+fn pending_warning_lines(history: &OperationHistory) -> Vec<String> {
     let Ok(entries) = history.pending_entries() else {
-        return;
+        return Vec::new();
     };
     if entries.is_empty() {
-        return;
+        return Vec::new();
     }
     let moves = entries
         .iter()
@@ -1730,35 +2030,59 @@ fn print_pending_warning(history: &OperationHistory) {
         .filter(|entry| entry.operation == "undo")
         .count();
     let noun = if entries.len() == 1 { "row" } else { "rows" };
-    println!(
-        "warning: {} pending journal {} ({} move, {} undo); interrupted moves may already be at the destination",
-        entries.len(),
-        noun,
-        moves,
-        undos
-    );
-    println!("  (not recovered automatically; run `kaseifu doctor` to inspect)");
+    vec![
+        format!(
+            "warning: {} pending journal {} ({} move, {} undo); interrupted moves may already be at the destination",
+            entries.len(),
+            noun,
+            moves,
+            undos
+        ),
+        "  (not recovered automatically; run `kaseifu doctor` to inspect)".to_string(),
+    ]
 }
 
-/// One undo step; returns false when the loop must stop.
-fn apply_single_undo(history: &OperationHistory) -> bool {
-    match undo::undo_last_move(history) {
-        Ok(outcome) => {
-            println!(
-                "restored: {}\n  (undid {})",
-                outcome.restored_to.display(),
-                outcome.undone_move_id
-            );
-            true
-        }
-        Err(undo::UndoError::NothingToUndo) => {
-            println!("nothing left to undo");
-            false
-        }
-        Err(error) => {
-            println!("undo failed: {error}");
-            false
-        }
+/// One undo step, without printing: the caller decides text vs JSON.
+///
+/// The text rendering of each variant is byte-identical to the historical
+/// `apply_single_undo` lines.
+enum UndoStep {
+    Restored {
+        to: String,
+        undone_move_id: String,
+        operation_id: String,
+    },
+    NothingLeft,
+    Failed {
+        error: String,
+    },
+}
+
+/// Run one undo step; the `NothingLeft` and `Failed` variants stop the loop.
+fn undo_step(history: &OperationHistory) -> UndoStep {
+    to_step(undo::undo_last_move(history))
+}
+
+/// One batch row as a step (shares the text/JSON rendering with `undo_step`).
+fn entry_step(
+    history: &OperationHistory,
+    entry: &kaseifu::storage::history::HistoryEntry,
+) -> UndoStep {
+    to_step(undo::undo_entry(history, entry))
+}
+
+/// Shared rendering of one undo outcome (text lines stay byte-identical).
+fn to_step(result: Result<undo::UndoOutcome, undo::UndoError>) -> UndoStep {
+    match result {
+        Ok(outcome) => UndoStep::Restored {
+            to: outcome.restored_to.display().to_string(),
+            undone_move_id: outcome.undone_move_id,
+            operation_id: outcome.operation_id,
+        },
+        Err(undo::UndoError::NothingToUndo) => UndoStep::NothingLeft,
+        Err(error) => UndoStep::Failed {
+            error: error.to_string(),
+        },
     }
 }
 

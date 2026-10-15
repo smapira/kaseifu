@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::context::directory::{
-    is_bundle_container, is_cache_or_temp, is_hidden_name, is_library_tree, is_system_area,
+    is_bundle_container, is_cache_or_temp_name, is_hidden_name, is_library_tree, is_system_area,
 };
 use crate::models::file_context::EntryKind;
 use crate::normalize::noise::is_noise_file;
@@ -31,7 +31,7 @@ use crate::platform::macos::filesystem;
 use crate::semantic::provider::SemanticProvider;
 use crate::storage::history::OperationHistory;
 
-use super::service::{PlanOutcome, RenameOptions, RenamePlan, execute_plan, plan_rename};
+use super::service::{PlanOutcome, RenameOptions, RenamePlan, execute_plan_in_batch, plan_rename};
 use super::store::RenameStore;
 
 /// How deep the walk descends below the folder it was given.
@@ -64,9 +64,10 @@ pub struct BatchWalk {
 /// Depth-first, names in sorted order, at most [`MAX_BATCH_DEPTH`] levels and at
 /// most [`MAX_BATCH_TARGETS`] targets. A folder that is itself a target is still
 /// descended into: children are named too, and [`execution_order`] keeps that
-/// safe. Hidden names, macOS noise names, app bundles, the macOS library trees,
-/// OS areas and cache or temporary areas are left out, and a symbolic link is
-/// never followed or renamed (original spec sections 5.4, 9.1 and 11.2).
+/// safe, except for a cache or temporary folder, which is listed but never
+/// descended into. Hidden names, macOS noise names, app bundles, the macOS
+/// library trees and OS areas are left out, and a symbolic link is never
+/// followed or renamed (original spec sections 5.4, 9.1 and 11.2).
 ///
 /// An unreadable directory is an error (the caller reports it and renames
 /// nothing), never a silently missing subtree.
@@ -102,7 +103,12 @@ fn walk_level(
             EntryKind::File => targets.push(path),
             EntryKind::Directory => {
                 targets.push(path.clone());
-                walk_level(&path, depth + 1, targets, truncated)?;
+                // A cache or temporary folder is listed so the plan holds it
+                // with its reason instead of dropping it silently, but the
+                // walk never descends into it.
+                if !is_cache_or_temp_name(&entry.name) {
+                    walk_level(&path, depth + 1, targets, truncated)?;
+                }
             }
             // A link is not followed and not renamed, and anything else (a
             // socket, a device node) is not a rename target at all.
@@ -117,14 +123,15 @@ fn walk_level(
 /// The rules are the folder-refusal shapes of the context layer, applied to one
 /// child name: they already describe what macOS or an app owns. Because a
 /// skipped folder is never descended into, matching one name covers its whole
-/// subtree.
+/// subtree. Cache and temporary names stay listed on purpose: the plan holds
+/// them with their reason instead of dropping them silently (the walk still
+/// never descends into them).
 fn is_batch_target(name: &str) -> bool {
     let single = [name];
     !is_noise_file(name)
         && !is_hidden_name(name)
         && !is_bundle_container(name)
         && !is_library_tree(&single)
-        && !is_cache_or_temp(&single)
         && !is_system_area(&single)
 }
 
@@ -186,6 +193,22 @@ pub struct BatchReport {
     pub root: PathBuf,
     pub items: Vec<BatchItem>,
     pub truncated: bool,
+    /// The id stamp of the last [`apply`] (undo reverses exactly these rows).
+    ///
+    /// `None` until the batch is applied: previews plan without an identity.
+    pub batch_id: Option<String>,
+}
+
+/// One batch's identity for undo (`batch-` + process id + nanos).
+fn new_batch_id() -> String {
+    format!(
+        "batch-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|age| age.as_nanos())
+            .unwrap_or_default()
+    )
 }
 
 impl BatchReport {
@@ -227,13 +250,13 @@ impl BatchReport {
 
 /// Hold every group of items that would write the same file name.
 ///
-/// Names are compared inside one directory and case-insensitively, because the
-/// default macOS volume is case-insensitive: `Invoice.pdf` and `invoice.pdf`
-/// are one file. Unicode normalization variants are *not* folded here; folding
-/// them needs a Unicode table this tool does not ship, and the filesystem
-/// answers that case at apply time, where the per-item destination recheck
-/// refuses an occupied name instead of overwriting it (original spec sections
-/// 9.1 and 11.2).
+/// Names are compared inside one directory, case-insensitively and
+/// NFC-normalized, because the default macOS volume folds all three:
+/// `Invoice.pdf` and `invoice.pdf` are one file, and so are NFC `\u{e9}`
+/// and NFD `e\u{301}` spellings of the same name. A normalization-only
+/// difference is held here (not merely at apply time) so the preview names
+/// the conflict instead of showing a proposal that later fails (original
+/// spec sections 9.1 and 11.2).
 pub fn hold_conflicts(items: &mut [BatchItem]) {
     let groups = destination_groups(items);
     for members in groups.values() {
@@ -288,9 +311,18 @@ fn directory_of(path: &Path) -> PathBuf {
 }
 
 /// The file name a destination would take, folded the way the volume folds it.
+///
+/// NFC first (so precomposed and decomposed spellings meet), then lowercase
+/// (the volume is case-insensitive too).
 fn folded_name(path: &Path) -> String {
+    use unicode_normalization::UnicodeNormalization;
     path.file_name()
-        .map(|name| name.to_string_lossy().to_lowercase())
+        .map(|name| {
+            name.to_string_lossy()
+                .nfc()
+                .collect::<String>()
+                .to_lowercase()
+        })
         .unwrap_or_default()
 }
 
@@ -338,6 +370,7 @@ pub async fn plan(
         root: root.to_path_buf(),
         items,
         truncated: walk.truncated,
+        batch_id: None,
     }
 }
 
@@ -371,13 +404,17 @@ fn current_name_of(target: &Path) -> String {
 ///
 /// One item failing never stops the rest (original spec section 12): the
 /// failure is kept on that item, and it is one journal row per applied rename,
-/// so `undo` can reverse the batch in the order it happened.
+/// so `undo` can reverse the batch in the order it happened. Every row of one
+/// apply shares the report's batch id, so `undo --batch` reverses exactly
+/// this apply even when single renames happened in between.
 pub fn apply(report: &mut BatchReport, history: &OperationHistory) {
+    let batch_id = new_batch_id();
+    report.batch_id = Some(batch_id.clone());
     for index in execution_order(&report.items) {
         let Some(plan) = report.items[index].plan().cloned() else {
             continue;
         };
-        let applied = match execute_plan(&plan, history) {
+        let applied = match execute_plan_in_batch(&plan, history, Some(&batch_id)) {
             Ok(operation_id) => Applied::Executed(operation_id),
             Err(error) => Applied::Failed(error.to_string()),
         };
@@ -444,10 +481,53 @@ mod tests {
         fs::create_dir_all(dir.join("Library")).expect("library");
         std::os::unix::fs::symlink("keep.txt", dir.join("link.txt")).expect("symlink");
         let walk = walk(&dir).expect("walk");
+        // A cache folder stays listed so the plan holds it with its reason
+        // instead of dropping it silently; everything else stays out.
         assert_eq!(
             walk.targets,
-            vec![dir.join("keep.txt")],
-            "only the plain file stays"
+            vec![dir.join("Caches"), dir.join("keep.txt")],
+            "only the plain file and the cache folder stay"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_walk_lists_but_never_descends_into_a_cache_folder() {
+        let dir = work_dir("cachedesc");
+        fs::create_dir_all(dir.join("Caches")).expect("cache");
+        write(&dir.join("Caches"), "inner.txt");
+        fs::create_dir_all(dir.join("Caches/nested")).expect("nested");
+        write(&dir, "keep.txt");
+        let walk = walk(&dir).expect("walk");
+        assert_eq!(
+            walk.targets,
+            vec![dir.join("Caches"), dir.join("keep.txt")],
+            "the cache folder is listed, its contents are not"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ordinary_names_that_end_like_noise_stay_listed() {
+        let dir = work_dir("names");
+        fs::create_dir_all(dir.join("my-target")).expect("target-like");
+        write(&dir.join("my-target"), "c.txt");
+        write(&dir, "dist-target.txt");
+        let walk = walk(&dir).expect("walk");
+        assert!(
+            walk.targets.contains(&dir.join("dist-target.txt")),
+            "a file ending in -target stays: {:?}",
+            walk.targets
+        );
+        assert!(
+            walk.targets.contains(&dir.join("my-target")),
+            "a folder ending in -target stays: {:?}",
+            walk.targets
+        );
+        assert!(
+            walk.targets.contains(&dir.join("my-target/c.txt")),
+            "its contents stay too: {:?}",
+            walk.targets
         );
         let _ = fs::remove_dir_all(&dir);
     }
@@ -528,6 +608,25 @@ mod tests {
     }
 
     #[test]
+    fn normalization_only_differences_are_conflicts() {
+        // NFC cafe\u{e9}.pdf vs NFD cafe\u{301}.pdf: one file on macOS.
+        let mut items = vec![
+            item("a.txt", "caf\u{e9}.pdf", "/tmp/x"),
+            item("b.txt", "cafe\u{301}.pdf", "/tmp/x"),
+            item("c.txt", "other.pdf", "/tmp/x"),
+        ];
+        hold_conflicts(&mut items);
+        for index in [0, 1] {
+            assert!(
+                matches!(items[index].outcome, BatchOutcome::Conflict { .. }),
+                "index {index} must be held: {:?}",
+                items[index].outcome
+            );
+        }
+        assert!(items[2].plan().is_some(), "an unshared name stays ready");
+    }
+
+    #[test]
     fn the_same_name_in_two_directories_is_not_a_conflict() {
         let mut items = vec![
             item("a.txt", "same.txt", "/tmp/x"),
@@ -566,6 +665,7 @@ mod tests {
             root: PathBuf::from("/tmp/x"),
             items,
             truncated: true,
+            batch_id: None,
         };
         assert_eq!(report.proposals(), 0);
         assert_eq!(report.conflicts(), 2);

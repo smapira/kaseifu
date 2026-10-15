@@ -137,8 +137,15 @@ pub async fn process_request_with_full(
 }
 
 /// Log one outcome (Review/Leave are surfaced in the log; no GUI in Phase 6).
-pub fn log_outcome(path: &Path, outcome: &ProcessOutcome) {
-    print!("{}", outcome_text(path, outcome));
+///
+/// With `json` every outcome is one JSON object on its own line (JSON Lines);
+/// otherwise the historical text line is printed unchanged.
+pub fn log_outcome(path: &Path, outcome: &ProcessOutcome, json: bool) {
+    if json {
+        println!("{}", outcome_json(path, outcome));
+    } else {
+        print!("{}", outcome_text(path, outcome));
+    }
 }
 
 /// The log line(s) for one outcome.
@@ -184,6 +191,49 @@ pub fn outcome_text(path: &Path, outcome: &ProcessOutcome) -> String {
     }
 }
 
+/// One outcome as one JSON object for `--format json` (see
+/// [`generic::watch_start_json`]): the `event` names what happened, `path`
+/// is the observed file, and `detail` carries what the text line would show
+/// (the destination, the operation id, the refusal numbers).
+pub fn outcome_json(path: &Path, outcome: &ProcessOutcome) -> String {
+    let path = path.display().to_string();
+    let (event, detail) = match outcome {
+        ProcessOutcome::Moved {
+            operation_id,
+            destination,
+        } => (
+            "moved",
+            format!(
+                "{} -> {} (operation: {operation_id})",
+                path,
+                destination.display()
+            ),
+        ),
+        ProcessOutcome::WouldMove { destination } => (
+            "would-move",
+            format!("{} -> {}", path, destination.display()),
+        ),
+        ProcessOutcome::Refused {
+            policy,
+            candidate_path,
+            confidence,
+            margin,
+        } => (
+            "refused",
+            format!(
+                "policy: {policy:?}; candidate: {}; confidence: {confidence:.3}; margin: {margin:.3}",
+                candidate_path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "(none)".to_string())
+            ),
+        ),
+        ProcessOutcome::Unplanable(error) => ("unplanable", format!("{error:?}")),
+        ProcessOutcome::Failed(error) => ("failed", error.clone()),
+    };
+    generic::watch_event_json(event, &path, Some(&detail))
+}
+
 /// Consume an event source until the process is stopped.
 ///
 /// A failing file never stops the loop (errors are logged per file).
@@ -202,12 +252,28 @@ pub async fn run_loop(
         execute,
         config,
         thresholds,
-        &crate::context::image_metadata::MetadataOptions::default(),
+        WatchRunOptions {
+            image_options: &crate::context::image_metadata::MetadataOptions::default(),
+            json: false,
+        },
     )
     .await
 }
 
+/// Options only [`run_loop_with`] needs on top of [`run_loop`]: the image
+/// toggles and the report shape (text lines or JSON Lines).
+#[derive(Debug, Clone, Copy)]
+pub struct WatchRunOptions<'a> {
+    /// Image metadata toggles forwarded to the pipeline.
+    pub image_options: &'a crate::context::image_metadata::MetadataOptions,
+    /// Print one JSON object per line instead of the text lines.
+    pub json: bool,
+}
+
 /// [`run_loop`] with explicit image toggles (v3.2).
+///
+/// With `options.json` every loop line is one JSON object (JSON Lines);
+/// otherwise the historical text lines are printed unchanged.
 pub async fn run_loop_with(
     events: Receiver<PathBuf>,
     jev: &dyn JevIntegration,
@@ -215,26 +281,50 @@ pub async fn run_loop_with(
     execute: bool,
     config: WatchConfig,
     thresholds: crate::policy::decision::Thresholds,
-    image_options: &crate::context::image_metadata::MetadataOptions,
+    options: WatchRunOptions<'_>,
 ) -> Result<()> {
     let mut coordinator = EventCoordinator::new(config);
+    let json = options.json;
+    let image_options = options.image_options;
 
     loop {
         while let Ok(path) = events.try_recv() {
             let disposition = coordinator.submit(RawEvent { path: path.clone() }, Instant::now());
             if let Disposition::Suppressed(reason) = disposition {
-                println!(
-                    "ignored {} ({})",
-                    path.display(),
-                    describe_suppression(&reason)
-                );
+                if json {
+                    println!(
+                        "{}",
+                        generic::watch_event_json(
+                            "ignored",
+                            &path.display().to_string(),
+                            Some(describe_suppression(&reason))
+                        )
+                    );
+                } else {
+                    println!(
+                        "ignored {} ({})",
+                        path.display(),
+                        describe_suppression(&reason)
+                    );
+                }
             }
         }
 
         // Only stable, debounced, not-yet-processing paths reach the pipeline,
         // so the Jev API is never called for a rejected event.
         for request in coordinator.drain_due(Instant::now()) {
-            println!("detected {}", request.path.display());
+            if json {
+                println!(
+                    "{}",
+                    generic::watch_event_json(
+                        "detected",
+                        &request.path.display().to_string(),
+                        None
+                    )
+                );
+            } else {
+                println!("detected {}", request.path.display());
+            }
             let outcome = process_request_with_full(
                 &request,
                 &mut coordinator,
@@ -245,7 +335,7 @@ pub async fn run_loop_with(
                 image_options,
             )
             .await;
-            log_outcome(&request.path, &outcome);
+            log_outcome(&request.path, &outcome, json);
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

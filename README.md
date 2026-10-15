@@ -192,7 +192,19 @@ marked `[MANUAL]`, the journal keeps no classifier confidence for it, and
 (`~/Library/**`, caches, system trees) are not offered and are refused by the
 plan even if one arrives from somewhere else. Without a terminal, `--select`
 fails with guidance; `--select --format json` prints the candidate list
-instead of prompting.
+instead of prompting. When you already know where the file belongs,
+`--to <dir>` skips the menu entirely (non-interactive, no confirmation):
+
+```bash
+kaseifu organize ~/Desktop/example.pdf --to ~/Documents/Receipts
+kaseifu organize ~/Desktop/example.pdf --to ~/Documents/Receipts --execute
+```
+
+The destination must be an existing directory outside the excluded shapes
+(`~/Library/**`, caches, system trees, the file's own folder); a refusal
+names the reason and moves nothing. Executed moves are journaled on the
+same `[MANUAL]` path as `--select`, so `undo` reverses them, and
+`--format json` prints one `organize_to` object.
 
 ### Rename a file or folder (AI naming)
 
@@ -306,12 +318,19 @@ Behaviour worth knowing:
 - `--format json` (with or without `--execute`) prints one object: `target`,
   `current_name`, `pattern`, `proposal`, `date_source`, `status`, `reason`,
   `operation_id`, `perception` for images and videos (the labels, or why they
-  are missing), `video` for videos (the measured metadata and the frame count),
+  are missing; still images also carry bounded `text` read from print inside
+  the picture, withheld with a reason when it looks like an instruction),
+  `video` for videos (the measured metadata and the frame count),
   and `directory` for folders (the entry counts, whether the read hit its cap,
   and the file type distribution). A `--recursive` batch prints one object with
   `status`, `target`, `proposals`, `conflicts`, `held`, `noop`, `truncated`,
   `applied`, `undo_last` and `items`, where each item reuses the single-target
-  key names.
+  key names. `undo --format json` prints one object (`restored`, `failures`,
+  `status`, `pending_warning`); `scan --format json` prints one object with
+  `status: not-implemented`. `watch --format json` prints one JSON object per
+  line (the stream never ends, so there is no wrapping array). JSON goes to
+  stdout and diagnostics to stderr, so piping stdout through a JSON parser
+  never sees warning text.
 
 ### Undo
 
@@ -326,6 +345,11 @@ Restore the last N moves:
 ```bash
 kaseifu undo --last 3
 ```
+
+`--last N` counts the newest rows, whatever they belong to. A rename batch
+prints its own id when it applies (`batch: kaseifu undo --batch <id>`), and
+`undo --batch <id>` reverses exactly that batch's moves newest-first, leaving
+later single renames alone.
 
 The journal lives at `~/Library/Application Support/kaseifu/kaseifu.db`
 (absolute, independent of the working directory; `doctor` prints the resolved

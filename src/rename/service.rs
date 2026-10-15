@@ -16,6 +16,7 @@ use crate::semantic::perception::PerceptionError;
 use crate::semantic::provider::{SemanticError, SemanticProvider};
 use crate::semantic::video::VideoPerception;
 use crate::storage::history::OperationHistory;
+use crate::storage::history::PendingRecord;
 
 use super::directory::{classify_directory, refuse_rename};
 use super::document::{
@@ -24,9 +25,9 @@ use super::document::{
 };
 use super::image::{classify_image, is_image};
 use super::rules::{
-    PresetDef, ResolvedDate, RuleInputs, bound_stem, find_preset, is_date_format, resolve_date,
-    resolve_image_date, resolve_template, resolve_video_date, strip_redundant_extension,
-    underscore_whitespace,
+    PresetDef, ResolvedDate, RuleInputs, bound_stem, degenerate_title_reason, find_preset,
+    is_date_format, resolve_date, resolve_image_date, resolve_template, resolve_video_date,
+    strip_redundant_extension, underscore_whitespace,
 };
 use super::store::RenameStore;
 use super::validate::{
@@ -209,10 +210,15 @@ impl VideoReport {
 /// `Labels` with an empty vector means perception ran and the classifier named
 /// nothing; `Unavailable` means it could not run at all. The two stay apart so
 /// a report never claims a picture was understood when it was not. Videos
-/// carry the same shape: the labels merged across their frames.
+/// carry the same shape: the labels merged across their frames (videos never
+/// carry OCR text; still-image OCR would multiply per frame, so it stays off
+/// there and the field is empty).
 #[derive(Debug, Clone, PartialEq)]
 pub enum PerceptionReport {
-    Labels(Vec<PerceptionLabel>),
+    Labels {
+        labels: Vec<PerceptionLabel>,
+        text: Vec<String>,
+    },
     Unavailable(String),
 }
 
@@ -221,22 +227,33 @@ impl PerceptionReport {
     ///
     /// At most [`SHOWN_PERCEPTION_LABELS`] labels stay visible; the rest is
     /// summarised so a report line never grows with the classifier's output.
+    /// OCR text is summarised by count only: the fragments themselves belong
+    /// in the JSON report, not in a one-line summary.
     pub fn summary(&self) -> String {
         match self {
             Self::Unavailable(reason) => format!("unavailable ({reason})"),
-            Self::Labels(labels) if labels.is_empty() => "no labels".to_string(),
-            Self::Labels(labels) => {
+            Self::Labels { labels, text } if labels.is_empty() && text.is_empty() => {
+                "no labels".to_string()
+            }
+            Self::Labels { labels, text } => {
                 let shown: Vec<String> = labels
                     .iter()
                     .take(SHOWN_PERCEPTION_LABELS)
                     .map(|entry| format!("{}({:.3})", entry.label, entry.confidence))
                     .collect();
                 let hidden = labels.len().saturating_sub(shown.len());
-                if hidden == 0 {
+                let mut line = if hidden == 0 {
                     shown.join(" ")
                 } else {
                     format!("{} (+{hidden} more)", shown.join(" "))
+                };
+                if labels.is_empty() {
+                    line = "no labels".to_string();
                 }
+                if !text.is_empty() {
+                    line.push_str(&format!(" (+{} text)", text.len()));
+                }
+                line
             }
         }
     }
@@ -244,8 +261,17 @@ impl PerceptionReport {
     /// The labels for the request (`None` when perception did not run).
     pub fn into_labels(self) -> Option<Vec<PerceptionLabel>> {
         match self {
-            Self::Labels(labels) => Some(labels),
+            Self::Labels { labels, .. } => Some(labels),
             Self::Unavailable(_) => None,
+        }
+    }
+
+    /// The OCR fragments for the request (empty when perception did not run
+    /// or the picture carries no text).
+    pub fn ocr_text(&self) -> Vec<String> {
+        match self {
+            Self::Labels { text, .. } => text.clone(),
+            Self::Unavailable(_) => Vec::new(),
         }
     }
 }
@@ -370,15 +396,37 @@ async fn plan_image_rename(
     }
     // Perception before the model call: the labels ride in the same request
     // and the model turns them into a title (the naming rule stays here).
+    // OCR text rides along as data, with the same injection rule as file
+    // names: a fragment that reads like an instruction withholds the
+    // proposal before any inference is spent on it.
     let perception = perceive(provider, target);
     let labels = perception.clone().into_labels().unwrap_or_default();
-    if !labels.is_empty() {
+    let ocr_text = perception.ocr_text();
+    if ocr_text
+        .iter()
+        .any(|fragment| contains_prompt_injection(fragment))
+    {
+        return Ok(PlanOutcome::Held {
+            current_name: context.target.filename.clone(),
+            rule_label: selection.label(),
+            reason: "probable prompt injection; proposal withheld".to_string(),
+        });
+    }
+    if !labels.is_empty() || !ocr_text.is_empty() {
         context.perception = Some(PerceptionInfo {
             labels: labels.clone(),
+            text: ocr_text.clone(),
         });
     }
     let semantic = analyze(provider, &context).await?;
     if let Some(reason) = label_echo(&semantic, &labels) {
+        return Ok(PlanOutcome::Held {
+            current_name: context.target.filename.clone(),
+            rule_label: selection.label(),
+            reason,
+        });
+    }
+    if let Some(reason) = file_title_hold(&semantic, &context) {
         return Ok(PlanOutcome::Held {
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
@@ -451,6 +499,13 @@ async fn plan_video_rename(
             reason,
         });
     }
+    if let Some(reason) = file_title_hold(&semantic, &context) {
+        return Ok(PlanOutcome::Held {
+            current_name: context.target.filename.clone(),
+            rule_label: selection.label(),
+            reason,
+        });
+    }
     let (date, _) = resolve_plan_date(&context, None, DateMode::Video);
     finish_plan(
         store,
@@ -461,7 +516,10 @@ async fn plan_video_rename(
         options,
         &PlanFacts {
             date,
-            perception: Some(PerceptionReport::Labels(labels.labels)),
+            perception: Some(PerceptionReport::Labels {
+                labels: labels.labels,
+                text: Vec::new(),
+            }),
             video: Some(video),
             directory: None,
         },
@@ -493,6 +551,13 @@ async fn plan_document_rename(
         });
     }
     let semantic = analyze(provider, &context).await?;
+    if let Some(reason) = file_title_hold(&semantic, &context) {
+        return Ok(PlanOutcome::Held {
+            current_name: context.target.filename.clone(),
+            rule_label: selection.label(),
+            reason,
+        });
+    }
     let (date, _) = resolve_plan_date(&context, document_ymd, DateMode::Document);
     finish_plan(
         store,
@@ -558,6 +623,13 @@ async fn plan_directory_rename(
         .extend(merge_child_signals(&children));
     let semantic = analyze(provider, &context).await?;
     if let Some(reason) = folder_title_hold(&semantic) {
+        return Ok(PlanOutcome::Held {
+            current_name: context.target.filename.clone(),
+            rule_label: selection.label(),
+            reason,
+        });
+    }
+    if let Some(reason) = folder_echo_hold(&semantic, &facts) {
         return Ok(PlanOutcome::Held {
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
@@ -681,12 +753,11 @@ fn document_child(folder: &Path, name: &str) -> Option<ChildText> {
 
 /// Rank one child's excerpts and keep the longest few.
 ///
-/// The bounded scanner of a binary container also yields the container's own
-/// structural tokens (a PDF contributes `/Type`, `obj`, `xref`), which describe
-/// the file format and not the document. The longest runs are the sentences, so
-/// keeping the longest few lets a child's own words outrank its format's
-/// vocabulary, and it bounds how much one child can contribute to the folder
-/// (original spec sections 5.4 and 11.2).
+/// The longest runs are the sentences, so keeping the longest few lets a
+/// child's own words outrank boilerplate (a PDF contributes decoded strings
+/// first and falls back to printable runs only when it has no strings), and
+/// it bounds how much one child can contribute to the folder (original spec
+/// sections 5.4 and 11.2).
 fn strongest_signals(signals: Vec<String>, limit: usize) -> Vec<String> {
     let mut ranked = signals;
     // Stable, so excerpts of equal length keep the order the scanner found
@@ -810,7 +881,10 @@ fn finish_directory_plan(
 /// labels out with an explicit reason (never a silent degradation).
 fn perceive(provider: &impl SemanticProvider, target: &Path) -> PerceptionReport {
     match provider.perceive(target) {
-        Ok(info) => PerceptionReport::Labels(info.labels),
+        Ok(info) => PerceptionReport::Labels {
+            labels: info.labels,
+            text: info.text,
+        },
         Err(error) => PerceptionReport::Unavailable(error.to_string()),
     }
 }
@@ -886,6 +960,31 @@ fn label_echo(semantic: &SemanticInfo, labels: &[PerceptionLabel]) -> Option<Str
         .iter()
         .any(|entry| normalize_echo(&entry.label) == title)
         .then(|| format!("title repeats a perception label ({title}); proposal withheld"))
+}
+
+/// Hold a file title that echoes its own name or an internal label.
+///
+/// The single central check ([`degenerate_title_reason`]) for every file path:
+/// the model's title must describe the content, not repeat the file name it
+/// was given. A folder passes its child names instead (see [`folder_echo_hold`]
+/// below); its own name is never evidence.
+fn file_title_hold(semantic: &SemanticInfo, context: &NormalizedFileContext) -> Option<String> {
+    degenerate_title_reason(
+        semantic.title.as_deref().unwrap_or_default(),
+        &context.target.filename,
+        &[],
+    )
+}
+
+/// Hold a folder title that echoes a child name or an internal label.
+///
+/// The folder half of the central check: the title must come from the
+/// children's contents, not from one child's file name, and never from the
+/// tool's own type names.
+fn folder_echo_hold(semantic: &SemanticInfo, facts: &DirectoryFacts) -> Option<String> {
+    let mut children = facts.files.clone();
+    children.extend(facts.folders.iter().cloned());
+    degenerate_title_reason(semantic.title.as_deref().unwrap_or_default(), "", &children)
 }
 
 /// Lowercase and collapse whitespace/underscores for the echo comparison.
@@ -1331,6 +1430,17 @@ fn assemble_plan(
 ///
 /// Ordering mirrors `operations::mover::execute_move` (record, then move).
 pub fn execute_plan(plan: &RenamePlan, history: &OperationHistory) -> Result<String, RenameError> {
+    execute_plan_in_batch(plan, history, None)
+}
+
+/// [`execute_plan`] tagged with the rename batch the move belongs to (batch
+/// undo reverses exactly these rows). Single renames keep passing `None`
+/// through `execute_plan`.
+pub fn execute_plan_in_batch(
+    plan: &RenamePlan,
+    history: &OperationHistory,
+    batch_id: Option<&str>,
+) -> Result<String, RenameError> {
     match &plan.snapshot {
         SourceSnapshot::File(before) => {
             recheck_before_execute(&plan.source, &plan.destination, before)?
@@ -1340,14 +1450,15 @@ pub fn execute_plan(plan: &RenamePlan, history: &OperationHistory) -> Result<Str
         }
     }
     let operation_id = history
-        .record_pending(
-            "move",
-            &plan.source,
-            &plan.destination,
-            Some(&plan.rule_label),
-            Option::None,
-            Option::None,
-        )
+        .record_pending_in_batch(PendingRecord {
+            operation: "move",
+            source: &plan.source,
+            destination: &plan.destination,
+            candidate_id: Some(&plan.rule_label),
+            confidence: Option::None,
+            margin: Option::None,
+            batch_id,
+        })
         .map_err(|error| RenameError::History(error.to_string()))?;
     match std::fs::rename(&plan.source, &plan.destination) {
         Ok(()) => {

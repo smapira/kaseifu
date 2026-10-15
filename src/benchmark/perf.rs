@@ -60,6 +60,8 @@ pub struct PerfRequest {
     pub image: Option<PathBuf>,
     /// A video to time AVFoundation and Vision on (any duration).
     pub video: Option<PathBuf>,
+    /// Synthetic documents planned with one real generation each (0 = off).
+    pub batch_plan: usize,
     /// Timeout of one generation.
     pub timeout_ms: u64,
 }
@@ -140,6 +142,21 @@ pub struct BleedCheck {
     pub second_title: Option<String>,
 }
 
+/// One synthetic batch planned with real generations.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct BatchMeasurement {
+    /// Synthetic documents planned.
+    pub items: usize,
+    /// Folder walk, observation and request building for all items (no model).
+    pub prep_ms: f64,
+    /// One real generation per document (milliseconds).
+    pub generation_ms: Timings,
+    /// Generations that did not answer successfully.
+    pub generation_failures: usize,
+    /// Peak RSS after the batch generations (bytes).
+    pub peak_rss_bytes: u64,
+}
+
 /// Everything one run measured.
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct PerfReport {
@@ -161,6 +178,12 @@ pub struct PerfReport {
     pub bleed: Option<BleedCheck>,
     /// Peak resident set size of this process (bytes; macOS reports bytes).
     pub peak_rss_bytes: u64,
+    /// First availability call of the run (service warmup, microseconds).
+    pub cold_available_us: Option<f64>,
+    /// First generation of the run (model load, milliseconds).
+    pub cold_generation_ms: Option<f64>,
+    /// The synthetic batch plan, when `--batch-plan` asked for one.
+    pub batch: Option<BatchMeasurement>,
 }
 
 /// Measure everything the request asks for.
@@ -187,8 +210,9 @@ async fn measure(request: &PerfRequest) -> Result<PerfReport> {
     )?;
     let request_json = request_json(&document, "perf-0001")?;
 
-    let (generation_ms, generation_failures) = measure_generations(request, &request_json).await;
-    let (ffi_available_us, ffi_refused_us) = measure_ffi();
+    let (cold_generation_ms, generation_ms, generation_failures) =
+        measure_generations(request, &request_json).await;
+    let (cold_available_us, ffi_available_us, ffi_refused_us) = measure_ffi();
     let report = PerfReport {
         model,
         reuse_session: request.reuse_session,
@@ -201,6 +225,9 @@ async fn measure(request: &PerfRequest) -> Result<PerfReport> {
         video: measure_video(request).await?,
         bleed: measure_bleed(request, &work).await?,
         peak_rss_bytes: peak_rss_bytes(),
+        cold_available_us,
+        cold_generation_ms,
+        batch: measure_batch(request, &work).await?,
     };
     let _ = std::fs::remove_dir_all(&work);
     Ok(report)
@@ -252,7 +279,9 @@ fn request_json(path: &Path, request_id: &str) -> Result<String> {
 /// The availability call asks the system model service, so it is an upper bound
 /// for the marshalling cost; the same perception call with a path that does not
 /// exist returns before ImageIO opens anything, which is the boundary alone.
-fn measure_ffi() -> (Timings, Timings) {
+/// The first availability sample is reported apart (service warmup); the rest
+/// is the steady boundary cost.
+fn measure_ffi() -> (Option<f64>, Timings, Timings) {
     let mut available = Vec::with_capacity(FFI_ROUND_TRIPS);
     for _ in 0..FFI_ROUND_TRIPS {
         let started = Instant::now();
@@ -266,14 +295,31 @@ fn measure_ffi() -> (Timings, Timings) {
         let _ = ffi::vision_perceive(missing);
         refused.push(elapsed_us(started));
     }
-    (
-        Timings::from_samples(available),
-        Timings::from_samples(refused),
-    )
+    let (cold, steady) = split_cold(available);
+    (cold, steady, Timings::from_samples(refused))
+}
+
+/// Split one sample series into its cold first call and the steady rest.
+///
+/// The first call warms the service or loads the model; the rest measures the
+/// path itself. Empty stays empty on both sides.
+fn split_cold(samples: Vec<f64>) -> (Option<f64>, Timings) {
+    let mut rest = samples;
+    if rest.is_empty() {
+        return (None, Timings::default());
+    }
+    let cold = rest.remove(0);
+    (Some(cold), Timings::from_samples(rest))
 }
 
 /// Time one generation per call, the way the product path runs them.
-async fn measure_generations(request: &PerfRequest, request_json: &str) -> (Timings, usize) {
+///
+/// Answers the cold first generation apart from the steady rest (model load
+/// vs the path itself).
+async fn measure_generations(
+    request: &PerfRequest,
+    request_json: &str,
+) -> (Option<f64>, Timings, usize) {
     let calls = request.generations.max(1);
     let timeout = Duration::from_millis(request.timeout_ms);
     let mut samples = Vec::with_capacity(calls);
@@ -281,7 +327,7 @@ async fn measure_generations(request: &PerfRequest, request_json: &str) -> (Timi
     if request.reuse_session {
         let shared = FmContext::create_with_options(REUSE_OPTIONS);
         let Ok(shared) = shared else {
-            return (Timings::default(), calls);
+            return (None, Timings::default(), calls);
         };
         for _ in 0..calls {
             let (ms, ok) = one_generation(&shared, request_json, timeout).await;
@@ -299,7 +345,8 @@ async fn measure_generations(request: &PerfRequest, request_json: &str) -> (Timi
             failures += usize::from(!ok);
         }
     }
-    (Timings::from_samples(samples), failures)
+    let (cold, steady) = split_cold(samples);
+    (cold, steady, failures)
 }
 
 /// The options one bench context is created with.
@@ -315,6 +362,58 @@ async fn one_generation(context: &FmContext, request_json: &str, timeout: Durati
         .and_then(|json| parse_response(&json).ok())
         .is_some_and(|response| matches!(response.status, FmStatus::Success));
     (ms, ok)
+}
+
+/// Plan a synthetic batch with one real generation per document.
+///
+/// A full 50-item batch would take minutes (one generation per item), so this
+/// measures the honest pieces instead: the model-free preparation for all
+/// items (folder walk, observation, request building) plus one real
+/// product-path generation per document. The 50-item cost is then prep plus
+/// 50 steady generations, both measured here, not guessed.
+async fn measure_batch(request: &PerfRequest, work: &Path) -> Result<Option<BatchMeasurement>> {
+    if request.batch_plan == 0 {
+        return Ok(None);
+    }
+    let folder = work.join("batch");
+    std::fs::create_dir_all(&folder)?;
+    let mut documents = Vec::new();
+    for index in 0..request.batch_plan {
+        let path = folder.join(format!("batch-doc-{index:04}.txt"));
+        std::fs::write(
+            &path,
+            format!(
+                "Planning memo {index}: the quarterly budget review, the vendor \
+                 list, and the approval chain for the next phase.\n"
+            ),
+        )?;
+        documents.push(path);
+    }
+    let prep_started = Instant::now();
+    let mut request_jsons = Vec::new();
+    for (index, path) in documents.iter().enumerate() {
+        request_jsons.push(request_json(path, &format!("perf-batch-{index:04}"))?);
+    }
+    let prep_ms = elapsed_ms(prep_started);
+    let timeout = Duration::from_millis(request.timeout_ms);
+    let mut samples = Vec::new();
+    let mut failures = 0;
+    for json in &request_jsons {
+        let Ok(context) = FmContext::create() else {
+            failures += 1;
+            continue;
+        };
+        let (ms, ok) = one_generation(&context, json, timeout).await;
+        samples.push(ms);
+        failures += usize::from(!ok);
+    }
+    Ok(Some(BatchMeasurement {
+        items: documents.len(),
+        prep_ms,
+        generation_ms: Timings::from_samples(samples),
+        generation_failures: failures,
+        peak_rss_bytes: peak_rss_bytes(),
+    }))
 }
 
 /// Time Apple Vision on one image (when one was given).
@@ -434,6 +533,11 @@ fn elapsed_us(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1_000_000.0
 }
 
+/// Milliseconds since `started`.
+fn elapsed_ms(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64() * 1_000.0
+}
+
 /// The peak resident set size of this process in bytes.
 ///
 /// macOS reports `ru_maxrss` in bytes (Linux reports kilobytes); this tool only
@@ -461,6 +565,8 @@ pub fn print_text(report: &PerfReport) {
         report.generation_ms.describe("ms"),
         report.generation_failures
     );
+    print_cold(report);
+    print_batch(&report.batch);
     match &report.image_ms {
         Some(timings) => println!("vision_image: {}", timings.describe("ms")),
         None => println!("vision_image: not measured (no --image)"),
@@ -495,9 +601,52 @@ pub fn print_text(report: &PerfReport) {
     println!("peak_rss: {} bytes", report.peak_rss_bytes);
 }
 
+/// Cold-start lines: the first availability call and the first generation.
+fn print_cold(report: &PerfReport) {
+    match report.cold_generation_ms {
+        Some(ms) => println!("generation_cold_first: {ms:.2} ms"),
+        None => println!("generation_cold_first: not measured"),
+    }
+    match report.cold_available_us {
+        Some(us) => println!("ffi_available_cold_first: {us:.2} us"),
+        None => println!("ffi_available_cold_first: not measured"),
+    }
+}
+
+/// The synthetic batch plan, when one was measured.
+fn print_batch(batch: &Option<BatchMeasurement>) {
+    match batch {
+        Some(measured) => println!(
+            "batch_plan: {} items, prep {:.2} ms, generations {} (failures {}), peak_rss {} bytes",
+            measured.items,
+            measured.prep_ms,
+            measured.generation_ms.describe("ms"),
+            measured.generation_failures,
+            measured.peak_rss_bytes
+        ),
+        None => println!("batch_plan: not measured (no --batch-plan)"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cold_split_keeps_the_first_call_apart() {
+        let (cold, steady) = split_cold(Vec::new());
+        assert_eq!(cold, None);
+        assert_eq!(steady, Timings::default());
+        let (cold, steady) = split_cold(vec![10.0]);
+        assert_eq!(cold, Some(10.0));
+        assert_eq!(steady, Timings::default());
+        let (cold, steady) = split_cold(vec![10.0, 1.0, 2.0, 3.0]);
+        assert_eq!(cold, Some(10.0));
+        assert_eq!(steady.calls, 3);
+        assert_eq!(steady.min, 1.0);
+        assert_eq!(steady.median, 2.0);
+        assert_eq!(steady.max, 3.0);
+    }
 
     #[test]
     fn timings_summarise_odd_and_even_samples() {

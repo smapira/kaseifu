@@ -242,7 +242,7 @@ fn format_help_states_which_commands_support_json() {
         "got:\n{text}"
     );
     assert!(
-        text.contains("`scan`, `undo` and `watch` always render text"),
+        text.contains("undo and scan. `watch` emits one JSON object per line"),
         "got:\n{text}"
     );
 }

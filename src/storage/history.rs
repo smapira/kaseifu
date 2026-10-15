@@ -5,7 +5,10 @@
 //! filesystem mutation can never be unjournaled.
 //!
 //! Columns: id, timestamp, operation, source_path, destination_path,
-//! candidate_id, confidence, margin, result, error, undone_at.
+//! candidate_id, confidence, margin, result, error, undone_at, batch_id.
+//!
+//! `batch_id` arrived later (batch undo): old journals lack the column and
+//! gain it through the additive migration in [`OperationHistory::open`].
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -58,6 +61,9 @@ pub struct HistoryEntry {
     pub result: String,
     pub error: Option<String>,
     pub undone_at: Option<String>,
+    /// The rename batch this row belongs to (`None` for single moves and
+    /// for rows written before the column existed).
+    pub batch_id: Option<String>,
 }
 
 /// The append-oriented operation journal.
@@ -100,9 +106,29 @@ impl OperationHistory {
             );",
         )
         .context("initialize journal schema")?;
+        ensure_batch_column(&conn)?;
         Ok(Self { conn })
     }
+}
 
+/// What the journal files away before a mutation (the batch-undo extension
+/// rides on the same insert so the row shape never depends on the caller).
+#[derive(Debug, Clone, Copy)]
+pub struct PendingRecord<'a> {
+    /// `"move"` or `"undo"`.
+    pub operation: &'a str,
+    /// Where the file is now.
+    pub source: &'a Path,
+    /// Where the mutation takes it.
+    pub destination: &'a Path,
+    pub candidate_id: Option<&'a str>,
+    pub confidence: Option<f64>,
+    pub margin: Option<f64>,
+    /// The rename batch the operation belongs to (`None` for single moves).
+    pub batch_id: Option<&'a str>,
+}
+
+impl OperationHistory {
     /// Record an operation **before** mutating the filesystem.
     ///
     /// Returns the operation id used by [`OperationHistory::mark_success`]
@@ -116,21 +142,36 @@ impl OperationHistory {
         confidence: Option<f64>,
         margin: Option<f64>,
     ) -> Result<String> {
+        self.record_pending_in_batch(PendingRecord {
+            operation,
+            source,
+            destination,
+            candidate_id,
+            confidence,
+            margin,
+            batch_id: None,
+        })
+    }
+
+    /// [`record_pending`](OperationHistory::record_pending) for a batch member
+    /// (batch undo reverses exactly these rows).
+    pub fn record_pending_in_batch(&self, pending: PendingRecord<'_>) -> Result<String> {
         let id = new_operation_id();
         self.conn.execute(
             "INSERT INTO operations
                 (id, timestamp, operation, source_path, destination_path,
-                 candidate_id, confidence, margin, result)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending')",
+                 candidate_id, confidence, margin, result, batch_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9)",
             rusqlite::params![
                 id,
                 now(),
-                operation,
-                source.to_string_lossy(),
-                destination.to_string_lossy(),
-                candidate_id,
-                confidence,
-                margin,
+                pending.operation,
+                pending.source.to_string_lossy(),
+                pending.destination.to_string_lossy(),
+                pending.candidate_id,
+                pending.confidence,
+                pending.margin,
+                pending.batch_id,
             ],
         )?;
         Ok(id)
@@ -167,7 +208,7 @@ impl OperationHistory {
     pub fn last_successful_move(&self) -> Result<Option<HistoryEntry>> {
         let mut statement = self.conn.prepare(
             "SELECT id, timestamp, operation, source_path, destination_path,
-                    candidate_id, confidence, margin, result, error, undone_at
+                    candidate_id, confidence, margin, result, error, undone_at, batch_id
              FROM operations
              WHERE operation = 'move' AND result = 'success' AND undone_at IS NULL
              ORDER BY rowid DESC
@@ -178,6 +219,27 @@ impl OperationHistory {
             Some(row) => Ok(Some(row_to_entry(row)?)),
             None => Ok(None),
         }
+    }
+
+    /// Successful, not-yet-undone moves of one batch, newest first.
+    ///
+    /// Empty for an unknown batch id (the caller reports nothing to undo).
+    /// Rows written before the migration carry NULL and never match.
+    pub fn successful_moves_in_batch(&self, batch_id: &str) -> Result<Vec<HistoryEntry>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, timestamp, operation, source_path, destination_path,
+                    candidate_id, confidence, margin, result, error, undone_at, batch_id
+             FROM operations
+             WHERE operation = 'move' AND result = 'success' AND undone_at IS NULL
+               AND batch_id = ?1
+             ORDER BY rowid DESC",
+        )?;
+        let mut rows = statement.query([batch_id])?;
+        let mut entries = Vec::new();
+        while let Some(row) = rows.next()? {
+            entries.push(row_to_entry(row)?);
+        }
+        Ok(entries)
     }
 
     /// Every row still marked `pending`, in insertion order.
@@ -198,7 +260,7 @@ impl OperationHistory {
     pub fn entries(&self) -> Result<Vec<HistoryEntry>> {
         let mut statement = self.conn.prepare(
             "SELECT id, timestamp, operation, source_path, destination_path,
-                    candidate_id, confidence, margin, result, error, undone_at
+                    candidate_id, confidence, margin, result, error, undone_at, batch_id
              FROM operations
              ORDER BY rowid ASC",
         )?;
@@ -224,6 +286,10 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
         result: row.get(8)?,
         error: row.get(9)?,
         undone_at: row.get(10)?,
+        // The read-only inspection path selects the legacy column list, so a
+        // missing index reads as no batch (old journals keep working there
+        // without the migration, which needs a writable connection).
+        batch_id: row.get(11).unwrap_or(None),
     })
 }
 
@@ -247,6 +313,24 @@ fn query_pending(conn: &Connection) -> Result<Vec<HistoryEntry>> {
 // ---------------------------------------------------------------------------
 // Read-only inspection (diagnostics)
 // ---------------------------------------------------------------------------
+
+/// Additive batch-undo migration: old journals lack `batch_id`, new ones
+/// have it. Checked (not attempted blindly) so a genuine database problem
+/// still surfaces instead of being swallowed with the expected case.
+fn ensure_batch_column(conn: &Connection) -> Result<()> {
+    let existing: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('operations')")
+        .context("inspect journal schema")?
+        .query_map([], |row| row.get(0))
+        .context("inspect journal schema")?
+        .map(|name| name.unwrap_or_default())
+        .collect();
+    if !existing.iter().any(|name| name == "batch_id") {
+        conn.execute("ALTER TABLE operations ADD COLUMN batch_id TEXT", [])
+            .context("migrate journal schema (batch_id)")?;
+    }
+    Ok(())
+}
 
 /// One `pending` row with the filesystem state it refers to.
 #[derive(Debug, Clone, PartialEq)]

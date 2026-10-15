@@ -166,6 +166,10 @@ pub enum Command {
         #[arg(long, default_value_t = 260)]
         folder_entries: usize,
 
+        /// Synthetic documents planned with one real generation each (0 = off).
+        #[arg(long, default_value_t = 0)]
+        batch_plan: usize,
+
         /// A PNG or JPEG to time Apple Vision on.
         #[arg(long, value_name = "FILE")]
         image: Option<PathBuf>,
@@ -254,6 +258,7 @@ fn dispatch(cli: &Cli) -> Result<ExitCode> {
             folder_entries,
             image,
             video,
+            batch_plan,
         } => perf_command(
             cli,
             super::perf::PerfRequest {
@@ -263,6 +268,7 @@ fn dispatch(cli: &Cli) -> Result<ExitCode> {
                 folder_entries: *folder_entries,
                 image: image.clone(),
                 video: video.clone(),
+                batch_plan: *batch_plan,
                 timeout_ms: DEFAULT_TIMEOUT_MS,
             },
         ),
