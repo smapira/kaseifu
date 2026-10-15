@@ -19,6 +19,20 @@ cargo install kaseifu
 kaseifu classify ~/Desktop/example.pdf
 ```
 
+Or with Homebrew (builds from source):
+
+```bash
+brew tap routeflags/tap
+brew trust --formula routeflags/tap/kaseifu
+brew install kaseifu
+```
+
+Homebrew treats a non-official tap as untrusted, so the `brew trust` line
+is what lets it load the formula. `brew install routeflags/tap/kaseifu` in
+one step works too, without the trust line.
+
+Both methods install two binaries: `kaseifu` and `kaseifu-bench`.
+
 `classify` decides where the file belongs and moves nothing. When no API key
 is configured yet and stdin is a terminal, kaseifu asks for it with hidden
 input and stores it where `KASEIFU_KEY_SOURCE` keeps keys (the macOS Keychain
@@ -41,6 +55,12 @@ git clone https://github.com/smapira/kaseifu.git
 cd kaseifu
 cargo install --path .
 ```
+
+A source build (both `cargo install --path .` and Homebrew) needs Xcode 26
+or later: `build.rs` compiles the Swift bridge, and the `@Generable` macro
+plugin that Swift bridge needs ships inside Xcode. Command Line Tools
+alone fail the build. Homebrew also pulls build-only dependencies
+(`llvm` among them), so the first install is not small.
 
 Everything else is below: [How it works](#how-it-works) explains the
 pipeline, [Usage](#usage) lists every command with its options, and
@@ -641,9 +661,13 @@ The Foundation Models bridge (the AI rename foundation, phases 0-2) is compiled
 by `build.rs` when the machine has a Swift compiler and a macOS 26 SDK; it is
 weak-linked, so the binary still starts on older systems and answers with an
 explicit `unavailable: <reason>` instead of falling back to another model.
-Without a Swift toolchain (or on an older SDK, like a CI runner) the build
-falls back to a Rust stub with the same C ABI that reports
-`unavailable: foundation-models-sdk-missing` / `swift-toolchain-missing`.
+Without a Swift toolchain (or on an SDK where `import FoundationModels`
+fails to typecheck) the build falls back to a Rust stub with the same C ABI
+that reports `unavailable: foundation-models-sdk-missing` /
+`swift-toolchain-missing`. Command Line Tools alone are a separate case:
+their SDK typechecks that import, but the `@Generable` macro plugin ships
+only with Xcode, so the bridge fails to compile (tracked as
+`documents/plans/dev/issues/open/20261016-open-build-rs-sdk-probe.md`).
 Because the bridge uses the OS Swift concurrency runtime, the binary requires
 macOS 12.0 or later. To see what the bridge answers on this machine:
 

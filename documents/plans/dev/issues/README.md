@@ -16,7 +16,9 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 
 ### Open
 
-None. Every actionable issue is complete.
+| Issue | Milestone | Next action |
+|---|---|---|
+| [`20261016-open-build-rs-sdk-probe.md`](open/20261016-open-build-rs-sdk-probe.md) | M4 | Harden the `build.rs` SDK probe so a Command Line Tools build degrades with its reason instead of hard-failing. |
 
 ### Waiting for user or external resource
 
@@ -26,6 +28,7 @@ None. Every actionable issue is complete.
 | [`20261015-waiting-trec-corpus-evaluation.md`](waiting-user/20261015-waiting-trec-corpus-evaluation.md) | M5 | NIST corpus agreement and evaluation-direction decision. |
 | [`20261015-waiting-snapshot-cleanup.md`](waiting-user/20261015-waiting-snapshot-cleanup.md) | M5 | Decision to delete or retain the Phase 5b snapshot outside the worktree. |
 | [`20261015-waiting-local-checkout-pull.md`](waiting-user/20261015-waiting-local-checkout-pull.md) | M5 | Permission/action to update the non-Delta local checkout. |
+| [`20261016-waiting-bottle-distribution.md`](waiting-user/20261016-waiting-bottle-distribution.md) | M4 | Held 2026-10-16: start Phase 2 (prebuilt Homebrew bottles) after Phase 1 ships. |
 
 ### Done
 
@@ -45,6 +48,7 @@ None. Every actionable issue is complete.
 | [`20261015-done-cache-name-refusal.md`](done/20261015-done-cache-name-refusal.md) | M1 | Own-name cache refusals, visible held items in batch. |
 | [`20261015-done-release-tagging.md`](done/20261015-done-release-tagging.md) | M4 | Tagged `v0.10.0` and pushed to `origin`. |
 | [`20261016-done-label-subcommand.md`](done/20261016-done-label-subcommand.md) | n/a (user request) | `rename` subcommand is now `label` (`rename` stays a hidden alias). |
+| [`20261016-done-license-file.md`](done/20261016-done-license-file.md) | M4 | Added the MIT `LICENSE` file; the next tag's tarball carries it. |
 | [`20261016-done-rename-language.md`](done/20261016-done-rename-language.md) | n/a (user request) | Rename language defaults to `en`, settable via `config set language <tag>`. |
 
 ## Maintenance rules

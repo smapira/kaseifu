@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-10-16
+
+### Added
+
+- **`LICENSE`.** The repository carries the MIT license text, so the
+  release tarball does too (the v0.12.0 tarball did not), and Homebrew
+  packaging can point at a source archive that includes it.
+- **Homebrew install path in the README.** `brew tap routeflags/tap`,
+  `brew trust --formula routeflags/tap/kaseifu`, `brew install kaseifu`,
+  with the honest prerequisites: a source build needs Xcode 26 or later
+  because the Swift bridge uses the Foundation Models macro plugin, which
+  ships only inside Xcode; Command Line Tools alone fail. Homebrew also
+  installs build-only dependencies such as `llvm`, so the first install
+  is not small.
+
 ## [0.12.0] - 2026-10-16
 
 ### Changed
