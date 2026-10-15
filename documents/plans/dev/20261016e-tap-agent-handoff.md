@@ -11,13 +11,20 @@ requires the attached checkout.
 Background plan: `documents/plans/dev/20261016d-homebrew-support.md`
 (kaseifu side). This file is the executable handoff, not a second plan.
 
+The same brief is filed on the tap repository as
+<https://github.com/routeflags/homebrew-tap/issues/1> (created 2026-10-16),
+so the tap-side agent can work from the issue. Keep the two in step when the
+version or the measured hash changes.
+
 ## Objective
 
 Create `Formula/kaseifu.rb` in `routeflags/homebrew-tap` so that this works
-on a clean Mac that meets the Xcode prerequisite:
+on a Mac that meets the Xcode prerequisite (the final acceptance test, run
+through GitHub after the push):
 
 ```bash
 brew tap routeflags/tap
+brew trust --formula routeflags/tap/kaseifu
 brew install kaseifu
 kaseifu --version
 ```
@@ -71,8 +78,9 @@ kaseifu --version
    - `test do` performs side-effect-free checks only (`--version`,
      no-target guidance exit code, `label --help` ASCII). No journal,
      Keychain, or real-file contact.
-5. Make the tap visible to brew, then verify by **name** (Homebrew 7
-   rejects path-based `audit` / `install` / `livecheck`):
+5. Make the tap visible to brew as a **pre-push smoke check** only, then
+   verify by **name** (Homebrew 7 rejects path-based `audit` / `install` /
+   `livecheck`):
 
    ```sh
    ln -s "$PWD" "$(brew --repository)/Library/Taps/routeflags/homebrew-tap"
@@ -87,10 +95,79 @@ kaseifu --version
    arrive; existing formulae may be upgraded): **confirm before running it**.
    If brew asks for trust, run `brew trust --formula
    routeflags/tap/kaseifu` first or keep the fully-qualified name.
-6. Commit the Formula and push fast-forward to the tap `origin` only.
-   Never rewrite history, never force-push.
-7. Report back: version used, measured sha256, verification log, and any
-   Xcode/SDK finding (especially whether CLT alone suffices).
+6. Commit the Formula and push to the tap `origin` only (the first push
+   creates `main`). Never rewrite history, never force-push.
+7. Run the **GitHub-based acceptance test**, which doubles as the
+   version-bump procedure check:
+
+   ```sh
+   brew tap routeflags/tap
+   brew trust --formula routeflags/tap/kaseifu
+   brew install kaseifu
+   kaseifu --version
+   ```
+
+   Report the exact output. This step is the one the tool side records as the
+   Phase 1 acceptance criterion. Then report back: version used, measured
+   sha256, the smoke log, the acceptance log, and any Xcode/SDK finding.
+
+## Verification status (tool side, 2026-10-16)
+
+Measured here, so the tap agent can rely on it:
+
+- v0.12.1 source tarball, `cargo install --locked --path . --root <tmp>`
+  with Xcode 26.6 selected: **exit 0**, 58 s, both binaries installed,
+  `--version` matches the tag, a bare run exits 0, `label --help` is ASCII,
+  and an isolated HOME receives no files.
+- The same command with `DEVELOPER_DIR=/Library/Developer/CommandLineTools`:
+  **exit 101**, `plugin for module 'FoundationModelsMacros' not found` at
+  `swift/kaseifu_fm_bridge.swift:478`. Hard failure, not the stub fallback.
+
+Not verified here (do not claim them as done):
+
+- `brew install --build-from-source` / `brew test` / name-based
+  `brew audit` / `brew style` / `brew livecheck` (the pre-push smoke check).
+- The GitHub-based acceptance test (needs the pushed formula).
+- A machine that never had Xcode, and a clean machine without rust/llvm:
+  tracked in `documents/plans/dev/issues/waiting-user/20261016-waiting-clean-mac-verification.md`.
+
+### Tap side landed (2026-10-16)
+
+The tap agent pushed the formula and reported on the tap issue. Tool-side
+review of the pushed file (`Formula/kaseifu.rb` at
+<https://github.com/routeflags/homebrew-tap/issues/1>):
+
+- Commits: `a7981eb` (formula, v0.12.0) and `42a3566` (bump to v0.12.1).
+- Content matches the reference: `url` v0.12.1, measured `sha256`, `license
+  "MIT"`, `depends_on "rust" => :build`, `depends_on xcode: ["26.0",
+  :build]`, no `livecheck` block, install through `std_cargo_args`.
+- Verified from this side: `std_cargo_args` exists in this Homebrew
+  (`formula.rb:2227`, expands to `--jobs N --locked --root=prefix
+  --path=.`), and `kaseifu-bench --version` prints `kaseifu-bench 0.12.1`
+  with exit 0, so the added test assertion holds. `ruby -c` on the formula
+  is clean.
+
+#### Homebrew-side checks run on this machine (2026-10-16, no prefix change)
+```sh
+brew tap routeflags/tap                 # Tapped 1 formula (cloned from GitHub)
+brew audit --strict --new routeflags/tap/kaseifu   # exit 0, no findings
+brew style routeflags/tap/kaseifu       # 1 file inspected, no offenses
+brew livecheck routeflags/tap/kaseifu   # kaseifu: 0.12.1 ==> 0.12.1
+```
+
+So the tap is live, the formula is audited and styled clean, and livecheck
+follows the tags. `brew tap` leaves a clone under
+`$(brew --repository)/Library/Taps/routeflags/homebrew-tap`; `brew untap
+routeflags/tap` removes it.
+
+Still pending: the tap bump to v0.12.2 and then the CI acceptance run. The
+first two CI runs found a real failure (the `SDKROOT` problem below), which
+is exactly the point of running the acceptance path in isolation.
+
+One measured side effect the tap test block had to work around (tool-side
+issue filed): `kaseifu label` with no target creates the state database in
+HOME even though it only prints guidance:
+`documents/plans/dev/issues/open/20261016-open-label-guidance-touches-state.md`.
 
 ## Appendix: reference Formula text (reconcile with the draft that passed audit)
 
@@ -103,8 +180,8 @@ filled in, so the two cannot drift silently. Reconcile rather than replace.
 class Kaseifu < Formula
   desc "Semantic file organization for macOS"
   homepage "https://github.com/smapira/kaseifu"
-  url "https://github.com/smapira/kaseifu/archive/refs/tags/v0.12.1.tar.gz"
-  sha256 "b96bff50517dcba827ae78ea9e799c87e98b14a3db8c5eca8c4d4caed095333f"
+  url "https://github.com/smapira/kaseifu/archive/refs/tags/v0.12.2.tar.gz"
+  sha256 "70b76240f441913b3a1e85fc8f1edba964c2475bd1d42ddbf54ba95cad58dfd3"
   license "MIT"
 
   # A source build compiles swift/kaseifu_fm_bridge.swift, so Xcode itself is
@@ -150,8 +227,9 @@ Points the tool side verified about this text:
   docs are maintained in the other thread.
 - If the clean-machine Xcode prerequisite cannot be met, stop and report
   exactly what is missing instead of working around it.
-- Measured reference values (2026-10-16): latest tag `v0.12.1`, tarball
-  sha256 `b96bff50517dcba827ae78ea9e799c87e98b14a3db8c5eca8c4d4caed095333f`
-  (the v0.12.0 tarball was `e8e5c904...cdfb4` but carried no `LICENSE`; use
-  v0.12.1 or newer), Homebrew 7.0.9, Xcode 26.6. Re-measure the hash for the
-  version you ship.
+- Measured reference values (2026-10-16): latest tag `v0.12.2`, tarball
+  sha256 `70b76240f441913b3a1e85fc8f1edba964c2475bd1d42ddbf54ba95cad58dfd3`
+  (v0.12.0 carried no `LICENSE`; v0.12.1 fails a Homebrew build because
+  Homebrew's `SDKROOT` points at the Command Line Tools SDK, so use v0.12.2
+  or newer), Homebrew 7.0.9 locally and 6.0.22 on the CI runner, Xcode 26.6.
+  Re-measure the hash for the version you ship.

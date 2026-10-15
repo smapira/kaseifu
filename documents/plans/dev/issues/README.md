@@ -19,6 +19,7 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | Issue | Milestone | Next action |
 |---|---|---|
 | [`20261016-open-build-rs-sdk-probe.md`](open/20261016-open-build-rs-sdk-probe.md) | M4 | Harden the `build.rs` SDK probe so a Command Line Tools build degrades with its reason instead of hard-failing. |
+| [`20261016-open-label-guidance-touches-state.md`](open/20261016-open-label-guidance-touches-state.md) | M1 | Stop the `label` guidance path from creating the journal database. |
 
 ### Waiting for user or external resource
 
@@ -29,6 +30,7 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | [`20261015-waiting-snapshot-cleanup.md`](waiting-user/20261015-waiting-snapshot-cleanup.md) | M5 | Decision to delete or retain the Phase 5b snapshot outside the worktree. |
 | [`20261015-waiting-local-checkout-pull.md`](waiting-user/20261015-waiting-local-checkout-pull.md) | M5 | Permission/action to update the non-Delta local checkout. |
 | [`20261016-waiting-bottle-distribution.md`](waiting-user/20261016-waiting-bottle-distribution.md) | M4 | Held 2026-10-16: start Phase 2 (prebuilt Homebrew bottles) after Phase 1 ships. |
+| [`20261016-waiting-clean-mac-verification.md`](waiting-user/20261016-waiting-clean-mac-verification.md) | M4 | Needs a Mac without Xcode (CLT only) and a clean Mac for the install failure mode and cost. |
 
 ### Done
 

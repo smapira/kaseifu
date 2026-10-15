@@ -35,6 +35,8 @@
 
 ### T1 Formula を作る (tap 側)
 
+作業依頼は tap リポジトリの issue として起票済み（<https://github.com/routeflags/homebrew-tap/issues/1>、2026-10-16）。版や実測値が変わったら両方を合わせる。
+
 - 場所: tap リポジトリ直下の `Formula/kaseifu.rb` (tap の規約どおり。`brew` が認識する配置)。
 - 内容:
   - `desc` は一文の ASCII (例: `Semantic file organization for macOS`)。
@@ -47,7 +49,7 @@
   - `livecheck` ブロックは **書かない**（既定の Git 戦略がタグを追う。明示するなら `strategy :git`）。GitHub Releases が 0 件なので `GithubLatest` は使えない。
   - `depends_on macos:` は付けない（バイナリは FoundationModels を weak link するため macOS < 26 でも起動する設計）。
   - `test do` は副作用なしで終わるものだけ: `kaseifu --version`、引数なし `kaseifu` のガイダンス終了コード、`label --help` の ASCII 性。journal/Keychain/実ファイルに触れない。
-- 検証値の記録: v0.12.1 の自動 tarball sha256 = `b96bff50517dcba827ae78ea9e799c87e98b14a3db8c5eca8c4d4caed095333f`（`shasum -a 256`、2026-10-16 実測）。v0.12.0 は `e8e5c904...` だが `LICENSE` を含まないため、**v0.12.1 以降を pin する**。版上げのたびに実測し直す。
+- 検証値の記録: v0.12.2 の自動 tarball sha256 = `70b76240f441913b3a1e85fc8f1edba964c2475bd1d42ddbf54ba95cad58dfd3`（`shasum -a 256`、2026-10-16 実測）。v0.12.0 は `LICENSE` を含まず、v0.12.1 は Homebrew の `SDKROOT` でビルドに失敗するため、**v0.12.2 以降を pin する**。版上げのたびに実測し直す。
 - 禁止: force push、tap 履歴の書き換え。初回 push 先は tap の `origin` のみ（**branch 作成**になる）。
 
 ### T2 導入手順を書く (kaseifu 側 README)
@@ -85,25 +87,46 @@ Formula が実行する install コマンド自体は Homebrew を介さずに�
 - 隔離 HOME にファイルを1つも作らない（config / journal / completion の書き込みなし）
 
 残るのは Homebrew 経由の検証（下記）。
+### T4 検証する
 
-tap を brew に見せたうえで、**名前ベース**で実行する（path 形式は Homebrew 7 で無効。§現状を参照）:
+**受け入れテストは GitHub 経由で行う**（2026-10-16 のユーザー方針）。tap の push 後に:
 
 ```sh
-ln -s "$PWD" "$(brew --repository)/Library/Taps/routeflags/homebrew-tap"
-brew install --build-from-source routeflags/tap/kaseifu
-brew test routeflags/tap/kaseifu
-brew audit --strict --new routeflags/tap/kaseifu
-brew livecheck routeflags/tap/kaseifu
+brew tap routeflags/tap
+brew trust --formula routeflags/tap/kaseifu
+brew install kaseifu
+kaseifu --version
 ```
+
+これは T3（版上げ手順）の実地検証を兼ねる。push 前のローカル smoke としてのみ、tap を `ln -s` で見せて名前ベースの `--build-from-source` を回してよい（path 形式は Homebrew 7 で無効）。
 
 - install / test / audit / livecheck が通ること（audit 警告は理由付きで記録か修正）。
 - 導入後の `kaseifu --version` がタグと一致すること。
 - 実ファイルの移動・journal・Keychain に触れないこと（test block 側でも `KASEIFU_KEY_SOURCE=env` と `KASEIFU_NO_COMPLETION_UPDATE=1` を設定する）。
 - install は prefix の変更（`rust`/`llvm`/`openssl@4` の install、既存 formula の upgrade）を伴うため、**実行前に確認を取る**。
 
+#### 受け入れテストは CI で回す（2026-10-16 追加）
+
+- `.github/workflows/homebrew-acceptance.yml`: `macos-26`（使い捨て）で tap → trust → install → `--version` 照合 → `brew test` → 依存の記録。手動 (`workflow_dispatch`) + 毎週。
+- ローカル prefix を変えないため、**Docker の代わりの隔離実行**としてこれを使う。Linux コンテナではこのプロジェクトは動かない（Swift ブリッジが Foundation Models を、ツール本体が Spotlight を必要とする）。
+- 最初の 2 回の実行が**実際の不具合を見つけた**: `SDKROOT` が CLT SDK を指すため `brew install` が `plugin for module 'FoundationModelsMacros' not found` で失敗（exit 101）。Xcode は選択済みで plugin も存在した。
+- 修正は v0.12.2（`build.rs` が Swift コンパイラ呼び出しで `SDKROOT` を外す）。実測: `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk cargo install --locked --path .` が修正前 exit 101 → 修正後 exit 0。
+- 再現環境のないローカルでも CI と同じ失敗を再現できたのは、Homebrew の `superenv` が `SDKROOT` を export するため（`Library/Homebrew/extend/ENV/shared.rb` の `SANITIZED_VARS` と `shims/mac/super/bin/xcrun`）。
+
+#### 実測済み（この worktree、2026-10-16）
+
+- **Xcode 26.6 選択**: v0.12.1 tarball に対して `cargo install --locked --path . --root <tmp>` = exit 0（58 秒）。2 バイナリが入り、`--version` がタグ一致、引数なし実行は exit 0、`label --help` は ASCII、隔離 HOME に書き込みなし。
+- **CLT 26.6 選択**（`DEVELOPER_DIR=/Library/Developer/CommandLineTools`、Xcode はインストール済みのまま強制）: **exit 101 で hard failure**。`swift/kaseifu_fm_bridge.swift:478` で `external macro implementation type 'FoundationModelsMacros.GenerableMacro' could not be found ...; plugin for module 'FoundationModelsMacros' not found` が出て、stub 降格せずにビルドが失敗する。tap 側の実測（同 EXIT=101）を独立に再現した。
+- **Homebrew 経由の静的検証（prefix 変更なし）**: tap は公開済みで `brew tap routeflags/tap` が成功（1 formula）。`brew audit --strict --new` = exit 0（指摘なし）、`brew style` = no offenses、`brew livecheck` = `kaseifu: 0.12.1 ==> 0.12.1`。
+- 未実施: 実マシンでの Xcode 無し確認（このマシンには Xcode があり、`DEVELOPER_DIR` の強制で代替した）、**`brew install` と `brew test`**（後者は実測済みの `cargo install --locked` + test block の前提確認で大半を代替できるが、brew の orchestration 自体は未観測）。
+
+注記: 当初 T4 に「push 前の smoke check」として `--build-from-source` を含めていたが、bottle が無いためそれは受け入れテスト（同じソースビルド）と重複する。静的な audit / style / livecheck だけを軽い確認として残し、install は「どのマシンで prefix を変えるか」の判断に属する。
+
+未実施項目は [`../issues/waiting-user/20261016-waiting-clean-mac-verification.md`](../issues/waiting-user/20261016-waiting-clean-mac-verification.md) に記録した。
+
 ## 受け入れ条件
 
-- Xcode 26 以降を入れたクリーンな macOS で以下が通る:
+- Xcode 26 以降を入れた macOS で、**GitHub 経由**で以下が通る（T3 の実地検証を兼ねる）:
 
   ```sh
   brew tap routeflags/tap
@@ -114,7 +137,8 @@ brew livecheck routeflags/tap/kaseifu
 
   （trust を含まない `brew install kaseifu` は untrusted tap として失敗するため、受け入れ条件から外す。）
 - Formula の `sha256` が実測転記であり、再取得で一致する。
-- 版上げ手順書どおりに次バージョンへ追従できる (手順の正しさは T4 と同じ検証で確認)。
+- 版上げ手順書どおりに次バージョンへ追従できる (手順の正しさは上の検証と同じ手順で確認)。
+- Xcode 無し / CLT のみのマシンでの挙動は別途確認する（未実施。実測済みなのは `DEVELOPER_DIR` 強制による hard failure まで）。
 
 ## 制約
 

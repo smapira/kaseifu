@@ -8,8 +8,8 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 
 | Status | Count | Directory |
 |---|---:|---|
-| Open | 1 | `../issues/open/` |
-| Waiting for user/external resource | 5 | `../issues/waiting-user/` |
+| Open | 2 | `../issues/open/` |
+| Waiting for user/external resource | 6 | `../issues/waiting-user/` |
 | Done | 16 | `../issues/done/` |
 
 ## M1 - Reliability and CLI clarity
@@ -53,8 +53,10 @@ Goal: keep measured claims and release boundaries reproducible.
 |---|---|---|
 | Done | [`perf-measurement-gaps`](../issues/done/20261015-done-perf-measurement-gaps.md) | Cold start, large batch, memory, and concurrency gaps have repeatable measurements. |
 | Open | [`build-rs-sdk-probe`](../issues/open/20261016-open-build-rs-sdk-probe.md) | A Command Line Tools build degrades with its reason instead of hard-failing. |
+| Open | [`label-guidance-touches-state`](../issues/open/20261016-open-label-guidance-touches-state.md) | The `label` guidance path creates no state file. |
 | Done | [`license-file`](../issues/done/20261016-done-license-file.md) | The next tag's tarball carries the MIT license text. |
 | Waiting-user | [`bottle-distribution`](../issues/waiting-user/20261016-waiting-bottle-distribution.md) | Phase 2 starts after Phase 1 ships (held 2026-10-16). |
+| Waiting-user | [`clean-mac-verification`](../issues/waiting-user/20261016-waiting-clean-mac-verification.md) | Xcode-free machine and clean machine confirm the install failure mode and cost. |
 | Done | [`release-tagging`](../issues/done/20261015-done-release-tagging.md) | Tagged `v0.10.0` and pushed to `origin`. |
 
 ## M5 - User/external blockers
