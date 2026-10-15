@@ -7,10 +7,20 @@
 
 use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+/// Every invocation gets its own working directory: the test binary runs its
+/// tests in parallel, so a shared name would let one test delete the directory
+/// another one is using as its `current_dir`.
+static RUN_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+
 fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("kaseifu-label-{name}-{}", std::process::id()));
+    let unique = RUN_SEQUENCE.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!(
+        "kaseifu-label-{name}-{}-{unique}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp directory");
     dir
@@ -68,7 +78,7 @@ fn v108_rename_stays_a_hidden_alias_with_the_same_help() {
     let (label_help, dir) = run(&["label", "--help"]);
     assert!(label_help.status.success());
     let label_text = stdout_of(&label_help);
-    let (rename_help, _) = run(&["rename", "--help"]);
+    let (rename_help, second) = run(&["rename", "--help"]);
     assert!(rename_help.status.success());
     assert_eq!(
         stdout_of(&rename_help),
@@ -76,13 +86,15 @@ fn v108_rename_stays_a_hidden_alias_with_the_same_help() {
         "the alias resolves to the same command"
     );
     // The alias works for real work too, not just --help.
-    let (output, _) = run(&["rename"]);
+    let (output, third) = run(&["rename"]);
     assert!(output.status.success());
     assert!(
         stdout_of(&output).contains("kaseifu label <file-or-folder>"),
         "alias guidance names the canonical command"
     );
-    let _ = std::fs::remove_dir_all(&dir);
+    for path in [dir, second, third] {
+        let _ = std::fs::remove_dir_all(&path);
+    }
 }
 
 #[test]
