@@ -497,8 +497,8 @@ fn v092_completions_offer_rename_and_hide_discover() {
     let output = cli(&home, &["completions", "zsh"]);
     assert!(output.status.success());
     let script = stdout_of(&output);
-    assert!(script.contains("(rename)"), "rename arm present");
-    assert!(script.contains("'rename:"), "rename offered");
+    assert!(script.contains("(label)"), "label arm present");
+    assert!(script.contains("'label:"), "label offered");
     assert!(!script.contains("discover"), "hidden command stays hidden");
     let _ = std::fs::remove_dir_all(&home);
 }

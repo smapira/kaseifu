@@ -1,9 +1,10 @@
 //! Batch rename: a bounded walk, conflict detection and an apply order
 //! (original spec sections 8.5, 11.2 and 14).
 //!
-//! `kaseifu rename <folder> --recursive` renames what is inside a folder
-//! instead of the folder itself. Two properties separate a batch from running
-//! the command once per target, and both live here:
+//! `kaseifu label <folder> --recursive` renames what is inside a folder
+//! instead of the folder itself (`rename` stays as a hidden alias). Two
+//! properties separate a batch from running the command once per target, and
+//! both live here:
 //!
 //! - **A conflict is a property of the set.** The single-target planner already
 //!   refuses a proposal whose destination exists, but it cannot see that two

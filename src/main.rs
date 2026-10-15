@@ -263,6 +263,10 @@ enum Commands {
     /// Library tree, caches, hidden folders, the working directory) is
     /// refused with the reason. With --recursive the folder is not renamed:
     /// everything inside it is, after the whole list has been shown.
+    ///
+    /// The canonical subcommand name is `label`; `rename` stays as a hidden
+    /// transitional alias so existing scripts keep working.
+    #[command(name = "label", alias = "rename")]
     Rename(Box<RenameCli>),
 
     /// Print a shell completion script (only zsh can be installed).
@@ -1290,15 +1294,15 @@ fn rename_management(store: &RenameStore, args: &RenameCli, format: OutputFormat
 fn rename_guidance(format: OutputFormat) -> Result<()> {
     emit_report(
         format,
-        "Rename",
+        "Label",
         &[
-            "usage: kaseifu rename <file-or-folder> [--pattern PATTERN] [--execute]".to_string(),
-            "batch: kaseifu rename <folder> --recursive [--execute]".to_string(),
+            "usage: kaseifu label <file-or-folder> [--pattern PATTERN] [--execute]".to_string(),
+            "batch: kaseifu label <folder> --recursive [--execute]".to_string(),
             "documents: txt, md, pdf, html".to_string(),
             "images: jpg, jpeg, png, heic, heif, tif, tiff, webp".to_string(),
             "videos: mp4, mov, m4v, 3gp, 3g2".to_string(),
             "folders: named from what is inside them, never from their own name".to_string(),
-            "run `kaseifu rename --patterns` to list the naming rules".to_string(),
+            "run `kaseifu label --patterns` to list the naming rules".to_string(),
         ],
         &serde_json::json!({"rename": {"status": "guidance"}}).to_string(),
     );
@@ -1340,7 +1344,7 @@ fn rename_list(store: &RenameStore, with_builtin: bool, format: OutputFormat) ->
         }
     })
     .to_string();
-    emit_report(format, "Rename patterns", &lines, &json);
+    emit_report(format, "Label patterns", &lines, &json);
     Ok(())
 }
 
@@ -1362,7 +1366,7 @@ fn rename_save(
     let json =
         serde_json::json!({"rename": {"status": "saved", "preset": name, "template": template}})
             .to_string();
-    emit_report(format, "Rename preset", &[line], &json);
+    emit_report(format, "Label preset", &[line], &json);
     Ok(())
 }
 
@@ -1407,7 +1411,7 @@ fn rename_delete(store: &RenameStore, name: &str, format: OutputFormat) -> Resul
     }
     let line = format!("deleted preset:{name}");
     let json = serde_json::json!({"rename": {"status": "deleted", "preset": name}}).to_string();
-    emit_report(format, "Rename preset", &[line], &json);
+    emit_report(format, "Label preset", &[line], &json);
     Ok(())
 }
 
@@ -1421,7 +1425,7 @@ fn rename_set_default(store: &RenameStore, rule: &str, format: OutputFormat) -> 
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     let line = format!("default rule: {current}");
     let json = serde_json::json!({"rename": {"status": "default", "default": current}}).to_string();
-    emit_report(format, "Rename default", &[line], &json);
+    emit_report(format, "Label default", &[line], &json);
     Ok(())
 }
 
@@ -1432,7 +1436,7 @@ fn rename_show_default(store: &RenameStore, format: OutputFormat) -> Result<()> 
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     let line = format!("default rule: {current}");
     let json = serde_json::json!({"rename": {"status": "default", "default": current}}).to_string();
-    emit_report(format, "Rename default", &[line], &json);
+    emit_report(format, "Label default", &[line], &json);
     Ok(())
 }
 
@@ -1572,7 +1576,7 @@ fn emit_rename_report(format: OutputFormat, report: &RenameReport) {
         }
     })
     .to_string();
-    emit_report(format, "Rename", &lines, &json);
+    emit_report(format, "Label", &lines, &json);
 }
 
 /// `rename <file>`: dry-run proposal or `--execute` rename.
@@ -1810,7 +1814,7 @@ fn emit_batch_report(format: OutputFormat, report: &BatchReport, phase: BatchPha
     if mode.rich {
         print!(
             "{}",
-            kaseifu::presentation::components::panel::frame("Rename (batch)", &lines, mode.color)
+            kaseifu::presentation::components::panel::frame("Label (batch)", &lines, mode.color)
         );
     } else {
         for line in &lines {

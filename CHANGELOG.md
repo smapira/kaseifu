@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The `rename` subcommand is now `label`.** `kaseifu label` proposes a
+  content-based name exactly as `rename` did; `rename` stays as a hidden
+  alias so existing scripts keep working. JSON keys and the journal shape
+  are unchanged.
+
 ## [0.11.0] - 2026-10-16
 
 ### Added

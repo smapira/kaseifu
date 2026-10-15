@@ -95,7 +95,7 @@ Video files (MP4, MOV, and other video containers) are not classified yet:
 their capture time and GPS are neither read nor sent to Jev, so a video may
 look untouched even when it sits next to a well organized photo series.
 Whether to support video is a separate decision, not a hidden setting. (The
-`rename` command does rename videos: see its section below.)
+`label` command renames videos: see its section below.)
 
 ### Spotlight indexing
 
@@ -206,16 +206,18 @@ names the reason and moves nothing. Executed moves are journaled on the
 same `[MANUAL]` path as `--select`, so `undo` reverses them, and
 `--format json` prints one `organize_to` object.
 
-### Rename a file or folder (AI naming)
+### Label a file or folder (AI naming)
 
 Propose a content-based name, and apply it on request:
 
 ```bash
-kaseifu rename ~/Desktop/report.pdf            # dry run: print the proposal
-kaseifu rename ~/Desktop/report.pdf --execute  # rename it (journaled, undoable)
-kaseifu rename ~/Documents/untitled-folder     # a folder, named from its contents
-kaseifu rename ~/Pictures/inbox --recursive    # everything inside it, one preview
+kaseifu label ~/Desktop/report.pdf            # dry run: print the proposal
+kaseifu label ~/Desktop/report.pdf --execute  # rename it (journaled, undoable)
+kaseifu label ~/Documents/untitled-folder     # a folder, named from its contents
+kaseifu label ~/Pictures/inbox --recursive    # everything inside it, one preview
 ```
+
+The previous `rename` spelling still works as a hidden alias.
 
 The name comes from the rule you pick, and the rule's variables come from the
 file itself: the on-device model supplies the title and category, the file
@@ -225,21 +227,21 @@ few representative frames). Rules are the built-in presets `P01`-`P12` or your
 own template:
 
 ```bash
-kaseifu rename ~/Desktop/report.pdf --patterns
-kaseifu rename ~/Desktop/report.pdf --pattern date-category-title
-kaseifu rename ~/Desktop/report.pdf --template "{date}_{title}"
-kaseifu rename ~/Desktop/report.pdf --pattern prefix-title --prefix WORK
+kaseifu label ~/Desktop/report.pdf --patterns
+kaseifu label ~/Desktop/report.pdf --pattern date-category-title
+kaseifu label ~/Desktop/report.pdf --template "{date}_{title}"
+kaseifu label ~/Desktop/report.pdf --pattern prefix-title --prefix WORK
 ```
 
 Presets are stored in the same SQLite database as the journal, so no new
 configuration file appears:
 
 ```bash
-kaseifu rename --save-preset work --pattern prefix-title --prefix WORK
-kaseifu rename ~/Desktop/report.pdf --preset work
-kaseifu rename --set-default work     # later renames need no flags
-kaseifu rename --patterns             # builtins plus stored presets
-kaseifu rename --delete-preset work
+kaseifu label --save-preset work --pattern prefix-title --prefix WORK
+kaseifu label ~/Desktop/report.pdf --preset work
+kaseifu label --set-default work     # later renames need no flags
+kaseifu label --patterns             # builtins plus stored presets
+kaseifu label --delete-preset work
 ```
 
 Behaviour worth knowing:
@@ -291,7 +293,7 @@ Behaviour worth knowing:
   `status: held` with a reason; nothing is silently repaired or invented.
 - **Names stay shell friendly.** The stem is cut to 80 characters at a word
   boundary, whitespace runs become `_`, and the extension never changes.
-- **A whole folder at once (`--recursive`).** `kaseifu rename <folder>
+- **A whole folder at once (`--recursive`).** `kaseifu label <folder>
   --recursive` renames what is inside the folder instead of the folder itself:
   at most three levels deep and at most 50 targets, one numbered line each,
   with the proposal, conflict and held counts above them. Two items that would
