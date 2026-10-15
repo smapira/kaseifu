@@ -1,0 +1,67 @@
+name: Homebrew acceptance
+
+# The project builds a Swift bridge against Foundation Models and reads
+# Spotlight, so it is macOS only: a Linux container cannot run this. The
+# isolated acceptance run therefore uses a disposable macOS runner, which has
+# Xcode and no prior rust/llvm, instead of a container.
+#
+# It checks the tap the way a user installs it: tap, trust, install, run, and
+# the formula's own test. No secrets are needed.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly: catches tap drift (a broken formula, a vanished tag archive)
+    # without anyone asking for it.
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  install-from-tap:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_ENV_HINTS: "1"
+    steps:
+      - name: Record the environment
+        run: |
+          {
+            echo "homebrew=$(brew --version | head -1)"
+            echo "xcode=$(xcodebuild -version | tr '\n' ' ')"
+            echo "macos=$(sw_vers -productVersion)"
+            echo "runner=$RUNNER_OS-$RUNNER_ARCH"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Tap and trust the formula
+        run: |
+          brew tap routeflags/tap
+          brew trust --formula routeflags/tap/kaseifu
+
+      - name: Install from the tap (source build, the user path)
+        run: |
+          start=$(date +%s)
+          brew install kaseifu
+          echo "install_seconds=$(( $(date +%s) - start ))" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: The installed version matches the formula
+        run: |
+          expected=$(brew info --json=v2 routeflags/tap/kaseifu | jq -r '.formulae[0].versions.stable')
+          actual=$(kaseifu --version | awk '{print $2}')
+          echo "formula=$expected installed=$actual" | tee -a "$GITHUB_STEP_SUMMARY"
+          test "$expected" = "$actual"
+          test "$(kaseifu-bench --version | awk '{print $2}')" = "$actual"
+
+      - name: Run the formula test
+        run: brew test routeflags/tap/kaseifu
+
+      - name: Record the dependency footprint
+        if: always()
+        run: |
+          {
+            echo '### Build dependencies the tap pulled in'
+            brew list --versions rust llvm openssl@4 2>/dev/null || echo "(none of rust/llvm/openssl@4 listed)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
