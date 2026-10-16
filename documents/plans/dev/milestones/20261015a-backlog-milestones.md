@@ -10,7 +10,7 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 |---|---:|---|
 | Open | 2 | `../issues/open/` |
 | Waiting for user/external resource | 6 | `../issues/waiting-user/` |
-| Done | 16 | `../issues/done/` |
+| Done | 17 | `../issues/done/` |
 
 ## M1 - Reliability and CLI clarity
 
@@ -58,6 +58,7 @@ Goal: keep measured claims and release boundaries reproducible.
 | Waiting-user | [`bottle-distribution`](../issues/waiting-user/20261016-waiting-bottle-distribution.md) | Phase 2 starts after Phase 1 ships (held 2026-10-16). |
 | Waiting-user | [`clean-mac-verification`](../issues/waiting-user/20261016-waiting-clean-mac-verification.md) | Xcode-free machine and clean machine confirm the install failure mode and cost. |
 | Done | [`release-tagging`](../issues/done/20261015-done-release-tagging.md) | Tagged `v0.10.0` and pushed to `origin`. |
+| Done | [`homebrew-phase1`](../issues/done/20261016-done-homebrew-phase1.md) | The tap install path is verified end to end on CI. |
 
 ## M5 - User/external blockers
 

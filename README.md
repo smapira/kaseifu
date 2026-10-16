@@ -29,7 +29,9 @@ brew install kaseifu
 
 Homebrew treats a non-official tap as untrusted, so the `brew trust` line
 is what lets it load the formula. `brew install routeflags/tap/kaseifu` in
-one step works too, without the trust line.
+one step works too, without the trust line. The tap installs from source
+(about three and a half minutes on CI) and is checked end to end by the
+`Homebrew acceptance` workflow on every manual run and weekly.
 
 Both methods install two binaries: `kaseifu` and `kaseifu-bench`.
 
@@ -58,9 +60,10 @@ cargo install --path .
 
 A source build (both `cargo install --path .` and Homebrew) needs Xcode 26
 or later: `build.rs` compiles the Swift bridge, and the `@Generable` macro
-plugin that Swift bridge needs ships inside Xcode. Command Line Tools
-alone fail the build. Homebrew also pulls build-only dependencies
-(`llvm` among them), so the first install is not small.
+plugin that Swift bridge needs ships inside Xcode (selected via
+`xcode-select`; the build fails if only Command Line Tools are selected).
+Homebrew also pulls build-only dependencies (`llvm` among them, `rust`
+1.98.x), so the first install is not small.
 
 Everything else is below: [How it works](#how-it-works) explains the
 pipeline, [Usage](#usage) lists every command with its options, and

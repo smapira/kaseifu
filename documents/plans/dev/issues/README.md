@@ -51,6 +51,7 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | [`20261015-done-release-tagging.md`](done/20261015-done-release-tagging.md) | M4 | Tagged `v0.10.0` and pushed to `origin`. |
 | [`20261016-done-label-subcommand.md`](done/20261016-done-label-subcommand.md) | n/a (user request) | `rename` subcommand is now `label` (`rename` stays a hidden alias). |
 | [`20261016-done-license-file.md`](done/20261016-done-license-file.md) | M4 | Added the MIT `LICENSE` file; the next tag's tarball carries it. |
+| [`20261016-done-homebrew-phase1.md`](done/20261016-done-homebrew-phase1.md) | M4 | `brew tap`/`trust`/`install`/`test` verified end to end on CI (v0.12.3). |
 | [`20261016-done-rename-language.md`](done/20261016-done-rename-language.md) | n/a (user request) | Rename language defaults to `en`, settable via `config set language <tag>`. |
 
 ## Maintenance rules
