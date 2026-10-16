@@ -111,7 +111,8 @@ kaseifu --version
 - ローカル prefix を変えないため、**Docker の代わりの隔離実行**としてこれを使う。Linux コンテナではこのプロジェクトは動かない（Swift ブリッジが Foundation Models を、ツール本体が Spotlight を必要とする）。
 - **1 件目**: `SDKROOT` が CLT SDK を指すため `brew install` が `plugin for module 'FoundationModelsMacros' not found` で失敗（exit 101）。Xcode は選択済みで plugin も存在した。修正は v0.12.2（`build.rs` が Swift コンパイラ呼び出しで `SDKROOT` を外す）。
 - **2 件目**: v0.12.2 でも `brew install` が失敗。今度は `swift-plugin-server produced malformed response` で、cargo log の一行目に `sandbox-exec: sandbox_apply: Operation not permitted` があった。原因は Swift driver がサブプロセス（plugin server 含む）を sandbox 化すること。Homebrew の build sandbox 内ではその二重 `sandbox-exec` が macOS に拒否される。修正は v0.12.3（`build.rs` が `-disable-sandbox` を渡す。外側の Homebrew sandbox は残る）。
-- 再現環境のないローカルでも CI と同じ失敗を再現できたのは、Homebrew の `superenv` が `SDKROOT` を export するため（`Library/Homebrew/extend/ENV/shared.rb` の `SANITIZED_VARS` と `shims/mac/super/bin/xcrun`）。sandbox 側に opt-out は無い（`formula_installer.rb` に該当フラグなし）ため、修正はツール側で行う。
+- **機序のローカル証明**: `sandbox-exec` で軽い profile（書き込み拒否は未使用パス1点のみ、他は許可）をかけて直接 `swiftc` を実行。フラグ無しでは CI と同一の `sandbox_apply: Operation not permitted` + `malformed response` を再現し、フラグ有りでは同じソースが `.o` まで通った。つまり sandbox 内に居ること自体が二重 sandbox を殺し、profile の細部ではなかった。
+- 再現環境のないローカルでも CI と同じ失敗を再現できたのは、Homebrew の `superenv` が `SDKROOT` を export するため（`Library/Homebrew/extend/ENV/shared.rb` の `SANITIZED_VARS` と `shims/mac/super/bin/xcrun`）。sandbox 側に opt-out は無い（`formula_installer.rb` に該当フラグなし）ため、修正はツール側で行う。`swiftc -disable-sandbox`（"Disable using the sandbox when executing subprocesses"）は Xcode 26 の公式フラグで、通常ビルドと `SDKROOT` シミュレートの両方で exit 0 を確認済み。
 
 #### 実測済み（この worktree、2026-10-16）
 
