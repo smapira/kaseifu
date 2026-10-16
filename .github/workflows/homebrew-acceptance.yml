@@ -78,6 +78,18 @@ jobs:
       - name: Run the formula test
         run: brew test routeflags/tap/kaseifu
 
+      - name: Upload the Homebrew build logs on failure
+        # The failure surface that matters (the swiftc error, the environment
+        # Homebrew actually built with) lives in this directory, not in the
+        # runner console, which only shows the last lines. Future failures are
+        # diagnosed from the artifact, not from re-running blind.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-logs
+          path: ~/Library/Logs/Homebrew
+          if-no-files-found: warn
+
       - name: Record the dependency footprint
         if: always()
         run: |
