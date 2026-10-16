@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-10-16
+
+### Fixed
+
+- **The Swift bridge builds inside Homebrew's build sandbox.** The Swift
+  driver sandboxes the subprocesses it runs (including `swift-plugin-server`,
+  which expands `@Generable`). Inside Homebrew's own sandbox that nested
+  `sandbox-exec` is denied by macOS (`sandbox_apply: Operation not
+  permitted`), and the plugin server then answers with a malformed response,
+  failing the build even with Xcode selected and the plugin file present
+  (measured in CI). `build.rs` passes `-disable-sandbox` to its own Swift
+  compile; Homebrew's outer sandbox still confines the build.
+
 ## [0.12.2] - 2026-10-16
 
 ### Fixed
