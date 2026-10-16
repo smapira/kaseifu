@@ -127,6 +127,10 @@ kaseifu --version
 
 ## 受け入れ条件
 
+**達成 (2026-10-16)**: tap が v0.12.3 を指した後の `Homebrew acceptance` 実行 ([run 38844700758](https://github.com/smapira/kaseifu/actions/runs/38844700758)) が全ステップ緑。tap 側 Issue の報告によれば install は 207 秒、依存は `rust 1.98.0` のみ、test block も通過。tap 側 Issue はまだ OPEN（close は tap 側の判断）。
+
+当初書いた受け入れ手順（参考として残す）:
+
 - Xcode 26 以降を入れた macOS で、**GitHub 経由**で以下が通る（T3 の実地検証を兼ねる）:
 
   ```sh

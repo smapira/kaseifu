@@ -160,9 +160,12 @@ follows the tags. `brew tap` leaves a clone under
 `$(brew --repository)/Library/Taps/routeflags/homebrew-tap`; `brew untap
 routeflags/tap` removes it.
 
-Still pending: the tap bump to v0.12.2 and then the CI acceptance run. The
-first two CI runs found a real failure (the `SDKROOT` problem below), which
-is exactly the point of running the acceptance path in isolation.
+Still pending: nothing on the tool side. The tap bumped to v0.12.3 and the
+CI acceptance run ([38844700758](https://github.com/smapira/kaseifu/actions/runs/38844700758))
+is green: tap + trust OK, `brew install kaseifu` OK in 207 seconds, version
+match `formula=0.12.3 installed=0.12.3` (both binaries), `brew test` OK,
+dependency footprint only `rust 1.98.0`. The tap issue itself is still OPEN;
+closing it is the tap side's call.
 
 One measured side effect the tap test block had to work around (tool-side
 issue filed): `kaseifu label` with no target creates the state database in
