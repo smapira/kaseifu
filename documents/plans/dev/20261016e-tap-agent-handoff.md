@@ -171,6 +171,10 @@ HOME even though it only prints guidance:
 
 ## Appendix: reference Formula text (reconcile with the draft that passed audit)
 
+Target v0.12.3 or newer: v0.12.1 fails on Homebrew's `SDKROOT` and v0.12.2
+fails on the nested `sandbox-exec` inside Homebrew's build sandbox. The
+`url`/`sha256` below are the measured v0.12.3 values;
+
 The draft in the tap worktree reportedly passes an in-process strict+new
 online audit with 0 problems; that artifact is authoritative. This text is
 the tool-side reference for the same formula, with the measured values
@@ -180,8 +184,8 @@ filled in, so the two cannot drift silently. Reconcile rather than replace.
 class Kaseifu < Formula
   desc "Semantic file organization for macOS"
   homepage "https://github.com/smapira/kaseifu"
-  url "https://github.com/smapira/kaseifu/archive/refs/tags/v0.12.2.tar.gz"
-  sha256 "70b76240f441913b3a1e85fc8f1edba964c2475bd1d42ddbf54ba95cad58dfd3"
+  url "https://github.com/smapira/kaseifu/archive/refs/tags/v0.12.3.tar.gz"
+  sha256 "11b397b99217ed11d29ff4f89c9a82f063cfe0e587e24978ea5e276f9e54c5e3"
   license "MIT"
 
   # A source build compiles swift/kaseifu_fm_bridge.swift, so Xcode itself is
@@ -227,9 +231,9 @@ Points the tool side verified about this text:
   docs are maintained in the other thread.
 - If the clean-machine Xcode prerequisite cannot be met, stop and report
   exactly what is missing instead of working around it.
-- Measured reference values (2026-10-16): latest tag `v0.12.2`, tarball
-  sha256 `70b76240f441913b3a1e85fc8f1edba964c2475bd1d42ddbf54ba95cad58dfd3`
-  (v0.12.0 carried no `LICENSE`; v0.12.1 fails a Homebrew build because
-  Homebrew's `SDKROOT` points at the Command Line Tools SDK, so use v0.12.2
-  or newer), Homebrew 7.0.9 locally and 6.0.22 on the CI runner, Xcode 26.6.
-  Re-measure the hash for the version you ship.
+- Measured reference values (2026-10-16): latest tag `v0.12.3`, tarball
+  sha256 `11b397b99217ed11d29ff4f89c9a82f063cfe0e587e24978ea5e276f9e54c5e3`
+  (the archive carries `LICENSE`). Use v0.12.3 or newer: v0.12.1 fails on
+  Homebrew's `SDKROOT`, v0.12.2 on the nested `sandbox-exec`. Homebrew 7.0.9
+  locally and 6.0.22 on the CI runner, Xcode 26.6. Re-measure the hash for
+  the version you ship.

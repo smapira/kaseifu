@@ -49,7 +49,7 @@
   - `livecheck` ブロックは **書かない**（既定の Git 戦略がタグを追う。明示するなら `strategy :git`）。GitHub Releases が 0 件なので `GithubLatest` は使えない。
   - `depends_on macos:` は付けない（バイナリは FoundationModels を weak link するため macOS < 26 でも起動する設計）。
   - `test do` は副作用なしで終わるものだけ: `kaseifu --version`、引数なし `kaseifu` のガイダンス終了コード、`label --help` の ASCII 性。journal/Keychain/実ファイルに触れない。
-- 検証値の記録: v0.12.2 の自動 tarball sha256 = `70b76240f441913b3a1e85fc8f1edba964c2475bd1d42ddbf54ba95cad58dfd3`（`shasum -a 256`、2026-10-16 実測）。v0.12.0 は `LICENSE` を含まず、v0.12.1 は Homebrew の `SDKROOT` でビルドに失敗するため、**v0.12.2 以降を pin する**。版上げのたびに実測し直す。
+- 検証値の記録: v0.12.3 の自動 tarball sha256 =（下記、タグ push 後に実測して転記）。v0.12.0 は `LICENSE` を含まず、v0.12.1 は Homebrew の `SDKROOT` で、v0.12.2 は sandbox 内の二重 `sandbox-exec` でビルドに失敗するため、**v0.12.3 以降を pin する**。版上げのたびに実測し直す。
 - 禁止: force push、tap 履歴の書き換え。初回 push 先は tap の `origin` のみ（**branch 作成**になる）。
 
 ### T2 導入手順を書く (kaseifu 側 README)
@@ -105,13 +105,13 @@ kaseifu --version
 - 実ファイルの移動・journal・Keychain に触れないこと（test block 側でも `KASEIFU_KEY_SOURCE=env` と `KASEIFU_NO_COMPLETION_UPDATE=1` を設定する）。
 - install は prefix の変更（`rust`/`llvm`/`openssl@4` の install、既存 formula の upgrade）を伴うため、**実行前に確認を取る**。
 
-#### 受け入れテストは CI で回す（2026-10-16 追加）
+#### 受け入れテストは CI で回す（2026-10-16 追加、v0.12.2/v0.12.3 で 2 件の実バグを検出）
 
-- `.github/workflows/homebrew-acceptance.yml`: `macos-26`（使い捨て）で tap → trust → install → `--version` 照合 → `brew test` → 依存の記録。手動 (`workflow_dispatch`) + 毎週。
+- `.github/workflows/homebrew-acceptance.yml`: `macos-26`（使い捨て）で tap → trust → install → `--version` 照合 → `brew test` → 依存の記録。手動 (`workflow_dispatch`) + 毎週。失敗時は `~/Library/Logs/Homebrew` を artifact に回収する。
 - ローカル prefix を変えないため、**Docker の代わりの隔離実行**としてこれを使う。Linux コンテナではこのプロジェクトは動かない（Swift ブリッジが Foundation Models を、ツール本体が Spotlight を必要とする）。
-- 最初の 2 回の実行が**実際の不具合を見つけた**: `SDKROOT` が CLT SDK を指すため `brew install` が `plugin for module 'FoundationModelsMacros' not found` で失敗（exit 101）。Xcode は選択済みで plugin も存在した。
-- 修正は v0.12.2（`build.rs` が Swift コンパイラ呼び出しで `SDKROOT` を外す）。実測: `SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk cargo install --locked --path .` が修正前 exit 101 → 修正後 exit 0。
-- 再現環境のないローカルでも CI と同じ失敗を再現できたのは、Homebrew の `superenv` が `SDKROOT` を export するため（`Library/Homebrew/extend/ENV/shared.rb` の `SANITIZED_VARS` と `shims/mac/super/bin/xcrun`）。
+- **1 件目**: `SDKROOT` が CLT SDK を指すため `brew install` が `plugin for module 'FoundationModelsMacros' not found` で失敗（exit 101）。Xcode は選択済みで plugin も存在した。修正は v0.12.2（`build.rs` が Swift コンパイラ呼び出しで `SDKROOT` を外す）。
+- **2 件目**: v0.12.2 でも `brew install` が失敗。今度は `swift-plugin-server produced malformed response` で、cargo log の一行目に `sandbox-exec: sandbox_apply: Operation not permitted` があった。原因は Swift driver がサブプロセス（plugin server 含む）を sandbox 化すること。Homebrew の build sandbox 内ではその二重 `sandbox-exec` が macOS に拒否される。修正は v0.12.3（`build.rs` が `-disable-sandbox` を渡す。外側の Homebrew sandbox は残る）。
+- 再現環境のないローカルでも CI と同じ失敗を再現できたのは、Homebrew の `superenv` が `SDKROOT` を export するため（`Library/Homebrew/extend/ENV/shared.rb` の `SANITIZED_VARS` と `shims/mac/super/bin/xcrun`）。sandbox 側に opt-out は無い（`formula_installer.rb` に該当フラグなし）ため、修正はツール側で行う。
 
 #### 実測済み（この worktree、2026-10-16）
 
