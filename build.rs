@@ -188,6 +188,16 @@ fn compile_and_link(toolchain: &Toolchain, out_dir: &Path) {
     compile
         .arg("-parse-as-library")
         .arg("-emit-object")
+        // The Swift driver sandboxes the subprocesses it runs (including
+        // `swift-plugin-server`, which expands `@Generable`). Inside
+        // Homebrew's own build sandbox that nested `sandbox-exec` is denied
+        // by macOS (`sandbox_apply: Operation not permitted`), and the
+        // plugin server then answers with a malformed response, failing the
+        // build (measured in CI: the plugin file exists and Xcode is
+        // selected, yet the macro does not expand). Disabling the driver's
+        // own sandboxing is safe here: Homebrew's outer sandbox still
+        // confines the build.
+        .arg("-disable-sandbox")
         .arg("-module-name")
         .arg("kaseifu_fm_bridge")
         // The compiler autolinks FoundationModels strongly; the weak link is
