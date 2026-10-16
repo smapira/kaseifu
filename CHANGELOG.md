@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-10-16
+
+### Added
+
+- **Homebrew install through `routeflags/tap`.** `brew tap routeflags/tap`,
+  `brew trust --formula routeflags/tap/kaseifu`, `brew install kaseifu`
+  installs both binaries from a pinned source archive. A source build needs
+  Xcode 26 or later selected (Command Line Tools alone fail the Swift
+  bridge build) and pulls build-only dependencies such as `llvm`. The tap
+  is verified end to end by the `Homebrew acceptance` workflow.
+
 ## [0.12.3] - 2026-10-16
 
 ### Fixed
