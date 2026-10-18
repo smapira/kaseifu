@@ -5,4 +5,5 @@ pub mod generic;
 pub mod inspect;
 pub mod organize;
 pub mod select;
+pub mod skill;
 pub mod uninstall;

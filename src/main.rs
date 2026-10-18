@@ -15,7 +15,8 @@ use kaseifu::operations::{mover, organize, plan, select as select_ops, undo};
 use kaseifu::platform::macos::fsevents;
 use kaseifu::presentation::renderers::{
     classify as classify_view, discover as discover_view, generic, inspect as inspect_view,
-    organize as organize_view, select as select_view, uninstall as uninstall_view,
+    organize as organize_view, select as select_view, skill as skill_view,
+    uninstall as uninstall_view,
 };
 use kaseifu::presentation::{OutputFormat, resolve_mode};
 use kaseifu::rename::{
@@ -59,7 +60,7 @@ struct Cli {
     /// Output format for commands with structured output.
     ///
     /// `json` applies to inspect, classify, organize, doctor, setup, auth,
-    /// config, completions --install, uninstall, undo and scan. `watch`
+    /// config, completions --install, uninstall, undo, scan and skill. `watch`
     /// emits one JSON object per line with --format json.
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Auto)]
     format: OutputFormat,
@@ -287,6 +288,17 @@ enum Commands {
         #[arg(long, value_name = "PATH")]
         dir: Option<PathBuf>,
     },
+
+    /// Place or check kaseifu's agent skill file (writes only with --write).
+    ///
+    /// The skill is the file an agent in another repository reads to call
+    /// kaseifu. This binary carries it, can place it in a repository at
+    /// `.github/skills/kaseifu/SKILL.md`, and can compare an existing copy
+    /// with it; nothing is written without --write.
+    Skill {
+        #[command(subcommand)]
+        action: SkillCommands,
+    },
 }
 
 /// `auth` subcommands (the key itself is never a CLI argument).
@@ -318,6 +330,43 @@ enum ConfigCommands {
     },
 }
 
+/// `skill` subcommands: the agent skill file this binary carries.
+#[derive(Subcommand)]
+enum SkillCommands {
+    /// Place the embedded skill in a repository (preview by default).
+    ///
+    /// The file goes to `<repo>/.github/skills/kaseifu/SKILL.md`, and --write
+    /// creates the directory chain. A copy that already matches the embedded
+    /// skill is left alone whatever the flags say; a copy that differs is
+    /// refused unless --force asks for the replacement. `--scan DIR` does the
+    /// same for every repository at or below DIR that already holds a copy
+    /// (`.git` and symbolic links are never followed).
+    #[command(group = clap::ArgGroup::new("target").args(["to", "scan"]).required(true).multiple(false))]
+    Install {
+        /// Repository directory to place the skill in.
+        #[arg(long, value_name = "DIR")]
+        to: Option<PathBuf>,
+        /// Directory to look through: every repository at or below it that holds a copy.
+        #[arg(long, value_name = "DIR")]
+        scan: Option<PathBuf>,
+        /// Write the file (the default is a preview that writes nothing).
+        #[arg(long)]
+        write: bool,
+        /// Replace a copy that differs from the embedded skill (needs --write).
+        #[arg(long, requires = "write")]
+        force: bool,
+    },
+    /// Compare a copy of the skill with the one embedded in this binary.
+    ///
+    /// Prints `match` or `stale` and exits non-zero for a stale copy, so one
+    /// CI step keeps a repository's copy honest.
+    Check {
+        /// The skill file to compare (for example .github/skills/kaseifu/SKILL.md).
+        #[arg(long, value_name = "FILE")]
+        path: PathBuf,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -325,14 +374,16 @@ async fn main() -> Result<()> {
     let overrides = cli_overrides(&cli);
     // Best-effort completion upkeep before dispatch: `completions` must stay
     // free of side effects, `doctor` must report the state as it is, the
-    // no-subcommand guidance stays side-effect free as well (ZC-2), and
-    // `uninstall` must see (and delete) the completion files as they are
-    // right now (ZC-11).
+    // no-subcommand guidance stays side-effect free as well (ZC-2), `uninstall`
+    // must see (and delete) the completion files as they are right now (ZC-11),
+    // and `skill` only places or checks the file the caller names (a CI step
+    // runs `skill check`, and a check must write nothing else).
     if !matches!(
         &cli.command,
         None | Some(Commands::Completions { .. })
             | Some(Commands::Doctor { .. })
             | Some(Commands::Uninstall { .. })
+            | Some(Commands::Skill { .. })
     ) {
         kaseifu::completion::refresh_if_stale(&mut Cli::command());
     }
@@ -395,6 +446,7 @@ async fn dispatch(
             verbose,
             explain,
         } => handle_classify(&file, all, verbose, explain, format, overrides).await,
+        Commands::Skill { action } => handle_skill(action, format),
         _ => unreachable!("support commands route through dispatch_support"),
     }
 }
@@ -2927,6 +2979,106 @@ fn handle_completions(
     })
     .to_string();
     emit_report(format, "KASEIFU / COMPLETIONS", &[line], &json);
+    Ok(())
+}
+
+// --- skill -------------------------------------------
+
+/// `skill`: place or check the agent skill file this binary carries.
+///
+/// Only the file the caller names is involved (`--to` one repository,
+/// `--scan` every repository below one, `--path` one file): the command never
+/// moves a file, and it writes nothing anywhere else.
+fn handle_skill(action: SkillCommands, format: OutputFormat) -> Result<()> {
+    match action {
+        SkillCommands::Install {
+            to,
+            scan,
+            write,
+            force,
+        } => match (to, scan) {
+            (Some(repo), None) => handle_skill_install(&repo, write, force, format),
+            (None, Some(parent)) => handle_skill_scan(&parent, write, force, format),
+            // clap requires exactly one of the two and refuses both; this arm
+            // only keeps the match exhaustive.
+            _ => anyhow::bail!(
+                "--to names one repository, --scan looks through a directory (give exactly one)"
+            ),
+        },
+        SkillCommands::Check { path } => handle_skill_check(&path, format),
+    }
+}
+
+/// `skill install --to`: one repository. A refusal is reported as a result (the
+/// report says what the copy is) and still fails the run, because a caller that
+/// asked for a write did not get one.
+fn handle_skill_install(repo: &Path, write: bool, force: bool, format: OutputFormat) -> Result<()> {
+    let report = kaseifu::skill::install(repo, write, force)?;
+    emit_report(
+        format,
+        "KASEIFU / SKILL",
+        &skill_view::install_lines(&report),
+        &skill_view::install_json(&report).to_string(),
+    );
+    if report.status == kaseifu::skill::InstallStatus::Refused {
+        anyhow::bail!(
+            "the skill at {} differs from the embedded one: refusing to overwrite it (`--force` replaces it)",
+            report.target.display()
+        );
+    }
+    Ok(())
+}
+
+/// `skill install --scan`: every repository at or below `parent` that already
+/// holds a copy. The report names each one; the exit code states the worst
+/// outcome among them.
+fn handle_skill_scan(parent: &Path, write: bool, force: bool, format: OutputFormat) -> Result<()> {
+    let report = kaseifu::skill::scan(parent, write, force)?;
+    emit_report(
+        format,
+        "KASEIFU / SKILL",
+        &skill_view::scan_lines(&report),
+        &skill_view::scan_json(&report).to_string(),
+    );
+    let failed = report
+        .targets
+        .iter()
+        .filter(|target| skill_target_failed(target))
+        .count();
+    if failed > 0 {
+        anyhow::bail!(
+            "{failed} of {} repository copy/copies were refused or could not be read (the report above names each one)",
+            report.targets.len()
+        );
+    }
+    Ok(())
+}
+
+/// True when one scan target either refused the write or could not be read.
+fn skill_target_failed(target: &kaseifu::skill::ScanTarget) -> bool {
+    match &target.outcome {
+        Ok(report) => report.status == kaseifu::skill::InstallStatus::Refused,
+        Err(_) => true,
+    }
+}
+
+/// `skill check`: compare one copy with the embedded skill. A stale copy is a
+/// failure (exit 1) rather than an error: the report already states both
+/// digests, and the exit code is what a CI step reads.
+fn handle_skill_check(path: &Path, format: OutputFormat) -> Result<()> {
+    let report = kaseifu::skill::check(path)?;
+    emit_report(
+        format,
+        "KASEIFU / SKILL",
+        &skill_view::check_lines(&report),
+        &skill_view::check_json(&report).to_string(),
+    );
+    if !report.matches {
+        anyhow::bail!(
+            "the skill at {} is stale: refresh it with `kaseifu skill install --to <repo> --write --force`",
+            report.path.display()
+        );
+    }
     Ok(())
 }
 

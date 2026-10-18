@@ -35,6 +35,7 @@ pub mod policy;
 pub mod presentation;
 pub mod rename;
 pub mod semantic;
+pub mod skill;
 pub mod storage;
 pub mod uninstall;
 pub mod watch;

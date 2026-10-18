@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`kaseifu skill`: emit and check the agent skill file.** The skill that
+  tells an agent in another repository how to call kaseifu is embedded in the
+  binary and can now be placed with `kaseifu skill install --to <repo>
+  [--write [--force]]`, compared with `kaseifu skill check --path FILE`
+  (`match` = exit 0, `stale` = exit 1, so one CI step detects drift), and
+  distributed across a tree with `kaseifu skill install --scan <dir>
+  [--write [--force]]`. Nothing is written without `--write`, and a copy that
+  differs from the embedded skill is refused unless `--force` asks for the
+  replacement. `--scan` skips `.git`, never follows a symbolic link, stops six
+  directories below the scanned one, and only touches repositories that
+  already hold a copy. The repository's copy at
+  `.github/skills/kaseifu/SKILL.md` is byte-identical to the canonical
+  `src/skill/kaseifu/SKILL.md`, and a test fails if the two drift apart.
+
 ## [0.12.4] - 2026-10-16
 
 ### Added

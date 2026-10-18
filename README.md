@@ -561,6 +561,40 @@ every shell it supports (upstream
 [clap-rs/clap#1335](https://github.com/clap-rs/clap/issues/1335)), so kaseifu
 removes them from the zsh output after generation.
 
+### Agent skill file
+
+kaseifu ships an agent skill: the one file an agent in another repository reads
+to call kaseifu (classify first, move only with `--execute`, parse with
+`--format json`). It is embedded in the binary, and `kaseifu skill` places it
+and compares copies with it:
+
+```bash
+kaseifu skill install --to .                                 # preview: writes nothing
+kaseifu skill install --to . --write                         # place .github/skills/kaseifu/SKILL.md
+kaseifu skill install --to . --write --force                 # replace a copy that was edited
+kaseifu skill check --path .github/skills/kaseifu/SKILL.md   # match = exit 0, stale = exit 1
+kaseifu skill install --scan ~/Code --write                  # every repository below that holds a copy
+```
+
+`--write` creates the `.github/skills/kaseifu` directory chain. A copy that
+differs from the embedded skill is refused unless `--force` asks for the
+replacement, so an edited copy is never overwritten by accident. `--scan` walks
+the directory lexically, skips `.git`, never follows a symbolic link, stops six
+directories below the scanned one (which reaches `.delta/worktrees/<id>/<repo>`),
+and only touches repositories that already hold a copy; a new repository is
+`--to`. All three verbs answer `--format json` as well.
+
+One CI step keeps a copy honest:
+
+```yaml
+- run: kaseifu skill check --path .github/skills/kaseifu/SKILL.md
+```
+
+The canonical file is `src/skill/kaseifu/SKILL.md` in this repository (embedded
+with `include_str!`), and the repository's own copy at
+`.github/skills/kaseifu/SKILL.md` is kept byte-identical by a test. Refresh a
+copy with the binary instead of editing it by hand.
+
 ## Configuration
 
 Settings resolve in this order: CLI flags (`--jev-endpoint`, `--jev-model`)
@@ -638,6 +672,7 @@ src/
 ├── platform/            # macOS-specific code (FSEvents)
 ├── rename/              # Naming rules, document + image + video + folder + batch
 ├── semantic/            # Foundation Models bridge + semantic provider (Phase 0-2)
+├── skill/               # Embedded agent skill (SKILL.md) + install/check/scan
 ├── storage/             # SQLite history + cache
 └── watch/               # FSEvents watcher + coordinator (Phase 6)
 
