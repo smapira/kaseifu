@@ -1,6 +1,6 @@
 # Backlog milestones after AI rename Phase 9
 
-Last updated: 2026-10-15.
+Last updated: 2026-10-19.
 
 Purpose: group the remaining plan issues into milestones and make each issue's status discoverable from the directory path. Status directories are documented in `../issues/README.md`.
 
@@ -10,7 +10,7 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 |---|---:|---|
 | Open | 2 | `../issues/open/` |
 | Waiting for user/external resource | 6 | `../issues/waiting-user/` |
-| Done | 17 | `../issues/done/` |
+| Done | 18 | `../issues/done/` |
 
 ## M1 - Reliability and CLI clarity
 

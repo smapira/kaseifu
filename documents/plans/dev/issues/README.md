@@ -1,6 +1,6 @@
 # Issue directory map
 
-Last updated: 2026-10-15.
+Last updated: 2026-10-19.
 
 This directory has two kinds of records:
 
@@ -53,6 +53,7 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | [`20261016-done-license-file.md`](done/20261016-done-license-file.md) | M4 | Added the MIT `LICENSE` file; the next tag's tarball carries it. |
 | [`20261016-done-homebrew-phase1.md`](done/20261016-done-homebrew-phase1.md) | M4 | `brew tap`/`trust`/`install`/`test` verified end to end on CI (v0.12.3). |
 | [`20261016-done-rename-language.md`](done/20261016-done-rename-language.md) | n/a (user request) | Rename language defaults to `en`, settable via `config set language <tag>`. |
+| [`20261019-done-skill-distribution.md`](done/20261019-done-skill-distribution.md) | n/a (user request) | `kaseifu skill` emits the embedded agent skill and checks copies by sha256. |
 
 ## Maintenance rules
 
