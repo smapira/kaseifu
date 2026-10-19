@@ -23,11 +23,18 @@ use crate::presentation::components::panel::{self, Section};
 use crate::presentation::components::path::{paint_path, path_budget, relative_display};
 use crate::presentation::renderers::explain as explain_view;
 use crate::presentation::renderers::generic;
+use crate::presentation::theme;
+use crate::repo_policy::RuleMatch;
 use std::path::Path;
 
 /// Key column width of the decision/result rows (matches classify's
 /// `Selected`/`Confidence`/`Margin` alignment).
 const KEY_WIDTH: usize = 13;
+
+/// Shown when the index has no entry for the source yet (see
+/// [`OrganizeReport::target_indexed`]). One line, no advice: the README's
+/// Spotlight section explains waiting for the index or `mdimport`.
+const INDEX_LAG_NOTICE: &str = "not indexed yet; candidates may be incomplete";
 
 /// Render the Rich (Cyber Dashboard) panel.
 ///
@@ -122,14 +129,19 @@ pub fn render_text_with(
         "Mode",
         &[generic::dry_run_banner(execute_requested, false)],
     );
-    push_section(&mut out, "Decision", &decision_lines(report, false, false));
-    push_section(&mut out, "Policy", &policy_lines(report, false, thresholds));
-    if explain {
-        push_section(
-            &mut out,
-            "Explanation",
-            &explanation_lines(report, false, false, thresholds),
-        );
+    match &report.rule {
+        Some(rule) => push_section(&mut out, "Repo policy", &rule_lines(rule, false, false)),
+        None => {
+            push_section(&mut out, "Decision", &decision_lines(report, false, false));
+            push_section(&mut out, "Policy", &policy_lines(report, false, thresholds));
+            if explain {
+                push_section(
+                    &mut out,
+                    "Explanation",
+                    &explanation_lines(report, false, false, thresholds),
+                );
+            }
+        }
     }
     push_section(
         &mut out,
@@ -141,6 +153,11 @@ pub fn render_text_with(
 
 /// Shared section list for the Rich panel (mode -> decision -> policy ->
 /// explanation -> result); the plain renderer uses the same order.
+///
+/// A repository rule reports itself in place of the classifier sections: it
+/// carries no selection, confidence or margin, so showing empty decision rows
+/// would invite reading zeros as evidence. The result section and its order
+/// are untouched.
 fn sections(
     report: &OrganizeReport,
     source: &Path,
@@ -150,22 +167,51 @@ fn sections(
     thresholds: Thresholds,
     explain: bool,
 ) -> Vec<Section> {
-    let mut sections = vec![
-        Section::plain(vec![generic::dry_run_banner(execute_requested, color)]),
-        Section::headed("DECISION", decision_lines(report, rich, color)),
-        Section::headed("POLICY", policy_lines(report, color, thresholds)),
-    ];
-    if explain {
-        sections.push(Section::headed(
-            "EXPLANATION",
-            explanation_lines(report, rich, color, thresholds),
-        ));
+    let mut sections = vec![Section::plain(vec![generic::dry_run_banner(
+        execute_requested,
+        color,
+    )])];
+    match &report.rule {
+        Some(rule) => sections.push(Section::headed(
+            "REPO POLICY",
+            rule_lines(rule, rich, color),
+        )),
+        None => {
+            sections.push(Section::headed(
+                "DECISION",
+                decision_lines(report, rich, color),
+            ));
+            sections.push(Section::headed(
+                "POLICY",
+                policy_lines(report, color, thresholds),
+            ));
+            if explain {
+                sections.push(Section::headed(
+                    "EXPLANATION",
+                    explanation_lines(report, rich, color, thresholds),
+                ));
+            }
+        }
     }
     sections.push(Section::headed(
         result_heading(&report.outcome).0,
         result_lines(report, source, rich, color),
     ));
     sections
+}
+
+/// REPO POLICY rows: which rule matched, its pattern, the destination it
+/// resolved to, and the author's reason.
+fn rule_lines(rule: &RuleMatch, rich: bool, color: bool) -> Vec<String> {
+    let mut lines = vec![
+        row("Rule", &rule.rule),
+        row("Match", &rule.match_glob),
+        row("Destination", &shown_path(&rule.destination, rich, color)),
+    ];
+    if let Some(reason) = &rule.reason {
+        lines.push(row("Reason", reason));
+    }
+    lines
 }
 
 fn push_section(out: &mut String, heading: &str, lines: &[String]) {
@@ -185,8 +231,11 @@ fn result_heading(outcome: &OrganizeOutcome) -> (&'static str, &'static str) {
         OrganizeOutcome::Moved { .. } => ("MOVED", "Moved"),
         OrganizeOutcome::WouldMove { .. } => ("WOULD MOVE", "Would move"),
         OrganizeOutcome::MoveFailed(_) => ("MOVE FAILED", "Move failed"),
-        // A collision goes to REVIEW (docs/design/05-execute.md).
-        OrganizeOutcome::Unplanable(PlanError::Collision(_)) => ("REVIEW", "REVIEW"),
+        // A collision goes to REVIEW (docs/design/05-execute.md), and so
+        // does a rule destination that leaves its workspace.
+        OrganizeOutcome::Unplanable(
+            PlanError::Collision(_) | PlanError::DestinationOutsideWorkspace(_),
+        ) => ("REVIEW", "REVIEW"),
         OrganizeOutcome::Refused | OrganizeOutcome::Unplanable(_) => ("NO MOVE", "No move"),
     }
 }
@@ -201,11 +250,22 @@ fn decision_lines(report: &OrganizeReport, rich: bool, color: bool) -> Vec<Strin
         rich,
         color,
     );
-    vec![
+    let mut lines = vec![
         row("Selected", &selected),
         row("Confidence", &format!("{:.3}", report.decision.confidence)),
         row("Margin", &format!("{:.3}", report.decision.margin)),
-    ]
+    ];
+    // The evidence behind the selection may be incomplete (the index has
+    // not caught up with the file). Stated next to the selection because
+    // that is the claim it qualifies; the policy and result rows below are
+    // unaffected.
+    if report.target_indexed == Some(false) {
+        lines.push(row(
+            "Index",
+            &theme::paint(INDEX_LAG_NOTICE, theme::ANSI_AMBER, color),
+        ));
+    }
+    lines
 }
 
 /// POLICY rows: the Rust verdict, with the same wording as `classify`.
@@ -258,7 +318,10 @@ pub fn explanation_for(
 /// are untouched, and `--explain` only adds the `explanation` object. The
 /// outcome carries a machine word (`type`, `kind`) plus the same human
 /// sentence the text renderer shows in `reason`, so scripts and people read
-/// one source of truth.
+/// one source of truth. A repository policy hit adds one `rule` object (name,
+/// pattern, destination, reason) and leaves every other key in place; `policy`
+/// is then `none` because no classifier verdict exists, and `outcome` stays the
+/// authority on what happens to the file.
 pub fn json_report(
     report: &OrganizeReport,
     source: &Path,
@@ -274,8 +337,17 @@ pub fn json_report(
             .candidate_path
             .as_deref()
             .map(|path| path.to_string_lossy().into_owned()),
+        "target_indexed": report.target_indexed,
         "outcome": outcome_json(&report.outcome),
     });
+    if let Some(rule) = &report.rule {
+        value["rule"] = serde_json::json!({
+            "name": rule.rule,
+            "match_glob": rule.match_glob,
+            "destination": rule.destination.to_string_lossy(),
+            "reason": rule.reason,
+        });
+    }
     if let Some(explanation) = explanation {
         value["explanation"] = explanation.to_json();
     }
@@ -319,6 +391,7 @@ fn plan_error_kind(error: &PlanError) -> &'static str {
         PlanError::SourceNotAFile(_) => "source_not_a_file",
         PlanError::DestinationNotADirectory(_) => "destination_not_a_directory",
         PlanError::DestinationExcluded(_) => "destination_excluded",
+        PlanError::DestinationOutsideWorkspace(_) => "destination_outside_workspace",
         PlanError::Collision(_) => "collision",
     }
 }
@@ -367,6 +440,12 @@ fn plan_error_message_with(error: &PlanError, shown: &dyn Fn(&Path) -> String) -
         }
         PlanError::DestinationExcluded(path) => {
             format!("destination is not a usable folder: {}", shown(path))
+        }
+        PlanError::DestinationOutsideWorkspace(path) => {
+            format!(
+                "destination is outside the policy workspace: {}",
+                shown(path)
+            )
         }
         PlanError::SourceMissing(path) => {
             format!("source file is missing: {}", shown(path))

@@ -10,7 +10,7 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 |---|---:|---|
 | Open | 2 | `../issues/open/` |
 | Waiting for user/external resource | 6 | `../issues/waiting-user/` |
-| Done | 18 | `../issues/done/` |
+| Done | 20 | `../issues/done/` |
 
 ## M1 - Reliability and CLI clarity
 
@@ -23,7 +23,7 @@ Goal: reduce confusing user-visible behavior before adding larger features.
 | Done | [`model-output-degeneracy`](../issues/done/20261015-done-model-output-degeneracy.md) | Filename echoes, child-name echoes, and internal-looking titles hold with user-facing reasons. |
 | Done | [`noise-name-overmatch`](../issues/done/20261015-done-noise-name-overmatch.md) | Ordinary names such as `my-target` are no longer silently excluded. |
 | Done | [`cache-name-refusal`](../issues/done/20261015-done-cache-name-refusal.md) | Cache/temp refusals are target-specific and visible in batch output. |
-
+| Done | [`git-mv-stale-index`](../issues/done/20261019-done-git-mv-stale-index.md) | `organize` names an index that has no entry for the file yet; destination existence stays a `stat`, so a stale index cannot create a collision. |
 ## M2 - Media quality
 
 Goal: improve rename quality from real visual and document evidence.
@@ -44,6 +44,7 @@ Goal: complete workflow affordances and document the exact behavior of multi-ite
 | Done | [`debug-scenarios-w2-w5`](../issues/done/20261015-done-debug-scenarios-w2-w5.md) | Remaining debug scenarios are rechecked against current code and added as tests. |
 | Done | [`batch-undo-scope`](../issues/done/20261015-done-batch-undo-scope.md) | Batch undo gets either a migration-backed command or an explicit documented limitation. |
 | Done | [`unicode-normalization-conflicts`](../issues/done/20261015-done-unicode-normalization-conflicts.md) | User chooses dependency exception, in-house limited normalization, or documented limitation. |
+| Done | [`repo-policy-file`](../issues/done/20261019-done-repo-policy-file.md) | `organize` honors `.kaseifu.toml` rules (rule name and reason in the proposal) with every existing safety intact. |
 
 ## M4 - Measurement and release hygiene
 

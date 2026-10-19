@@ -17,7 +17,9 @@ pub use scoring::{
     token_jaccard,
 };
 pub use search_terms::{extract_terms, normalize_terms};
-pub use similarity::{find_similar_files, find_similar_files_with};
+pub use similarity::{
+    SimilarFiles, find_similar_files, find_similar_files_with, scan_similar_files_with,
+};
 
 /// Maximum number of raw Spotlight hits fetched and scored per run.
 ///
@@ -37,6 +39,21 @@ pub const MAX_SPOTLIGHT_HITS: usize = 10_000;
 /// to Jev and the `discover` listing bounded; it matches the raw hit window
 /// this pipeline used before (50 hits), so consumers do not grow.
 pub const MAX_CANDIDATE_DESTINATIONS: usize = 50;
+
+/// Result of one discovery run.
+///
+/// `candidates` is what the caller ranks and plans with; `target_indexed`
+/// says whether Spotlight knew the target file when those candidates were
+/// built. They travel together because the second decides how far the first
+/// can be trusted: Spotlight indexes asynchronously, so the area a file was
+/// just moved into (or out of) is exactly where the index is thinnest.
+#[derive(Debug, Clone)]
+pub struct DiscoveryOutcome {
+    pub candidates: Vec<crate::models::candidate::CandidateDestination>,
+    /// See [`SimilarFiles::target_indexed`]: `Some(false)` means the target
+    /// had no usable index entry, so the evidence below it is incomplete.
+    pub target_indexed: Option<bool>,
+}
 
 /// Main discovery function: NormalizedFileContext -> CandidateDestination[]
 ///
@@ -64,6 +81,18 @@ pub fn discover_with<F>(
 where
     F: Fn(&str, usize) -> anyhow::Result<Vec<String>>,
 {
+    Ok(discover_with_outcome(normalized, search)?.candidates)
+}
+
+/// [`discover_with`] plus the index state of the target
+/// ([`DiscoveryOutcome`]).
+pub fn discover_with_outcome<F>(
+    normalized: NormalizedFileContext,
+    search: F,
+) -> anyhow::Result<DiscoveryOutcome>
+where
+    F: Fn(&str, usize) -> anyhow::Result<Vec<String>>,
+{
     // Step 1: Extract search terms from normalized context
     let raw_terms = extract_terms(&normalized);
     let terms = normalize_terms(&raw_terms);
@@ -75,7 +104,7 @@ where
     let target_ext: Option<String> = normalized.target.extension.clone();
     let target_path = normalized.target.path.clone();
     let target_parent = normalized.parent_directory.clone();
-    let similar_files = similarity::find_similar_files_with(
+    let scan = similarity::scan_similar_files_with(
         &terms,
         &target_name,
         target_ext.as_deref(),
@@ -83,6 +112,7 @@ where
         &target_parent,
         search,
     )?;
+    let similar_files = scan.files;
 
     crate::debug!("SimilarFile count: {}", similar_files.len());
     for f in &similar_files {
@@ -125,7 +155,10 @@ where
         );
     }
 
-    Ok(candidates)
+    Ok(DiscoveryOutcome {
+        candidates,
+        target_indexed: scan.target_indexed,
+    })
 }
 
 // #[cfg(test)]

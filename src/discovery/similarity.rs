@@ -4,6 +4,27 @@ use crate::discovery::destinations::is_excluded_destination;
 use crate::discovery::{MAX_SPOTLIGHT_HITS, SimilarFile, scoring};
 use crate::platform::macos::spotlight;
 
+/// A similar-file scan plus the one index fact discovery cannot infer later.
+///
+/// The scan already canonicalizes every hit and compares it with the target
+/// to keep the target out of its own evidence, so recording whether that
+/// comparison ever matched answers "does the index know this file" for free.
+#[derive(Debug, Clone, Default)]
+pub struct SimilarFiles {
+    pub files: Vec<SimilarFile>,
+    /// Spotlight's knowledge of the target itself.
+    ///
+    /// - `Some(true)`: a hit resolved to the target, so the index knows it.
+    /// - `Some(false)`: a search ran and no hit resolved to the target. The
+    ///   index has not caught up with the file yet (it was created, copied
+    ///   or moved moments ago) or the path is one `mdfind` never returns, so
+    ///   the candidates built from the rest of the index are necessarily
+    ///   incomplete.
+    /// - `None`: no search ran (the target produced no search terms), so
+    ///   nothing about the index can be claimed.
+    pub target_indexed: Option<bool>,
+}
+
 pub fn find_similar_files(
     terms: &[String],
     target_file_name: &str,
@@ -26,14 +47,38 @@ pub fn find_similar_files_with<F>(
     target_file_name: &str,
     target_ext: Option<&str>,
     target_path: &Path,
-    _target_parent: &str,
+    target_parent: &str,
     search: F,
 ) -> anyhow::Result<Vec<SimilarFile>>
 where
     F: Fn(&str, usize) -> anyhow::Result<Vec<String>>,
 {
+    let scan = scan_similar_files_with(
+        terms,
+        target_file_name,
+        target_ext,
+        target_path,
+        target_parent,
+        search,
+    )?;
+    Ok(scan.files)
+}
+
+/// [`find_similar_files_with`] that also reports whether the index knows the
+/// target (see [`SimilarFiles::target_indexed`]).
+pub fn scan_similar_files_with<F>(
+    terms: &[String],
+    target_file_name: &str,
+    target_ext: Option<&str>,
+    target_path: &Path,
+    _target_parent: &str,
+    search: F,
+) -> anyhow::Result<SimilarFiles>
+where
+    F: Fn(&str, usize) -> anyhow::Result<Vec<String>>,
+{
     if terms.is_empty() {
-        return Ok(Vec::new());
+        return Ok(SimilarFiles::default());
     }
 
     let mut results = Vec::new();
@@ -50,6 +95,7 @@ where
     let target_canonical = canonical_key(target_path);
 
     let mut skipped_destinations = 0usize;
+    let mut target_seen = false;
 
     for path_str in &found_paths {
         if seen_paths.contains(path_str) {
@@ -73,9 +119,13 @@ where
         }
 
         if !path_obj.exists() {
+            // A hit whose path is gone is index lag, not evidence. It is
+            // also why a stale entry can never become a candidate: the
+            // filesystem decides, never the index.
             continue;
         }
         if canonical_key(path_obj) == target_canonical {
+            target_seen = true;
             continue;
         }
 
@@ -104,8 +154,12 @@ where
         "SimilarFile candidates (after dedup + filter): {}",
         results.len()
     );
+    crate::debug!("Target in Spotlight: {}", target_seen);
 
-    Ok(results)
+    Ok(SimilarFiles {
+        files: results,
+        target_indexed: Some(target_seen),
+    })
 }
 
 fn modified_rfc3339(p: &Path) -> Option<String> {

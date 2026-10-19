@@ -33,6 +33,10 @@ pub enum PlanError {
     /// The destination directory is on the never-a-destination list
     /// (`~/Library/**`, caches, system trees, machine-generated names).
     DestinationExcluded(PathBuf),
+    /// A repository policy rule (`.kaseifu.toml`) pointed outside its own
+    /// workspace (the directory that holds the policy file), either directly
+    /// or through a symbolic link.
+    DestinationOutsideWorkspace(PathBuf),
     /// The destination already exists; Phase 5 never overwrites.
     Collision(PathBuf),
 }
@@ -120,7 +124,47 @@ pub fn build_manual_move_plan(
     })
 }
 
-/// Source, destination-directory and collision checks shared by both plan
+/// Build a plan for a destination a repository policy rule chose.
+///
+/// `.kaseifu.toml` supplies both the pattern and the destination, so no
+/// discovered candidate exists. The rule is the decision, exactly as `--to` is
+/// for a human move, and the checks are the same as
+/// [`build_manual_move_plan`] plus one more: the destination must stay inside
+/// the workspace root that holds the policy file. Rule destinations and the
+/// directories they resolve through are therefore never able to place a file
+/// outside its repository, even when a symbolic link points elsewhere.
+///
+/// The plan carries `rule_id` as its selection (the journal records it in the
+/// `candidate_id` column, the way `rename` records its naming rule) and no
+/// classifier numbers.
+pub fn build_rule_move_plan(
+    source: &Path,
+    destination_directory: &Path,
+    workspace_root: &Path,
+    rule_id: &str,
+) -> Result<MovePlan, PlanError> {
+    if !crate::benchmark::is_inside(workspace_root, destination_directory) {
+        return Err(PlanError::DestinationOutsideWorkspace(
+            destination_directory.to_path_buf(),
+        ));
+    }
+    if crate::discovery::is_excluded_destination(&destination_directory.to_string_lossy()) {
+        return Err(PlanError::DestinationExcluded(
+            destination_directory.to_path_buf(),
+        ));
+    }
+    let destination_path = checked_destination_path(source, destination_directory)?;
+    Ok(MovePlan {
+        source: source.to_path_buf(),
+        destination_directory: destination_directory.to_path_buf(),
+        destination_path,
+        candidate_id: rule_id.to_string(),
+        confidence: 0.0,
+        margin: 0.0,
+    })
+}
+
+/// Source, destination-directory and collision checks shared by the plan
 /// builders (same order as the original `build_move_plan_with`).
 fn checked_destination_path(
     source: &Path,

@@ -93,12 +93,29 @@ pub fn execute_manual_move(
     execute_move_inner(plan, history, MoveJournal::Manual)
 }
 
+/// Execute a move a repository policy rule (`.kaseifu.toml`) chose.
+///
+/// Identical to [`execute_move`] except for the journal row: the selection
+/// column records the rule label (`rule:<name>` or `rule:rule #2`) and the
+/// classifier confidence and margin stay NULL, the same way `rename` records
+/// its naming rule. `undo` reverses the move like any other, because it needs
+/// only the two paths.
+pub fn execute_rule_move(
+    plan: &MovePlan,
+    history: &OperationHistory,
+) -> Result<MoveOutcome, MoveError> {
+    execute_move_inner(plan, history, MoveJournal::Rule)
+}
+
 /// Which selection the journal row should carry.
 enum MoveJournal {
     /// Jev selected the candidate: record its id and numbers.
     Jev,
     /// The user selected the candidate: no Jev numbers exist.
     Manual,
+    /// A repository policy rule selected the destination: no Jev numbers
+    /// exist, and the rule label is the selection.
+    Rule,
 }
 
 fn execute_move_inner(
@@ -115,6 +132,7 @@ fn execute_move_inner(
             Some(plan.margin),
         ),
         MoveJournal::Manual => (None, None, None),
+        MoveJournal::Rule => (Some(plan.candidate_id.as_str()), None, None),
     };
 
     let operation_id = history

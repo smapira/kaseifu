@@ -38,7 +38,9 @@ fn report(
         decision,
         policy,
         candidate_path: candidate_path.map(PathBuf::from),
+        target_indexed: None,
         outcome,
+        rule: None,
     }
 }
 

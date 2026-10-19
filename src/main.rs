@@ -104,6 +104,10 @@ enum Commands {
     /// answer, then either reports what would happen (the default) or
     /// performs the move with --execute. Every executed move is journaled and
     /// can be reversed with `undo`.
+    ///
+    /// A repository can pin a pattern to a destination in `.kaseifu.toml` at
+    /// its root: a matching rule decides the file on its own (no classifier
+    /// call), and the report names the rule and its reason.
     Organize {
         file: PathBuf,
         /// Move the file (default is a dry run; cannot be combined with --dry-run).
@@ -703,6 +707,23 @@ async fn handle_organize(
 ) -> Result<()> {
     let actually_move = execute && !dry_run;
 
+    // A repository policy rule decides before the API key is resolved: a rule
+    // hit needs neither Discovery nor Jev, so a governed repository works
+    // offline and without credentials. Asking for the rule first also keeps a
+    // key-less run from creating the journal before it fails.
+    if let Some(hit) = organize::rule_hit(file)? {
+        let history = OperationHistory::open(journal_path())?;
+        let report = organize::rule_report(file, hit, actually_move, &history)?;
+        return print_organize_report(
+            &report,
+            file,
+            actually_move,
+            explain,
+            format,
+            kaseifu::policy::decision::Thresholds::default(),
+        );
+    }
+
     let resolved = resolve_for_jev_command(overrides)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
     let jev = RealJevIntegration::from_resolved_full(&resolved);
@@ -718,32 +739,47 @@ async fn handle_organize(
     )
     .await?;
 
-    let thresholds = policy_thresholds(&resolved);
+    print_organize_report(
+        &report,
+        file,
+        actually_move,
+        explain,
+        format,
+        policy_thresholds(&resolved),
+    )
+}
+
+/// Render one organize report: JSON, Rich panel or plain text.
+///
+/// `explain` is a classifier view (thresholds and gaps), so a repository rule
+/// hit does not add it: the rule is the whole reason.
+fn print_organize_report(
+    report: &organize::OrganizeReport,
+    file: &Path,
+    actually_move: bool,
+    explain: bool,
+    format: OutputFormat,
+    thresholds: kaseifu::policy::decision::Thresholds,
+) -> Result<()> {
+    let explain = explain && report.rule.is_none();
     let mode = resolve_mode(format);
     if format == OutputFormat::Json {
-        let explanation = explain.then(|| organize_view::explanation_for(&report, thresholds));
+        let explanation = explain.then(|| organize_view::explanation_for(report, thresholds));
         println!(
             "{}",
             serde_json::to_string_pretty(&organize_view::json_report(
-                &report,
+                report,
                 file,
                 actually_move,
                 explanation.as_ref(),
             ))?
         );
     } else if mode.rich {
-        organize_view::print_rich(
-            &report,
-            file,
-            actually_move,
-            mode.color,
-            thresholds,
-            explain,
-        );
+        organize_view::print_rich(report, file, actually_move, mode.color, thresholds, explain);
     } else {
         print!(
             "{}",
-            organize_view::render_text_with(&report, file, actually_move, thresholds, explain)
+            organize_view::render_text_with(report, file, actually_move, thresholds, explain)
         );
     }
     Ok(())

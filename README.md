@@ -142,6 +142,17 @@ If a run finds no candidates, the file is probably not indexed yet: run
 `KASEIFU_DEBUG=1 kaseifu classify <file>` to see the search terms and hit
 count, wait for the index, or force an import with `mdimport <file>`.
 
+`organize` also states the same thing when it applies: if Spotlight has no
+entry for the file itself yet (typically seconds after it was created, copied
+or moved), the verdict carries one extra row,
+`Index  not indexed yet; candidates may be incomplete`, and `--format json`
+adds `target_indexed` (`true` / `false` / `null`, where `null` means no search
+ran). The row is a disclosure only - the policy, the planned destination and
+`--execute` behave exactly as before. Destination existence is always read from
+the filesystem (`stat`), never from the index, so an index entry for a path
+that is gone can neither become a candidate nor cause a
+`destination already exists`.
+
 ### Trust boundary
 
 Jev never receives unrestricted filesystem control. The local Rust application:
@@ -228,6 +239,40 @@ The destination must be an existing directory outside the excluded shapes
 names the reason and moves nothing. Executed moves are journaled on the
 same `[MANUAL]` path as `--select`, so `undo` reverses them, and
 `--format json` prints one `organize_to` object.
+
+### Repository policy (`.kaseifu.toml`)
+
+A repository can pin a placement decision in a file committed next to its code.
+kaseifu reads the nearest `.kaseifu.toml` at or above the file's directory (the
+search stops at your home directory), and the first matching rule decides the
+file before Discovery and before any model call:
+
+```toml
+[[rule]]
+name = "site-owned-content"                  # optional label (default: rule #N)
+match_glob = "content/{project}/**"          # path relative to the policy root
+match_contains = "sites/thch-vape"           # one string or a list; all must appear
+destination = "sites/<project>/content/"     # relative to the policy root
+reason = "a content project that names a site belongs to that site"
+```
+
+`?` matches one character, `*` anything but `/`, `**` anything including `/`,
+`{name}` one path segment as a named capture, and `<name>` in `destination`
+reads that capture. Rules are tried in file order and the first match wins;
+`match_contains` sees the relative path (directory names and the file name), not
+the file body. A rule hit skips Discovery and the classifier, so `organize`
+works in a governed repository without an API key, and the report names the rule,
+its pattern, the resolved destination and its reason (the `rule` object in
+`--format json`).
+
+Everything a rule may do stays bounded like a classifier move: the destination
+must already exist, must not be a folder kaseifu never moves into
+(`~/Library/**`, caches, system trees), must not already hold a file with that
+name, and must stay inside the workspace that holds the policy file (reported as
+REVIEW otherwise, symbolic links included). A broken policy file is an error
+that names the file and the rule and moves nothing, `--to` and `--select` still
+win over a rule, `classify` and `inspect` remain classifier views, and kaseifu
+never writes, creates or reformats `.kaseifu.toml`.
 
 ### Label a file or folder (AI naming)
 
@@ -671,6 +716,7 @@ src/
 ├── policy/              # Auto/review/refuse decisions
 ├── platform/            # macOS-specific code (FSEvents)
 ├── rename/              # Naming rules, document + image + video + folder + batch
+├── repo_policy/         # Repository policy rules (.kaseifu.toml)
 ├── semantic/            # Foundation Models bridge + semantic provider (Phase 0-2)
 ├── skill/               # Embedded agent skill (SKILL.md) + install/check/scan
 ├── storage/             # SQLite history + cache

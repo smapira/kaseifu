@@ -59,7 +59,9 @@ fn organize_report(confidence: f64, margin: f64) -> OrganizeReport {
         decision: classification.decision,
         policy,
         candidate_path: Some(PathBuf::from(SINK_DIR)),
+        target_indexed: None,
         outcome: OrganizeOutcome::Unplanable(PlanError::NotAutoMove),
+        rule: None,
     }
 }
 

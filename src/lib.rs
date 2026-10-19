@@ -34,6 +34,7 @@ pub mod platform;
 pub mod policy;
 pub mod presentation;
 pub mod rename;
+pub mod repo_policy;
 pub mod semantic;
 pub mod skill;
 pub mod storage;

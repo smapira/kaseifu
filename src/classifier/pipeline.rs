@@ -32,6 +32,8 @@ use crate::models::decision::{DecisionContext, JevDecision, validate_probabiliti
 use crate::models::file_context::NormalizedFileContext;
 use crate::{context, discovery, normalize};
 
+pub use crate::discovery::DiscoveryOutcome;
+
 /// Run the full decision pipeline using the real Spotlight (mdfind) search.
 pub async fn classify(file: &Path, jev: &dyn JevIntegration) -> Result<JevDecision> {
     classify_with_options(file, jev, &MetadataOptions::default()).await
@@ -46,13 +48,13 @@ pub async fn classify_with_options(
     jev: &dyn JevIntegration,
     image_options: &MetadataOptions,
 ) -> Result<JevDecision> {
-    let (normalized, candidates) = discover_candidates_with_options(
+    let (normalized, discovery) = discover_candidates_with_options(
         file,
         crate::platform::macos::spotlight::search,
         image_options,
     )?;
 
-    let (decision, _) = decide_from_candidates(&normalized, &candidates, jev).await?;
+    let (decision, _) = decide_from_candidates(&normalized, &discovery.candidates, jev).await?;
 
     Ok(decision)
 }
@@ -74,15 +76,37 @@ pub async fn classify_with_candidates_with_options(
     jev: &dyn JevIntegration,
     image_options: &MetadataOptions,
 ) -> Result<(JevDecision, Vec<CandidateDestination>)> {
-    let (normalized, candidates) = discover_candidates_with_options(
+    let (decision, discovery) = classify_with_candidates_and_search(
         file,
+        jev,
         crate::platform::macos::spotlight::search,
         image_options,
-    )?;
+    )
+    .await?;
 
-    let (decision, _) = decide_from_candidates(&normalized, &candidates, jev).await?;
+    Ok((decision, discovery.candidates))
+}
 
-    Ok((decision, candidates))
+/// [`classify_with_candidates_with_options`] with an injectable Spotlight
+/// search boundary, also returning what discovery learned about the index.
+///
+/// The index state travels with the candidates because a caller that shows
+/// the decision to a person (`organize`) has to be able to say that the
+/// evidence behind it may be incomplete.
+pub async fn classify_with_candidates_and_search<F>(
+    file: &Path,
+    jev: &dyn JevIntegration,
+    search: F,
+    image_options: &MetadataOptions,
+) -> Result<(JevDecision, DiscoveryOutcome)>
+where
+    F: Fn(&str, usize) -> Result<Vec<String>>,
+{
+    let (normalized, discovery) = discover_candidates_with_options(file, search, image_options)?;
+
+    let (decision, _) = decide_from_candidates(&normalized, &discovery.candidates, jev).await?;
+
+    Ok((decision, discovery))
 }
 
 /// Everything a Rich renderer needs to display one classification.
@@ -149,13 +173,14 @@ pub async fn classify_report_with_search_and_options<F>(
 where
     F: Fn(&str, usize) -> Result<Vec<String>>,
 {
-    let (normalized, candidates) = discover_candidates_with_options(file, search, image_options)?;
-    let (decision, probabilities) = decide_from_candidates(&normalized, &candidates, jev).await?;
+    let (normalized, discovery) = discover_candidates_with_options(file, search, image_options)?;
+    let (decision, probabilities) =
+        decide_from_candidates(&normalized, &discovery.candidates, jev).await?;
 
     Ok(ClassifyReport {
         decision,
         probabilities,
-        candidates,
+        candidates: discovery.candidates,
         target_filename: normalized.target.filename.clone(),
         target_extension: normalized.target.extension.clone(),
         target_file_type: normalized.file_type.clone(),
@@ -187,9 +212,9 @@ pub async fn classify_with_search_and_options<F>(
 where
     F: Fn(&str, usize) -> Result<Vec<String>>,
 {
-    let (normalized, candidates) = discover_candidates_with_options(file, search, image_options)?;
+    let (normalized, discovery) = discover_candidates_with_options(file, search, image_options)?;
 
-    let (decision, _) = decide_from_candidates(&normalized, &candidates, jev).await?;
+    let (decision, _) = decide_from_candidates(&normalized, &discovery.candidates, jev).await?;
 
     Ok(decision)
 }
@@ -203,31 +228,32 @@ pub fn discover_candidates(
     file: &Path,
     image_options: &MetadataOptions,
 ) -> Result<(NormalizedFileContext, Vec<CandidateDestination>)> {
-    discover_candidates_with_options(
+    let (normalized, discovery) = discover_candidates_with_options(
         file,
         crate::platform::macos::spotlight::search,
         image_options,
-    )
+    )?;
+    Ok((normalized, discovery.candidates))
 }
 
 /// Observe -> Normalize -> Discover with explicit image toggles (v3.2).
 ///
-/// Returns the normalized context together with the discovered candidates:
+/// Returns the normalized context together with the discovery outcome:
 /// both are needed to build the `DecisionContext` without losing
 /// information or re-deriving it.
 fn discover_candidates_with_options<F>(
     file: &Path,
     search: F,
     image_options: &MetadataOptions,
-) -> Result<(NormalizedFileContext, Vec<CandidateDestination>)>
+) -> Result<(NormalizedFileContext, DiscoveryOutcome)>
 where
     F: Fn(&str, usize) -> Result<Vec<String>>,
 {
     let raw = context::builder::build(file)?; // Observe
     let normalized = normalize::normalize_with_options(raw, image_options)?; // Normalize
-    let candidates = discovery::discover_with(normalized.clone(), search)?; // Discover
+    let outcome = discovery::discover_with_outcome(normalized.clone(), search)?; // Discover
 
-    Ok((normalized, candidates))
+    Ok((normalized, outcome))
 }
 
 /// Ask Jev to select among the discovered candidates and validate the answer.

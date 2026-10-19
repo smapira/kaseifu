@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`organize` says when Spotlight has no entry for the file yet.** After a
+  move or copy the index lags (measured here: absent right after the move,
+  present at the 5 s poll), so the candidate list can be
+  incomplete without saying so. When the file itself was not among the hits,
+  the verdict now carries one row, `Index  not indexed yet; candidates may be
+  incomplete`, and `--format json` gains the additive key `target_indexed`
+  (`true` / `false` / `null`). Nothing else changes: dry run stays the
+  default, `--execute` stays the only path that mutates anything, and the
+  policy, the planned destination and the journal keep their behavior.
+  Destination existence was already a filesystem `stat` (never an index
+  lookup): a hit whose path is gone is dropped by discovery, so an index entry
+  can neither become a candidate nor cause a `destination already exists`.
+  `tests/v110_stale_index_notice_test.rs` pins both directions.
+
 ### Added
 
 - **`kaseifu skill`: emit and check the agent skill file.** The skill that
@@ -22,6 +38,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already hold a copy. The repository's copy at
   `.github/skills/kaseifu/SKILL.md` is byte-identical to the canonical
   `src/skill/kaseifu/SKILL.md`, and a test fails if the two drift apart.
+
+- **Repository policy file (`.kaseifu.toml`).** A repository can define
+  `pattern -> destination` placement rules in a file committed next to its
+  code; kaseifu reads the nearest `.kaseifu.toml` at or above the target's
+  directory (the search stops at `$HOME`). A matching rule is stronger evidence
+  than the classifier, so it decides the file without Discovery or a Jev call:
+  `organize` works in a governed repository with no API key, and the proposal
+  (text plus one additive `rule` object in `--format json`) names the rule, its
+  pattern, its destination and its reason. `match_glob` supports `?`, `*`, `**`
+  and named captures (`{project}`), `destination` reads a capture as
+  `<project>`, and `match_contains` requires every listed substring of the
+  relative path. Every existing safety holds: dry run by default, `--execute`
+  only, journal plus `undo` (the row records `rule:<name>` with no classifier
+  numbers), never-a-destination rules, collision refusal, and a destination
+  confined to the workspace (REVIEW when it resolves outside, symbolic links
+  included). A malformed policy is an error that names the file and the rule,
+  and a repository without the file behaves exactly as before.
 
 ## [0.12.4] - 2026-10-16
 
