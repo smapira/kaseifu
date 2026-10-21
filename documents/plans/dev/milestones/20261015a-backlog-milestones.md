@@ -10,7 +10,7 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 |---|---:|---|
 | Open | 2 | `../issues/open/` |
 | Waiting for user/external resource | 6 | `../issues/waiting-user/` |
-| Done | 20 | `../issues/done/` |
+| Done | 21 | `../issues/done/` |
 
 ## M1 - Reliability and CLI clarity
 
@@ -24,6 +24,7 @@ Goal: reduce confusing user-visible behavior before adding larger features.
 | Done | [`noise-name-overmatch`](../issues/done/20261015-done-noise-name-overmatch.md) | Ordinary names such as `my-target` are no longer silently excluded. |
 | Done | [`cache-name-refusal`](../issues/done/20261015-done-cache-name-refusal.md) | Cache/temp refusals are target-specific and visible in batch output. |
 | Done | [`git-mv-stale-index`](../issues/done/20261019-done-git-mv-stale-index.md) | `organize` names an index that has no entry for the file yet; destination existence stays a `stat`, so a stale index cannot create a collision. |
+| Done | [`organize-keywords`](../issues/done/20261019-done-organize-keywords.md) | `organize --keywords` sends user keywords to Jev as `user:` decision material (never into search), the report states what was sent or that nothing was, and every existing priority (rule, `--to`, `--select`) is unchanged. |
 ## M2 - Media quality
 
 Goal: improve rename quality from real visual and document evidence.

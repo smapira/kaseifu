@@ -129,6 +129,7 @@ pub fn render_text_with(
         "Mode",
         &[generic::dry_run_banner(execute_requested, false)],
     );
+    push_keywords_section(&mut out, report);
     match &report.rule {
         Some(rule) => push_section(&mut out, "Repo policy", &rule_lines(rule, false, false)),
         None => {
@@ -171,6 +172,11 @@ fn sections(
         execute_requested,
         color,
     )])];
+    // `--keywords` (v112): input first, so the reader sees the material
+    // before the verdict it produced (or before the rule that replaced it).
+    if !report.keywords.is_empty() {
+        sections.push(Section::headed("KEYWORDS", report.keywords.rows()));
+    }
     match &report.rule {
         Some(rule) => sections.push(Section::headed(
             "REPO POLICY",
@@ -223,6 +229,14 @@ fn push_section(out: &mut String, heading: &str, lines: &[String]) {
         out.push_str(line);
         out.push('\n');
     }
+}
+
+/// The plain-text `Keywords` section, absent when the flag was not given.
+fn push_keywords_section(out: &mut String, report: &OrganizeReport) {
+    if report.keywords.is_empty() {
+        return;
+    }
+    push_section(out, "Keywords", &report.keywords.rows());
 }
 
 /// `(panel heading, plain heading)` for the outcome.
@@ -321,7 +335,8 @@ pub fn explanation_for(
 /// one source of truth. A repository policy hit adds one `rule` object (name,
 /// pattern, destination, reason) and leaves every other key in place; `policy`
 /// is then `none` because no classifier verdict exists, and `outcome` stays the
-/// authority on what happens to the file.
+/// authority on what happens to the file. `--keywords` adds one `keywords`
+/// object (`provided`, `sent_to_jev`) and nothing else.
 pub fn json_report(
     report: &OrganizeReport,
     source: &Path,
@@ -347,6 +362,11 @@ pub fn json_report(
             "destination": rule.destination.to_string_lossy(),
             "reason": rule.reason,
         });
+    }
+    // Additive (v112): one `keywords` object iff `--keywords` was given;
+    // every historical run keeps its exact key set.
+    if !report.keywords.is_empty() {
+        value["keywords"] = report.keywords.to_json();
     }
     if let Some(explanation) = explanation {
         value["explanation"] = explanation.to_json();

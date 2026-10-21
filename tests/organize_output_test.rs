@@ -41,6 +41,7 @@ fn report(
         target_indexed: None,
         outcome,
         rule: None,
+        keywords: Default::default(),
     }
 }
 

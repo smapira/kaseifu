@@ -4,6 +4,7 @@ use kaseifu::auth::acquire;
 use kaseifu::auth::keychain::{AuthError, KeychainStore, SecretStore};
 use kaseifu::auth::prompt;
 use kaseifu::classifier::jev::{JevError, JevIntegration, JevResponse, RealJevIntegration};
+use kaseifu::classifier::keywords::{KeywordDelivery, KeywordJevIntegration};
 use kaseifu::classifier::pipeline;
 use kaseifu::config::loader::validate_endpoint_value;
 use kaseifu::config::{
@@ -128,6 +129,9 @@ enum Commands {
         /// Show the confidence, margin and effective thresholds behind the verdict.
         #[arg(long)]
         explain: bool,
+        /// Extra keywords sent to Jev as decision material (repeatable, non-empty; not search terms; cannot be combined with --select or --to).
+        #[arg(long, value_name = "KEY", num_args = 1.., value_parser = keyword_value, conflicts_with_all = ["select", "to"])]
+        keywords: Vec<String>,
     },
 
     /// Restore files moved by earlier runs (newest first).
@@ -175,6 +179,9 @@ enum Commands {
         /// Show the confidence, margin and effective thresholds behind the verdict.
         #[arg(long)]
         explain: bool,
+        /// Extra keywords sent to Jev as decision material (repeatable, non-empty; not search terms).
+        #[arg(long, value_name = "KEY", num_args = 1.., value_parser = keyword_value)]
+        keywords: Vec<String>,
     },
 
     /// Watch directories and organize changed files automatically.
@@ -420,6 +427,7 @@ async fn dispatch(
             yes,
             explain,
             to,
+            keywords,
         } => {
             dispatch_organize(
                 OrganizeOptions {
@@ -430,6 +438,7 @@ async fn dispatch(
                     yes,
                     explain,
                     to,
+                    keywords,
                 },
                 format,
                 overrides,
@@ -449,7 +458,8 @@ async fn dispatch(
             all,
             verbose,
             explain,
-        } => handle_classify(&file, all, verbose, explain, format, overrides).await,
+            keywords,
+        } => handle_classify(&file, all, verbose, explain, &keywords, format, overrides).await,
         Commands::Skill { action } => handle_skill(action, format),
         _ => unreachable!("support commands route through dispatch_support"),
     }
@@ -508,9 +518,28 @@ struct OrganizeOptions {
     yes: bool,
     explain: bool,
     to: Option<PathBuf>,
+    keywords: Vec<String>,
+}
+
+/// Value parser for `--keywords`: trim the edges and refuse anything empty.
+///
+/// Rejection happens at parse time (exit 2, before any file, key or journal
+/// is touched), so a stray `--keywords ""` can never become a run that
+/// half-happens. Values are stored trimmed; nothing else is normalized.
+fn keyword_value(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        Err("keyword must not be empty".to_string())
+    } else {
+        Ok(trimmed.to_string())
+    }
 }
 
 /// `organize` with or without the interactive selection (ZC-13).
+///
+/// `--keywords` reaches only the classifier branch: clap rejects the flag
+/// together with `--to` or `--select` (both decide without Jev), so those two
+/// branches cannot observe it.
 async fn dispatch_organize(
     options: OrganizeOptions,
     format: OutputFormat,
@@ -541,6 +570,7 @@ async fn dispatch_organize(
             options.execute,
             options.dry_run,
             options.explain,
+            &options.keywords,
             format,
             overrides,
         )
@@ -696,12 +726,15 @@ fn handle_scan(path: &Path, format: OutputFormat) {
 /// `organize`: decide, plan, then dry-run or move (journaled).
 ///
 /// `--explain` adds the threshold view (ZC-5); the default output keeps the
-/// historical sections.
+/// historical sections. `--keywords` (v112) ride the boundary decorator into
+/// the Jev request only; a repository rule wins over them and the report says
+/// so instead of dropping them silently.
 async fn handle_organize(
     file: &Path,
     execute: bool,
     dry_run: bool,
     explain: bool,
+    keywords: &[String],
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
@@ -713,7 +746,10 @@ async fn handle_organize(
     // key-less run from creating the journal before it fails.
     if let Some(hit) = organize::rule_hit(file)? {
         let history = OperationHistory::open(journal_path())?;
-        let report = organize::rule_report(file, hit, actually_move, &history)?;
+        let mut report = organize::rule_report(file, hit, actually_move, &history)?;
+        // The rule wins over `--keywords`: nothing was sent to Jev, and the
+        // report states that rather than hiding the flag.
+        report.keywords = KeywordDelivery::unused(keywords);
         return print_organize_report(
             &report,
             file,
@@ -726,10 +762,14 @@ async fn handle_organize(
 
     let resolved = resolve_for_jev_command(overrides)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
-    let jev = RealJevIntegration::from_resolved_full(&resolved);
+    let real = RealJevIntegration::from_resolved_full(&resolved);
+    // The one place `--keywords` enter the decision - the same decorator
+    // `classify` uses - which also records whether Jev was consulted at all
+    // (no candidates means no call, and the report must say so honestly).
+    let jev = KeywordJevIntegration::new(&real, keywords);
     let history = OperationHistory::open(journal_path())?;
 
-    let report = organize::organize_file_with_full(
+    let mut report = organize::organize_file_with_full(
         file,
         &jev,
         &history,
@@ -738,6 +778,7 @@ async fn handle_organize(
         &kaseifu::context::image_metadata::MetadataOptions::from_resolved(&resolved.metadata),
     )
     .await?;
+    report.keywords = jev.delivery();
 
     print_organize_report(
         &report,
@@ -2204,28 +2245,36 @@ fn handle_discover(file: &Path, all: bool, verbose: bool, format: OutputFormat) 
 }
 
 /// `classify`: full pipeline without any move (execution is a later phase).
+///
+/// `--keywords` (v112) ride the same boundary decorator as `organize`; the
+/// decision object gains the additive `keywords` key when the flag is given.
 async fn handle_classify(
     file: &Path,
     all: bool,
     verbose: bool,
     explain: bool,
+    keywords: &[String],
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
     let resolved = resolve_for_jev_command(overrides)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
-    let jev = RealJevIntegration::from_resolved_full(&resolved);
+    let real = RealJevIntegration::from_resolved_full(&resolved);
     let observer = ObservingJevIntegration {
-        inner: &jev,
+        inner: &real,
         verbose,
     };
+    // Decorator outside the observer: the verbose view then prints the
+    // keywords too, exactly as Jev will receive them.
+    let jev = KeywordJevIntegration::new(&observer, keywords);
 
-    let report = pipeline::classify_report_with_options(
+    let mut report = pipeline::classify_report_with_options(
         file,
-        &observer,
+        &jev,
         &kaseifu::context::image_metadata::MetadataOptions::from_resolved(&resolved.metadata),
     )
     .await?;
+    report.keywords = jev.delivery();
     // Rust Policy verdict: Jev's `move_to` selection is never shown
     // as a move permission; AutoMove/Review/Leave comes from here.
     let policy =
@@ -2241,20 +2290,28 @@ async fn handle_classify(
             policy_thresholds(&resolved),
             explain,
         );
-    } else if explain {
+    } else {
         // Additive only: the decision object keeps every existing key and
-        // gains the explanation (ZC-5).
+        // gains `keywords` when --keywords was given (v112) and, with
+        // --explain, the explanation (ZC-5).
         let mut value = serde_json::to_value(&report.decision)?;
         if let Some(object) = value.as_object_mut() {
-            object.insert(
-                "explanation".to_string(),
-                classify_view::decision_explanation(&report, &policy, policy_thresholds(&resolved))
+            if !report.keywords.is_empty() {
+                object.insert("keywords".to_string(), report.keywords.to_json());
+            }
+            if explain {
+                object.insert(
+                    "explanation".to_string(),
+                    classify_view::decision_explanation(
+                        &report,
+                        &policy,
+                        policy_thresholds(&resolved),
+                    )
                     .to_json(),
-            );
+                );
+            }
         }
         println!("{}", serde_json::to_string_pretty(&value)?);
-    } else {
-        println!("{}", serde_json::to_string_pretty(&report.decision)?);
     }
     Ok(())
 }
@@ -2295,6 +2352,15 @@ impl JevIntegration for ObservingJevIntegration<'_> {
             eprintln!("== Semantic signals ==");
             for signal in context.semantic_signals() {
                 eprintln!("  {signal}");
+            }
+
+            // v112: user input stays visible next to the derived signals it
+            // was sent with (the decorator attached it before this view ran).
+            if !context.user_keywords().is_empty() {
+                eprintln!("== User keywords ==");
+                for keyword in context.user_keywords() {
+                    eprintln!("  {keyword}");
+                }
             }
 
             eprintln!("== Candidates sent to Jev ==");

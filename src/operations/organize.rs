@@ -7,6 +7,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::classifier::jev::JevIntegration;
+use crate::classifier::keywords::KeywordDelivery;
 use crate::classifier::pipeline;
 use crate::models::decision::{DecisionAction, JevDecision};
 use crate::operations::mover::{self, MoveOutcome};
@@ -41,6 +42,10 @@ pub struct OrganizeReport {
     /// hit: Discovery and Jev were not consulted, so `decision` carries no
     /// selection and `policy` is [`DecisionAction::None`].
     pub rule: Option<RuleMatch>,
+    /// The `--keywords` input for this run (v112): what the user provided and
+    /// what actually reached the Jev request (empty when the flag was not
+    /// given, so historical output stays byte-identical).
+    pub keywords: KeywordDelivery,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -196,6 +201,9 @@ where
         target_indexed,
         outcome,
         rule: None,
+        // The CLI attaches `--keywords` after the run; the pipeline itself
+        // never sees them (the boundary decorator does).
+        keywords: KeywordDelivery::default(),
     })
 }
 
@@ -237,6 +245,7 @@ pub fn rule_report(
         target_indexed: None,
         outcome,
         rule: Some(hit),
+        keywords: KeywordDelivery::default(),
     })
 }
 

@@ -26,6 +26,7 @@ use anyhow::{Result, anyhow};
 use std::path::Path;
 
 use super::jev::JevIntegration;
+use super::keywords::KeywordDelivery;
 use crate::context::image_metadata::MetadataOptions;
 use crate::models::candidate::CandidateDestination;
 use crate::models::decision::{DecisionContext, JevDecision, validate_probabilities};
@@ -125,6 +126,10 @@ pub struct ClassifyReport {
     pub target_file_type: Option<String>,
     pub target_size_bytes: u64,
     pub semantic_signals: Vec<String>,
+    /// The `--keywords` input for this run (v112); empty when the flag was
+    /// not given, so historical output stays byte-identical. Set by the CLI
+    /// from the boundary decorator after the run.
+    pub keywords: KeywordDelivery,
 }
 
 /// Run the full decision pipeline and keep everything needed for display.
@@ -186,6 +191,7 @@ where
         target_file_type: normalized.file_type.clone(),
         target_size_bytes: normalized.size_bytes,
         semantic_signals: normalized.semantic_signals.clone(),
+        keywords: KeywordDelivery::default(),
     })
 }
 

@@ -290,18 +290,24 @@ fn body_sections(
     let explanation = decision_explanation(report, policy, thresholds);
     let near = explanation.near_line();
 
-    let mut sections = vec![
-        Section::plain(target_head(report, color)),
-        Section::headed(
-            "JEV RANKING",
-            ranking_lines(report, &ranked, &by_id, selected, show_all, verbose, color),
-        ),
-        Section::headed(
-            "JEV DECISION",
-            decision_lines(report, &by_id, selected, color),
-        ),
-        Section::headed("POLICY", policy_lines(policy, &by_id, color, near)),
-    ];
+    let mut sections = vec![Section::plain(target_head(report, color))];
+    // `--keywords` (v112): shown before the ranking, next to the target they
+    // qualify; absent when the flag was not given.
+    if !report.keywords.is_empty() {
+        sections.push(Section::headed("KEYWORDS", report.keywords.rows()));
+    }
+    sections.push(Section::headed(
+        "JEV RANKING",
+        ranking_lines(report, &ranked, &by_id, selected, show_all, verbose, color),
+    ));
+    sections.push(Section::headed(
+        "JEV DECISION",
+        decision_lines(report, &by_id, selected, color),
+    ));
+    sections.push(Section::headed(
+        "POLICY",
+        policy_lines(policy, &by_id, color, near),
+    ));
     if explain {
         let destination = explain::destination_display(
             report.decision.destination_id.as_deref(),

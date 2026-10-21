@@ -12,6 +12,14 @@ pub struct DecisionContext {
     semantic_signals: Vec<String>,
     #[serde(default, skip_serializing)]
     candidates: Vec<DecisionCandidate>,
+    /// User-provided keywords from `--keywords` (v112): decision material
+    /// only. Skipped in this struct's own serialization like every other
+    /// content field; the adapter maps them onto `state.semantic_signals`
+    /// with the `user: ` prefix. They are never merged into
+    /// `semantic_signals`, so the domain can still tell user input from
+    /// derived signals and Discovery never sees them.
+    #[serde(default, skip_serializing)]
+    user_keywords: Vec<String>,
     /// Normalized image metadata for Jev (v3.2; `None` for non-images).
     ///
     /// Skipped in this struct's own serialization (the adapter maps it onto
@@ -97,6 +105,7 @@ impl DecisionContext {
             target,
             semantic_signals,
             candidates: decision_candidates,
+            user_keywords: Vec::new(),
             image_metadata: None,
         }
     }
@@ -104,6 +113,15 @@ impl DecisionContext {
     /// Attach image metadata (v3.2; builder for tests and redaction checks).
     pub fn with_image_metadata(mut self, meta: Option<ImageMetadata>) -> Self {
         self.image_metadata = meta;
+        self
+    }
+
+    /// Attach the user's `--keywords` (v112; replaces any previous list).
+    ///
+    /// Content signals stay untouched: only the adapter turns these into
+    /// `user: <KEY>` entries on the wire, and only when it builds the request.
+    pub fn with_user_keywords(mut self, keywords: &[String]) -> Self {
+        self.user_keywords = keywords.to_vec();
         self
     }
 
@@ -139,6 +157,11 @@ impl DecisionContext {
     /// Semantic signals extracted for this target.
     pub fn semantic_signals(&self) -> &[String] {
         &self.semantic_signals
+    }
+
+    /// The user's `--keywords` for this decision (verbatim, no prefix).
+    pub fn user_keywords(&self) -> &[String] {
+        &self.user_keywords
     }
 
     /// The offered candidates; Jev may select one of these or `NONE`.

@@ -42,6 +42,7 @@ fn report(probs: &[(&str, f64)], selected: &str, n_cands: usize) -> ClassifyRepo
         target_file_type: None,
         target_size_bytes: 126597,
         semantic_signals: vec!["K:PDF".to_string(), "F:THCO".to_string()],
+        keywords: Default::default(),
     }
 }
 

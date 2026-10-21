@@ -49,6 +49,7 @@ fn classify_report(confidence: f64, margin: f64) -> ClassifyReport {
         target_file_type: None,
         target_size_bytes: 126597,
         semantic_signals: vec!["K:JPEG".to_string()],
+        keywords: Default::default(),
     }
 }
 
@@ -62,6 +63,7 @@ fn organize_report(confidence: f64, margin: f64) -> OrganizeReport {
         target_indexed: None,
         outcome: OrganizeOutcome::Unplanable(PlanError::NotAutoMove),
         rule: None,
+        keywords: Default::default(),
     }
 }
 

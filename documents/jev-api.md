@@ -29,6 +29,7 @@ offline; no test touches the live API.
 |---|---|
 | `DecisionContext.target` | `state.target` |
 | `DecisionContext.semantic_signals` | `state.semantic_signals` (content signals verbatim + availability markers derived by the adapter from `image_metadata`, v0.4.1) |
+| `DecisionContext.user_keywords` (`--keywords`) | `state.semantic_signals` entries prefixed `user: ` (v112; appended between the content signals and the availability markers; no new top-level request field) |
 | candidate `id` + `path` + `evidence_count` + `reasons` | `questions.destination.criteria[id]` description |
 | — (always added) | `criteria["NONE"]` |
 | `answers.destination.choice` | `JevResponse.destination_id` (verbatim; domain validates) |

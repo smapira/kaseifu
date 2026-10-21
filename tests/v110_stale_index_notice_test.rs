@@ -411,6 +411,7 @@ fn v110_no_notice_without_an_index_claim() {
             outcome: OrganizeOutcome::WouldMove {
                 destination: selected.join("ai-generated-text.md"),
             },
+            keywords: Default::default(),
         };
 
         let text = strip_ansi(&organize_view::render_text(&report, &target, false));

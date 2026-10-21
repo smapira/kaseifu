@@ -206,6 +206,15 @@ prints the result as one structured object (`decision`, `policy`,
 `would_move`, `moved`, was `refused` or could not be planned, with a machine
 `kind` and a human `reason`. `--explain` adds an `explanation` object.
 
+`--keywords KEY` (repeatable; one occurrence may take several values) adds
+user words to the decision material sent to Jev, never to the Spotlight
+search, so the candidate list does not change. The report shows them: a
+`Keywords` section in text and Rich output, and the additive `keywords`
+object (`provided`, `sent_to_jev`) in `--format json`. A repository rule
+still decides first and the report says the keywords were not used;
+`--keywords` cannot be combined with `--select` or `--to`, which never
+consult Jev. `classify` accepts the same flag.
+
 ### Choose the destination yourself
 
 Jev's choice is a suggestion; `--select` lets you pick from the candidate

@@ -15,6 +15,7 @@
 //! - confidence/margin calculation (`confidence_and_margin`)
 //! - decision construction (`JevDecision::from_selection`)
 
+use crate::classifier::keywords::USER_KEYWORD_PREFIX;
 use crate::models::decision::{DecisionCandidate, DecisionContext};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -388,9 +389,10 @@ impl SystemOneRequest {
     ///
     /// Mapping stays on real `/v1/systemone` fields only: image context
     /// extends the free-form `state.target` object and the
-    /// `state.semantic_signals` list (content signals plus availability
-    /// markers derived from `image_metadata`; v0.4.1). No new top-level API
-    /// fields are introduced and no Rust-side fit score is computed.
+    /// `state.semantic_signals` list (content signals, user keywords with the
+    /// `user: ` prefix (v112), plus availability markers derived from
+    /// `image_metadata`; v0.4.1). No new top-level API fields are introduced
+    /// and no Rust-side fit score is computed.
     fn from_context_with_privacy(
         context: &DecisionContext,
         model: &str,
@@ -507,6 +509,12 @@ fn dimensions_for(
 /// the incoming list are dropped, and every emitted marker is backed by a
 /// present field. A withheld field leaves no trace: neither its value nor an
 /// "available" marker is forwarded when its flag is off.
+///
+/// User keywords (`--keywords`, v112) are appended between the two: they are
+/// prefixed `user: ` so origin stays visible, they ride the existing list
+/// instead of a new request field, and they deliberately bypass the marker
+/// filter above (a keyword must never be silently dropped because it reads
+/// like a marker). With no keywords the list is byte-identical to before.
 fn signals_for_jev(
     context: &DecisionContext,
     send_capture_time: bool,
@@ -518,6 +526,12 @@ fn signals_for_jev(
         .filter(|signal| !is_availability_marker(signal))
         .cloned()
         .collect();
+    signals.extend(
+        context
+            .user_keywords()
+            .iter()
+            .map(|keyword| format!("{USER_KEYWORD_PREFIX}{keyword}")),
+    );
     signals.extend(image_availability_signals(
         context.image_metadata(),
         send_capture_time,

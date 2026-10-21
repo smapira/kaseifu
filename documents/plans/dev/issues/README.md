@@ -56,6 +56,7 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | [`20261019-done-skill-distribution.md`](done/20261019-done-skill-distribution.md) | n/a (user request) | `kaseifu skill` emits the embedded agent skill and checks copies by sha256. |
 | [`20261019-done-git-mv-stale-index.md`](done/20261019-done-git-mv-stale-index.md) | M1 | `organize` discloses an index that has no entry for the file yet; destination existence stays a `stat`. |
 | [`20261019-done-repo-policy-file.md`](done/20261019-done-repo-policy-file.md) | M3 | `.kaseifu.toml` rules decide `organize`/`watch` before the classifier; destinations stay inside the workspace. |
+| [`20261019-done-organize-keywords.md`](done/20261019-done-organize-keywords.md) | M1 | `organize`/`classify` accept `--keywords`; keywords reach Jev as `user:` signals only, and the report says what was sent (or that nothing was). |
 
 ## Maintenance rules
 

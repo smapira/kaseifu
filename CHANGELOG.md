@@ -25,6 +25,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`organize --keywords KEY KEY`: user keywords as Jev decision material.**
+  The flag (repeatable; one occurrence may take several values) sends each
+  keyword to Jev as a `user:` entry in the existing `state.semantic_signals`
+  list, and never into the Spotlight search, so candidate lists and runs
+  without the flag are unchanged. The report gains a `Keywords` section
+  (text and Rich panel) and the additive `keywords` object (`provided`,
+  `sent_to_jev`) in `--format json`; `sent_to_jev` is empty when Jev was not
+  consulted, and a repository rule still decides first with the report
+  saying the keywords were not used. `--keywords` cannot be combined with
+  `--select` or `--to` (neither consults Jev), empty values are refused at
+  parse time, and `classify` accepts the same flag. Pinned by
+  `tests/v112_organize_keywords_test.rs` (wire payload, report shape,
+  priority, validation, help).
+
 - **`kaseifu skill`: emit and check the agent skill file.** The skill that
   tells an agent in another repository how to call kaseifu is embedded in the
   binary and can now be placed with `kaseifu skill install --to <repo>
