@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`organize` and `classify` refuse a folder instead of deciding one.**
+  Issue #14 (real use of 0.13.0): a folder given to `organize` ran the whole
+  file pipeline and printed a plausible verdict (exit 0, "no move") - only the
+  plan layer refused the move. The target type is checked at the boundary now,
+  before the repository policy, the API key, the journal and the network, and
+  the refusal names the command that takes folders (`kaseifu label <folder>`;
+  `watch --path <dir>` still watches a tree).
+  `tests/v113_folder_target_test.rs` pins every shape (`--execute`, `--to`,
+  `--select`, `--keywords`) plus `inspect`, which still reads a folder.
+
+- **A `{name}` in a rule `destination` is refused instead of becoming a
+  directory name.** A destination reads a capture as `<name>`; the pattern
+  spelling `{name}` was taken literally (`sites/{site}/content/` filed files
+  under a folder named `{site}`), which the documented example itself tripped
+  over while it was being written. The policy now fails to load, naming the
+  file and the rule - the same "a typo fails loudly" rule the schema already
+  follows for unknown keys.
+
+### Changed
+
+- **The repository policy example is the one that works.** Issue #13: the
+  README and module example (`match_glob = "content/{project}/**"` with
+  `match_contains = "sites/thch-vape"` and
+  `destination = "sites/<project>/content/"`) read like "this content belongs
+  to that site" but filed the file under the *project* capture, and the real
+  case from #12 - a project whose path never names its site - could not match
+  it at all. The example now captures the site itself
+  (`content/{project}/sites/{site}/**` into `sites/<site>/content/`), the prose
+  states what each matcher sees (the whole path relative to the policy root,
+  never the file body), and a second snippet shows the pinned-site rule for a
+  project whose path does not name its site. `tests/v111_repo_policy_test.rs`
+  pins the example (b17) next to the mechanism fixture it already had.
+
+- **The README separates the three destination refusals.** Issue #15: one
+  sentence said a destination outside the workspace is "reported as REVIEW
+  (symbolic links included)", while an absolute path or a `.`/`..` element is
+  rejected when the policy is read (exit 1, naming the policy file and the
+  rule) and only a symbolic link resolves to REVIEW.
+
+- **`skill check` has its own exit code for a missing copy (3).** Issue #15: a
+  CI step could not tell "this repository has no copy" from "the copy is
+  stale", because both were exit 1. `match` = 0, `stale` = 1, no file at the
+  path = 3; every other failure stays 1 and a wrong command line stays 2.
+
+### Added
+
+- **The agent skill covers `.kaseifu.toml`, `--keywords` and the index
+  disclosure.** Issue #15: an agent that reads the skill rather than the README
+  learned nothing about repository rules, user keywords or `target_indexed`.
+  The skill now has a "Repository policy (`.kaseifu.toml`)" section, the
+  keyword and index rows, the one-file rule for `organize` / `classify`, and
+  exit code 3.
+
 ## [0.13.0] - 2026-10-21
 
 ### Fixed

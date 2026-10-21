@@ -7,10 +7,9 @@
 //! ```toml
 //! [[rule]]
 //! name = "site-owned-content"
-//! match_glob = "content/{project}/**"
-//! match_contains = "sites/thch-vape"
-//! destination = "sites/<project>/content/"
-//! reason = "a content project that names a site belongs to that site"
+//! match_glob = "content/{project}/sites/{site}/**"
+//! destination = "sites/<site>/content/"
+//! reason = "content filed under a site folder belongs to that site"
 //! ```
 //!
 //! A matching rule is stronger evidence than the classifier, so a hit decides
@@ -19,6 +18,16 @@
 //! default, `--execute` only, journal plus `undo`, never-a-destination rules,
 //! collision refusal). A repository without the file behaves exactly as before.
 //!
+//! # Matching
+//!
+//! `match_glob` must match the whole path relative to the workspace root, so
+//! `content/{project}/**` covers everything under `content/<project>/` and
+//! nothing outside it. `match_contains` (optional; every entry must appear) is a
+//! substring test on the same relative path: directory names and the file name,
+//! never the file body. A site the path does not name cannot be matched from the
+//! path at all; a project that belongs to one site pins that destination in its
+//! own rule instead.
+//!
 //! # Workspace
 //!
 //! The workspace of a file is the nearest directory at or above the file's own
@@ -26,9 +35,11 @@
 //! directory, so a policy file above the home cannot govern a person's files (a
 //! file outside the home is searched up to the filesystem root, so a project on
 //! another volume can carry its own policy). The workspace root is also the
-//! boundary for a rule's destination: a destination that resolves outside it is
-//! refused (REVIEW), and the policy file is read-only input that kaseifu never
-//! writes.
+//! boundary for a rule's destination: a destination written as an absolute path,
+//! or with a `.` or `..` element, is rejected when the file is read (an error
+//! that names the file and the rule), and a destination that resolves outside
+//! the root - through a symbolic link - is refused (REVIEW). The policy file is
+//! read-only input that kaseifu never writes.
 //!
 //! This module owns parsing, matching and destination resolution. Whether a
 //! resolved destination may actually be used (existing directory, not a
@@ -270,6 +281,12 @@ fn validate_destination_path(destination: &Template) -> Result<()> {
     if path.is_absolute() {
         bail!("destination `{text}` must be relative to the repository root");
     }
+    // A capture is written `<name>` in a destination; `{name}` is the pattern
+    // spelling and would become a literal directory name, so a rule copied from
+    // a `match_glob` fails here instead of filing files under `{site}`.
+    if text.contains('{') || text.contains('}') {
+        bail!("destination `{text}` must read a capture as `<name>`, not `{{name}}`");
+    }
     for component in path.components() {
         match component {
             Component::Normal(_) => {}
@@ -394,6 +411,9 @@ mod tests {
             r#"[[rule]]
                match_glob = "content/*"
                destination = "sites/<missing>""#,
+            r#"[[rule]]
+               match_glob = "content/{site}/**"
+               destination = "sites/{site}/content/""#,
             r#"[[rule]]
                match_glob = "content/*"
                match_contains = [""]

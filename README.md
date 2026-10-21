@@ -181,6 +181,8 @@ Run the full decision pipeline — observe, normalize, discover, Jev — and pri
 kaseifu classify ~/Desktop/example.pdf
 ```
 
+Like `organize`, it takes one regular file: a folder is refused.
+
 `--explain` adds the numbers behind the verdict: the confidence, the margin
 and the effective thresholds, plus the destination the selection resolved to.
 When a decision lands just below the auto-move thresholds, the display also
@@ -193,6 +195,11 @@ Run the full pipeline and print what *would* happen.
 ```bash
 kaseifu organize ~/Desktop/example.pdf
 ```
+
+`organize` and `classify` decide the placement of one regular file. A folder is
+refused before the repository policy, the API key and the journal are touched
+(`kaseifu label <folder>` names folders, and `watch --path <dir>` watches a
+directory tree).
 
 Pass `--execute` to actually move the file:
 
@@ -258,30 +265,50 @@ file before Discovery and before any model call:
 
 ```toml
 [[rule]]
-name = "site-owned-content"                  # optional label (default: rule #N)
-match_glob = "content/{project}/**"          # path relative to the policy root
-match_contains = "sites/thch-vape"           # one string or a list; all must appear
-destination = "sites/<project>/content/"     # relative to the policy root
-reason = "a content project that names a site belongs to that site"
+name = "site-owned-content"                       # optional label (default: rule #N)
+match_glob = "content/{project}/sites/{site}/**"  # the whole path, relative to the policy root
+destination = "sites/<site>/content/"             # <site> reads the capture of the same name
+reason = "content filed under a site folder belongs to that site"
 ```
 
 `?` matches one character, `*` anything but `/`, `**` anything including `/`,
 `{name}` one path segment as a named capture, and `<name>` in `destination`
-reads that capture. Rules are tried in file order and the first match wins;
-`match_contains` sees the relative path (directory names and the file name), not
-the file body. A rule hit skips Discovery and the classifier, so `organize`
-works in a governed repository without an API key, and the report names the rule,
-its pattern, the resolved destination and its reason (the `rule` object in
+reads that capture (the braces are the pattern spelling only: a `{name}` in a
+destination is refused instead of quietly becoming a directory name). Rules are
+tried in file order and the first match wins.
+
+The pattern must match the whole path, written relative to the directory that
+holds the policy file: `content/{project}/**` covers everything under
+`content/<project>/` and nothing outside it, so a file under `sites/` is never
+matched by it. `match_contains` (one string or a list; every string must appear)
+sees the same relative path - directory names and the file name, never the file
+body. A rule hit skips Discovery and the classifier, so `organize` works in a
+governed repository without an API key, and the report names the rule, its
+pattern, the resolved destination and its reason (the `rule` object in
 `--format json`).
+
+When the site is not in the path - a project folder whose content belongs to one
+site - name the project in the pattern and pin the destination instead:
+
+```toml
+[[rule]]
+name = "hearing-blog-to-thch-vape"
+match_glob = "content/cannabis-rescheduling-hearing-2026/**"
+destination = "sites/thch-vape/content/"
+reason = "this project is commissioned for thch-vape"
+```
 
 Everything a rule may do stays bounded like a classifier move: the destination
 must already exist, must not be a folder kaseifu never moves into
-(`~/Library/**`, caches, system trees), must not already hold a file with that
-name, and must stay inside the workspace that holds the policy file (reported as
-REVIEW otherwise, symbolic links included). A broken policy file is an error
-that names the file and the rule and moves nothing, `--to` and `--select` still
-win over a rule, `classify` and `inspect` remain classifier views, and kaseifu
-never writes, creates or reformats `.kaseifu.toml`.
+(`~/Library/**`, caches, system trees) and must not already hold a file with that
+name. A destination written as an absolute path, or with a `.` or `..` element,
+is rejected when the policy is read: the run fails (exit 1) naming the policy
+file and the rule, and nothing moves. A destination that resolves outside the
+workspace that holds the policy file - through a symbolic link - is planned as
+REVIEW instead. A broken policy file is an error that names the file and the rule
+and moves nothing, `--to` and `--select` still win over a rule, `classify` and
+`inspect` remain classifier views, and kaseifu never writes, creates or reformats
+`.kaseifu.toml`.
 
 ### Label a file or folder (AI naming)
 
@@ -626,7 +653,7 @@ and compares copies with it:
 kaseifu skill install --to .                                 # preview: writes nothing
 kaseifu skill install --to . --write                         # place .github/skills/kaseifu/SKILL.md
 kaseifu skill install --to . --write --force                 # replace a copy that was edited
-kaseifu skill check --path .github/skills/kaseifu/SKILL.md   # match = exit 0, stale = exit 1
+kaseifu skill check --path .github/skills/kaseifu/SKILL.md   # match = 0, stale = 1, no file = 3
 kaseifu skill install --scan ~/Code --write                  # every repository below that holds a copy
 ```
 
@@ -643,6 +670,12 @@ One CI step keeps a copy honest:
 ```yaml
 - run: kaseifu skill check --path .github/skills/kaseifu/SKILL.md
 ```
+
+The exit code is the report that step reads: 0 when the copy matches, 1 when it
+is stale (refresh it with `--write --force`), and 3 when there is no file at that
+path at all - "this repository never had a copy" is a different repair from
+"this copy must be refreshed", and a CI step can tell them apart without
+reading the text.
 
 The canonical file is `src/skill/kaseifu/SKILL.md` in this repository (embedded
 with `include_str!`), and the repository's own copy at

@@ -40,7 +40,7 @@ T38,organize,organize,policy=AutoMove (confidence≥0.85 margin≥0.40),自動�
 T39,organize,organize,policy=Review (0.60≤confidence<0.85),移動されない「policy refused」,MUST,,
 T40,organize,organize,policy=Leave (confidence<0.60),移動されない「policy refused」,MUST,,
 T41,organize,organize,存在しないファイル: kaseifu organize /tmp/no-such-file,エラー「cannot resolve」が表示される,MUST,,
-T42,organize,organize,ディレクトリを対象に指定,移動されない(SourceNotAFile),MEDIUM,,
+T42,organize,organize,ディレクトリを対象に指定,exit 1 でフォルダを拒否（`kaseifu label <folder>` を案内、何も読まない・動かさない）,MEDIUM,,
 T43,organize,organize,ジャーナル記録: 移動後にDB確認,data/kaseifu.db に成功行が記録される,MUST,,
 T44,organize,organize,権限エラー: 書き込み不可ディレクトリへの移動,MoveFailed エラーが表示される元ファイルは保持,MEDIUM,,
 T45,organize,organize,Jevエラー時,organize全体がエラー終了する,MEDIUM,,

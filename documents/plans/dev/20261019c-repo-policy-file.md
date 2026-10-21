@@ -25,6 +25,15 @@ destination = "sites/<project>/content/"
 reason = "a content project that names a site belongs to that site"
 ```
 
+> Corrected 2026-10-21 (issue
+> [#13](https://github.com/smapira/kaseifu/issues/13)): this block stays as the
+> record of what was built and verified (B4 pins its destination), but the
+> destination follows the *project* capture, not the site, and the `reason`
+> therefore over-promised. The example the docs print now captures the site
+> itself (`match_glob = "content/{project}/sites/{site}/**"` with
+> `destination = "sites/<site>/content/"`); see
+> `20261021a-real-use-feedback.md`.
+
 - A rule hit is stronger evidence than the classifier: it decides the file
   without Discovery and without a model call, and the proposal states the rule
   name and the author's reason.

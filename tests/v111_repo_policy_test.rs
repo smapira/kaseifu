@@ -104,14 +104,28 @@ fn plain(report: &OrganizeReport, file: &Path) -> String {
     organize_view::render_text_with(report, file, false, Thresholds::default(), false)
 }
 
-/// The site-owned content rule (the issue's shape).
+/// The rule shape issue #12 sketched, used as the mechanism fixture here: a
+/// named capture read by the destination plus an extra `match_contains` filter.
+/// The destination follows the *project* capture, not the site, so the reason
+/// says exactly that; the documented example captures the site itself and is
+/// pinned by `b17`.
 const SITE_RULE: &str = r#"
 [[rule]]
 name = "site-owned-content"
 match_glob = "content/{project}/**"
 match_contains = "sites/thch-vape"
 destination = "sites/<project>/content/"
-reason = "a content project that names a site belongs to that site"
+reason = "content of a project that names a site stays under that project"
+"#;
+
+/// The example the README and the module documentation print: the site is
+/// captured from the path, so the destination follows the site.
+const DOCUMENTED_RULE: &str = r#"
+[[rule]]
+name = "site-owned-content"
+match_glob = "content/{project}/sites/{site}/**"
+destination = "sites/<site>/content/"
+reason = "content filed under a site folder belongs to that site"
 "#;
 
 // ---------------------------------------------------------------------------
@@ -209,7 +223,7 @@ fn b4_glob_captures_and_contains_decide_the_rule() {
     assert_eq!(hit.match_glob, "content/{project}/**");
     assert_eq!(
         hit.reason.as_deref(),
-        Some("a content project that names a site belongs to that site")
+        Some("content of a project that names a site stays under that project")
     );
     assert_eq!(
         hit.destination,
@@ -567,7 +581,7 @@ async fn b15_the_report_names_the_rule_and_its_reason() {
     assert!(text.contains("site-owned-content"), "got:\n{text}");
     assert!(text.contains("content/{project}/**"), "got:\n{text}");
     assert!(
-        text.contains("a content project that names a site belongs to that site"),
+        text.contains("content of a project that names a site stays under that project"),
         "got:\n{text}"
     );
     assert!(
@@ -582,7 +596,7 @@ async fn b15_the_report_names_the_rule_and_its_reason() {
     assert_eq!(json["rule"]["match_glob"], "content/{project}/**");
     assert_eq!(
         json["rule"]["reason"],
-        "a content project that names a site belongs to that site"
+        "content of a project that names a site stays under that project"
     );
     assert_eq!(
         json["rule"]["destination"],
@@ -655,4 +669,41 @@ fn b16_the_cli_reports_a_rule_hit_without_an_api_key() {
     assert!(stdout.contains("Would move"), "got:\n{stdout}");
     assert!(stdout.is_ascii(), "output stays ASCII:\n{stdout}");
     assert!(file.exists());
+}
+
+/// Issue #13: the documented example routes the file to the site it names, and
+/// a project whose path has no site segment keeps the classifier path.
+#[tokio::test]
+async fn b17_the_documented_example_routes_to_the_site() {
+    let sandbox = Sandbox::new("documented-example");
+    sandbox.policy("repo", DOCUMENTED_RULE);
+    sandbox.dir("repo/sites/thch-vape/content");
+    let file = sandbox.file("repo/content/cannabis-hearing/sites/thch-vape/brief.md");
+    let history = OperationHistory::open_in_memory().expect("journal");
+
+    let hit = repo_policy::evaluate(&file, Some(&sandbox.root))
+        .expect("evaluation succeeds")
+        .expect("the rule matches");
+    assert_eq!(
+        hit.destination,
+        sandbox.path("repo/sites/thch-vape/content")
+    );
+
+    let report = dry_run(&file, &history, &no_classifier()).await;
+    assert_eq!(
+        report.outcome,
+        OrganizeOutcome::WouldMove {
+            destination: sandbox.path("repo/sites/thch-vape/content/brief.md")
+        }
+    );
+
+    // A path that names only the project (no site segment) is not matched by
+    // this pattern: such a project pins its site in a rule of its own.
+    let project_only = sandbox.file("repo/content/cannabis-hearing/brief.md");
+    assert!(
+        repo_policy::evaluate(&project_only, Some(&sandbox.root))
+            .expect("evaluation succeeds")
+            .is_none(),
+        "a project without a site segment keeps the classifier path"
+    );
 }

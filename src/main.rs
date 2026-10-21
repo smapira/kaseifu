@@ -109,6 +109,10 @@ enum Commands {
     /// A repository can pin a pattern to a destination in `.kaseifu.toml` at
     /// its root: a matching rule decides the file on its own (no classifier
     /// call), and the report names the rule and its reason.
+    ///
+    /// The target is one regular file: a folder is refused before the policy,
+    /// the key and the journal are touched (`kaseifu label <folder>` names
+    /// folders, `watch` watches a directory tree).
     Organize {
         file: PathBuf,
         /// Move the file (default is a dry run; cannot be combined with --dry-run).
@@ -168,6 +172,10 @@ enum Commands {
     /// decision together with what kaseifu would do about it. This command
     /// never moves the file and never writes to the journal; `--explain`
     /// shows the numbers behind the verdict.
+    ///
+    /// The target is one regular file, like `organize`: a folder is refused
+    /// before any search or model call (`kaseifu label <folder>` names
+    /// folders).
     Classify {
         file: PathBuf,
         /// Show all ranked candidates (default: top 5).
@@ -535,6 +543,26 @@ fn keyword_value(value: &str) -> Result<String, String> {
     }
 }
 
+/// Refuse a folder where a command needs one regular file.
+///
+/// `organize` and `classify` decide the placement of one file: the plan layer
+/// already refuses a source that is not a file (`PlanError::SourceNotAFile`),
+/// but by then a folder has been through the repository policy, the Spotlight
+/// search and the classifier, and the report reads like a real verdict (exit
+/// 0, "no move"). The type check belongs at the boundary, before the policy,
+/// the key, the journal and the network, and `label` is the command that takes
+/// folders.
+fn require_regular_file(target: &Path, command: &str) -> Result<()> {
+    if target.is_dir() {
+        anyhow::bail!(
+            "{command} works on one file, and {} is a folder: name a file inside it, \
+             or use `kaseifu label <folder>` to name the folder itself",
+            target.display()
+        );
+    }
+    Ok(())
+}
+
 /// `organize` with or without the interactive selection (ZC-13).
 ///
 /// `--keywords` reaches only the classifier branch: clap rejects the flag
@@ -545,6 +573,7 @@ async fn dispatch_organize(
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
+    require_regular_file(&options.file, "organize")?;
     if let Some(destination) = options.to {
         return handle_organize_to(
             &options.file,
@@ -2257,6 +2286,7 @@ async fn handle_classify(
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
+    require_regular_file(file, "classify")?;
     let resolved = resolve_for_jev_command(overrides)?;
     validate_endpoint_value(&resolved.jev.endpoint)?;
     let real = RealJevIntegration::from_resolved_full(&resolved);
@@ -3164,11 +3194,23 @@ fn skill_target_failed(target: &kaseifu::skill::ScanTarget) -> bool {
     }
 }
 
-/// `skill check`: compare one copy with the embedded skill. A stale copy is a
-/// failure (exit 1) rather than an error: the report already states both
-/// digests, and the exit code is what a CI step reads.
+/// `skill check`: compare one copy with the embedded skill.
+///
+/// The exit code is the report a CI step reads: 0 when the copy matches, 1 when
+/// it is stale (a failure, not an error: the report already states both
+/// digests), and 3 when there is no file at all, which is not the same repair
+/// as a stale copy.
 fn handle_skill_check(path: &Path, format: OutputFormat) -> Result<()> {
-    let report = kaseifu::skill::check(path)?;
+    let report = match kaseifu::skill::check(path)? {
+        kaseifu::skill::CheckOutcome::Compared(report) => report,
+        kaseifu::skill::CheckOutcome::Missing(missing) => exit_with_code(
+            3,
+            &format!(
+                "the skill {} does not exist (place it with `kaseifu skill install --to <repo> --write`)",
+                missing.display()
+            ),
+        ),
+    };
     emit_report(
         format,
         "KASEIFU / SKILL",
@@ -3182,6 +3224,19 @@ fn handle_skill_check(path: &Path, format: OutputFormat) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Report a failure with an exit code of its own and stop.
+///
+/// Every other failure leaves the process with exit 1 through `anyhow`; only
+/// `skill check` needs a third code, because the CI step that runs it reads the
+/// code rather than the text. stdout is flushed first: `process::exit` runs no
+/// destructors, so nothing buffered may be left behind.
+fn exit_with_code(code: i32, message: &str) -> ! {
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    eprintln!("Error: {message}");
+    std::process::exit(code)
 }
 
 // --- uninstall -----------------------------------------------------------

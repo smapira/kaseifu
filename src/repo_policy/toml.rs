@@ -11,8 +11,14 @@
 //! match_glob = "content/{project}/**"
 //! match_contains = "sites/thch-vape"
 //! destination = "sites/thch-vape/content/"
-//! reason = "a content project that names a site belongs to that site"
+//! reason = "content that names thch-vape belongs to that site"
 //! ```
+//!
+//! A destination can also read a `{name}` capture of its own pattern
+//! (`match_glob = "content/{project}/sites/{site}/**"` with
+//! `destination = "sites/<site>/content/"`; the capture is written with angle
+//! brackets there - `{site}` would be a literal directory name and is refused);
+//! `match_contains` is the optional filter for a site the path does not name.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;

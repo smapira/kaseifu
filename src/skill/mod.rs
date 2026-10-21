@@ -144,32 +144,41 @@ pub struct CheckReport {
     pub file_sha256: String,
 }
 
+/// What `skill check` found at the path it was given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckOutcome {
+    /// The file was read and compared with the embedded skill.
+    Compared(CheckReport),
+    /// There is no file at that path: nothing to compare, nothing written.
+    /// The caller reports it and leaves with its own exit code, so a CI step
+    /// can tell "this repository has no copy" apart from "the copy is stale".
+    Missing(PathBuf),
+}
+
 /// Compare the file at `path` with the embedded skill.
 ///
-/// A file that is not there, or cannot be read, is an error: the caller named a
-/// file and kaseifu never invents its content. A different byte sequence is not
-/// an error here - `matches: false` is the result the caller turns into exit 1.
-pub fn check(path: &Path) -> Result<CheckReport> {
+/// A file that is not there is not an error but [`CheckOutcome::Missing`]: the
+/// caller states it and exits with its own code (nothing was written and there
+/// is no digest to report). A file that cannot be read is an error: the caller
+/// named a file and kaseifu never invents its content. A different byte
+/// sequence is not an error here either - `matches: false` is the result the
+/// caller turns into exit 1.
+pub fn check(path: &Path) -> Result<CheckOutcome> {
     let content = match std::fs::read(path) {
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(error).with_context(|| {
-                format!(
-                    "the skill {} does not exist (place it with `kaseifu skill install --to <repo> --write`)",
-                    path.display()
-                )
-            });
+            return Ok(CheckOutcome::Missing(path.to_path_buf()));
         }
         Err(error) => return Err(error).with_context(|| format!("cannot read {}", path.display())),
     };
     let file_sha256 = sha256_hex(&content);
     let embedded_sha256 = embedded_sha256();
-    Ok(CheckReport {
+    Ok(CheckOutcome::Compared(CheckReport {
         matches: file_sha256 == embedded_sha256,
         path: path.to_path_buf(),
         embedded_sha256,
         file_sha256,
-    })
+    }))
 }
 
 /// One repository a scan found: the copy and what the install did with it.
@@ -273,6 +282,26 @@ mod tests {
             !EMBEDDED.contains('\u{2014}'),
             "no em dash in the embedded skill"
         );
+    }
+
+    #[test]
+    fn check_reports_a_missing_copy_and_compares_the_canonical_one() {
+        let missing = Path::new("/nonexistent-kaseifu-skill/SKILL.md");
+        assert_eq!(
+            check(missing).expect("a missing file is an outcome, not an error"),
+            CheckOutcome::Missing(missing.to_path_buf())
+        );
+
+        let canonical = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/skill/kaseifu/SKILL.md");
+        match check(&canonical).expect("the canonical copy is readable") {
+            CheckOutcome::Compared(report) => {
+                assert!(
+                    report.matches,
+                    "the canonical copy must match the embedded skill"
+                );
+            }
+            other => panic!("expected a comparison, got {other:?}"),
+        }
     }
 
     #[test]

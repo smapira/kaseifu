@@ -1,6 +1,6 @@
 # Backlog milestones after AI rename Phase 9
 
-Last updated: 2026-10-19.
+Last updated: 2026-10-21.
 
 Purpose: group the remaining plan issues into milestones and make each issue's status discoverable from the directory path. Status directories are documented in `../issues/README.md`.
 
@@ -9,8 +9,8 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 | Status | Count | Directory |
 |---|---:|---|
 | Open | 2 | `../issues/open/` |
-| Waiting for user/external resource | 6 | `../issues/waiting-user/` |
-| Done | 21 | `../issues/done/` |
+| Waiting for user/external resource | 7 | `../issues/waiting-user/` |
+| Done | 24 | `../issues/done/` |
 
 ## M1 - Reliability and CLI clarity
 
@@ -25,6 +25,8 @@ Goal: reduce confusing user-visible behavior before adding larger features.
 | Done | [`cache-name-refusal`](../issues/done/20261015-done-cache-name-refusal.md) | Cache/temp refusals are target-specific and visible in batch output. |
 | Done | [`git-mv-stale-index`](../issues/done/20261019-done-git-mv-stale-index.md) | `organize` names an index that has no entry for the file yet; destination existence stays a `stat`, so a stale index cannot create a collision. |
 | Done | [`organize-keywords`](../issues/done/20261019-done-organize-keywords.md) | `organize --keywords` sends user keywords to Jev as `user:` decision material (never into search), the report states what was sent or that nothing was, and every existing priority (rule, `--to`, `--select`) is unchanged. |
+| Done | [`organize-folder-target`](../issues/done/20261021-done-organize-folder-target.md) | `organize` and `classify` refuse a folder at the boundary (exit 1, before the policy, the key and the journal) instead of printing a verdict about it; `label` and `watch` keep their folder/directory shapes. |
+| Done | [`skill-coverage-and-exit-codes`](../issues/done/20261021-done-skill-coverage-and-exit-codes.md) | The embedded skill covers repository rules, `--keywords` and the index row; `skill check` reads 0 (match) / 1 (stale) / 3 (no file) so CI can tell drift from "never installed". |
 ## M2 - Media quality
 
 Goal: improve rename quality from real visual and document evidence.
@@ -46,6 +48,7 @@ Goal: complete workflow affordances and document the exact behavior of multi-ite
 | Done | [`batch-undo-scope`](../issues/done/20261015-done-batch-undo-scope.md) | Batch undo gets either a migration-backed command or an explicit documented limitation. |
 | Done | [`unicode-normalization-conflicts`](../issues/done/20261015-done-unicode-normalization-conflicts.md) | User chooses dependency exception, in-house limited normalization, or documented limitation. |
 | Done | [`repo-policy-file`](../issues/done/20261019-done-repo-policy-file.md) | `organize` honors `.kaseifu.toml` rules (rule name and reason in the proposal) with every existing safety intact. |
+| Done | [`repo-policy-example`](../issues/done/20261021-done-repo-policy-example.md) | The documented example captures the site (`content/{project}/sites/{site}/**` into `sites/<site>/content/`) and the prose states what each matcher sees; a `{name}` in a destination is refused instead of becoming a directory name. |
 
 ## M4 - Measurement and release hygiene
 
@@ -71,6 +74,7 @@ Goal: track tasks that cannot be completed from the Delta worktree alone.
 | Waiting-user | [`trec-corpus-evaluation`](../issues/waiting-user/20261015-waiting-trec-corpus-evaluation.md) | NIST corpus is available and the evaluation direction is chosen. |
 | Waiting-user | [`snapshot-cleanup`](../issues/waiting-user/20261015-waiting-snapshot-cleanup.md) | Snapshot is deleted or retained with a recorded reason. |
 | Waiting-user | [`local-checkout-pull`](../issues/waiting-user/20261015-waiting-local-checkout-pull.md) | Non-Delta checkout is updated or intentionally left stale. |
+| Waiting-user | [`rule-content-matching`](../issues/waiting-user/20261021-waiting-rule-content-matching.md) | User decides whether a rule may match file content, not only the path (recommendation: keep path-only, one rule per project/site pair). |
 
 ## Milestone order
 

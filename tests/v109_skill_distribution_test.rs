@@ -273,7 +273,12 @@ fn v109_check_reports_match_stale_and_a_missing_copy() {
     );
 
     let missing = sandbox.run(&["skill", "check", "--path", "repo/nope/SKILL.md"]);
-    assert_eq!(missing.status.code(), Some(1));
+    assert_eq!(
+        missing.status.code(),
+        Some(3),
+        "a missing copy is not a stale one: {}",
+        stderr_of(&missing)
+    );
     assert!(
         stderr_of(&missing).contains("`kaseifu skill install --to"),
         "{}",

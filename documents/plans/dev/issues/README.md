@@ -1,6 +1,6 @@
 # Issue directory map
 
-Last updated: 2026-10-19.
+Last updated: 2026-10-21.
 
 This directory has two kinds of records:
 
@@ -31,6 +31,7 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | [`20261015-waiting-local-checkout-pull.md`](waiting-user/20261015-waiting-local-checkout-pull.md) | M5 | Permission/action to update the non-Delta local checkout. |
 | [`20261016-waiting-bottle-distribution.md`](waiting-user/20261016-waiting-bottle-distribution.md) | M4 | Held 2026-10-16: start Phase 2 (prebuilt Homebrew bottles) after Phase 1 ships. |
 | [`20261016-waiting-clean-mac-verification.md`](waiting-user/20261016-waiting-clean-mac-verification.md) | M4 | Needs a Mac without Xcode (CLT only) and a clean Mac for the install failure mode and cost. |
+| [`20261021-waiting-rule-content-matching.md`](waiting-user/20261021-waiting-rule-content-matching.md) | M5 | Decision: may a `.kaseifu.toml` rule match file content, not only the path? (Recommendation: keep path-only.) |
 
 ### Done
 
@@ -57,6 +58,9 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | [`20261019-done-git-mv-stale-index.md`](done/20261019-done-git-mv-stale-index.md) | M1 | `organize` discloses an index that has no entry for the file yet; destination existence stays a `stat`. |
 | [`20261019-done-repo-policy-file.md`](done/20261019-done-repo-policy-file.md) | M3 | `.kaseifu.toml` rules decide `organize`/`watch` before the classifier; destinations stay inside the workspace. |
 | [`20261019-done-organize-keywords.md`](done/20261019-done-organize-keywords.md) | M1 | `organize`/`classify` accept `--keywords`; keywords reach Jev as `user:` signals only, and the report says what was sent (or that nothing was). |
+| [`20261021-done-organize-folder-target.md`](done/20261021-done-organize-folder-target.md) | M1 | `organize`/`classify` refuse a folder at the boundary (before policy, key and journal); `label` still takes folders and `watch` still takes directories. |
+| [`20261021-done-skill-coverage-and-exit-codes.md`](done/20261021-done-skill-coverage-and-exit-codes.md) | M1 | The skill covers `.kaseifu.toml`, `--keywords` and the index row; `skill check` = 0 match / 1 stale / 3 no file. |
+| [`20261021-done-repo-policy-example.md`](done/20261021-done-repo-policy-example.md) | M3 | The documented example captures the site and the prose states both matching bases; a `{name}` in a destination is refused. |
 
 ## Maintenance rules
 

@@ -62,14 +62,52 @@ and the API key.
 kaseifu organize <file>                                     # dry run
 kaseifu organize <file> --execute                           # move it (journaled)
 kaseifu organize <file> --to ~/Documents/Invoices --execute # non-interactive destination
+kaseifu organize <file> --keywords "2026 tax year"          # extra decision material
 kaseifu undo                                                # put the last move back
 kaseifu undo --last 3                                       # the last three moves
 kaseifu undo --batch <id>                                   # exactly one batch, by its printed id
 ```
 
-`organize --select` lets the owner pick a destination from the candidates and
-needs a terminal. `undo` never overwrites: a file already at the original
-location stops the undo and is reported.
+`organize` and `classify` decide one regular file: a folder is refused before the
+repository policy, the key and the journal are touched (`kaseifu label <folder>`
+names folders, `watch --path <dir>` watches a tree). `organize --select` lets the
+owner pick a destination from the candidates and needs a terminal. `undo` never
+overwrites: a file already at the original location stops the undo and is
+reported.
+
+`--keywords KEY` (repeatable; not a search term) adds decision material for Jev
+only, so the candidate list does not change; the report states what was sent
+(`keywords.sent_to_jev`), and the flag cannot be combined with `--to` or
+`--select`, which never consult Jev. When Spotlight has no entry for the file
+yet, the verdict says so (`Index  not indexed yet; candidates may be incomplete`;
+JSON `target_indexed` `true` / `false` / `null`): candidates may be incomplete,
+and the row is a disclosure rather than a failure.
+
+## Repository policy (`.kaseifu.toml`)
+
+A repository can commit placement rules next to its code. kaseifu reads the
+nearest `.kaseifu.toml` at or above the file's directory (the search stops at the
+home directory), and the first matching rule decides the file before Discovery
+and before any model call, so a governed repository needs no API key:
+
+```toml
+[[rule]]
+name = "site-owned-content"
+match_glob = "content/{project}/sites/{site}/**"   # whole path, relative to the policy root
+destination = "sites/<site>/content/"              # <site> reads the {site} capture
+reason = "content filed under a site folder belongs to that site"
+```
+
+`{name}` captures one path segment and `<name>` reads that capture (write the
+angle form in a destination: `{site}` there would be a literal directory name
+and is refused). `match_glob` must match the whole path, and `match_contains`
+(optional) requires its strings to appear in the same relative path - directory
+names and the file name, never the file body. The report names the rule (the
+`rule` object in `--format json`). A rule destination must exist, must not
+collide and must stay inside the workspace that holds the policy file, and
+kaseifu never writes that file. `--to` and `--select` still win over a rule; a
+rule the owner committed is a decision, not a suggestion, so report it instead
+of overriding it.
 
 ## Naming a file or folder
 
@@ -111,6 +149,7 @@ same flow as `organize` runs.
 | 0 | the command did what it reported |
 | 1 | it failed; stderr names the reason and usually the next command |
 | 2 | the command line was wrong (unknown flag, missing argument) |
+| 3 | `skill check` found no file at the path it was given (not the same as a stale copy) |
 
 ## This skill file
 
@@ -120,7 +159,7 @@ hand-edit a distributed copy - refresh it with the binary, and let CI notice
 drift:
 
 ```sh
-kaseifu skill check --path .github/skills/kaseifu/SKILL.md      # match = exit 0, stale = exit 1
+kaseifu skill check --path .github/skills/kaseifu/SKILL.md      # match = exit 0, stale = exit 1, no file = exit 3
 kaseifu skill install --to . --write                            # place or refresh this repository's copy
 kaseifu skill install --to . --write --force                    # replace a copy that was edited
 kaseifu skill install --scan <parent-dir> [--write [--force]]   # every repository at or below that already has a copy
