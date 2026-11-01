@@ -9,7 +9,7 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 | Status | Count | Directory |
 |---|---:|---|
 | Open | 2 | `../issues/open/` |
-| Waiting for user/external resource | 7 | `../issues/waiting-user/` |
+| Waiting for user/external resource | 8 | `../issues/waiting-user/` |
 | Done | 24 | `../issues/done/` |
 
 ## M1 - Reliability and CLI clarity
@@ -75,6 +75,7 @@ Goal: track tasks that cannot be completed from the Delta worktree alone.
 | Waiting-user | [`snapshot-cleanup`](../issues/waiting-user/20261015-waiting-snapshot-cleanup.md) | Snapshot is deleted or retained with a recorded reason. |
 | Waiting-user | [`local-checkout-pull`](../issues/waiting-user/20261015-waiting-local-checkout-pull.md) | Non-Delta checkout is updated or intentionally left stale. |
 | Waiting-user | [`rule-content-matching`](../issues/waiting-user/20261021-waiting-rule-content-matching.md) | User decides whether a rule may match file content, not only the path (recommendation: keep path-only, one rule per project/site pair). |
+| Waiting-user | [`cross-checkout-destination`](../issues/waiting-user/20261021-waiting-cross-checkout-destination.md) | User decides whether a destination in another working copy of the same repository is REVIEWed (recommendation: yes) and `--to`/`--select` warned. |
 
 ## Milestone order
 
