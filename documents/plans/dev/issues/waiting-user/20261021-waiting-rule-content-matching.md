@@ -2,6 +2,7 @@
 
 - status: waiting-user
 - opened: 2026-10-21 (raised by issue [#13](https://github.com/smapira/kaseifu/issues/13))
+- github: [#16](https://github.com/smapira/kaseifu/issues/16) (reported 2026-10-21; the discussion and the decision live there)
 - milestone: M5 - user/external blockers (the decision is the user's)
 - next owner: user
 - blocker: a product decision, not a technical one

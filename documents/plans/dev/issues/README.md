@@ -31,7 +31,7 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | [`20261015-waiting-local-checkout-pull.md`](waiting-user/20261015-waiting-local-checkout-pull.md) | M5 | Permission/action to update the non-Delta local checkout. |
 | [`20261016-waiting-bottle-distribution.md`](waiting-user/20261016-waiting-bottle-distribution.md) | M4 | Held 2026-10-16: start Phase 2 (prebuilt Homebrew bottles) after Phase 1 ships. |
 | [`20261016-waiting-clean-mac-verification.md`](waiting-user/20261016-waiting-clean-mac-verification.md) | M4 | Needs a Mac without Xcode (CLT only) and a clean Mac for the install failure mode and cost. |
-| [`20261021-waiting-rule-content-matching.md`](waiting-user/20261021-waiting-rule-content-matching.md) | M5 | Decision: may a `.kaseifu.toml` rule match file content, not only the path? (Recommendation: keep path-only.) |
+| [`20261021-waiting-rule-content-matching.md`](waiting-user/20261021-waiting-rule-content-matching.md) | M5 | Decision: may a `.kaseifu.toml` rule match file content, not only the path? (Recommendation: keep path-only; reported as [#16](https://github.com/smapira/kaseifu/issues/16).) |
 
 ### Done
 
