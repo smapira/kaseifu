@@ -1,6 +1,6 @@
 # Issue directory map
 
-Last updated: 2026-10-21.
+Last updated: 2026-11-01.
 
 This directory has two kinds of records:
 
@@ -19,7 +19,6 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | Issue | Milestone | Next action |
 |---|---|---|
 | [`20261016-open-build-rs-sdk-probe.md`](open/20261016-open-build-rs-sdk-probe.md) | M4 | Harden the `build.rs` SDK probe so a Command Line Tools build degrades with its reason instead of hard-failing. |
-| [`20261016-open-label-guidance-touches-state.md`](open/20261016-open-label-guidance-touches-state.md) | M1 | Stop the `label` guidance path from creating the journal database. |
 
 ### Waiting for user or external resource
 
@@ -62,6 +61,7 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | [`20261021-done-organize-folder-target.md`](done/20261021-done-organize-folder-target.md) | M1 | `organize`/`classify` refuse a folder at the boundary (before policy, key and journal); `label` still takes folders and `watch` still takes directories. |
 | [`20261021-done-skill-coverage-and-exit-codes.md`](done/20261021-done-skill-coverage-and-exit-codes.md) | M1 | The skill covers `.kaseifu.toml`, `--keywords` and the index row; `skill check` = 0 match / 1 stale / 3 no file. |
 | [`20261021-done-repo-policy-example.md`](done/20261021-done-repo-policy-example.md) | M3 | The documented example captures the site and the prose states both matching bases; a `{name}` in a destination is refused. |
+| [`20261016-done-label-guidance-touches-state.md`](done/20261016-done-label-guidance-touches-state.md) | M1 | `label` opens the store only where it is read or written, so the guidance path creates no journal database; management flags and the plan path are unchanged. |
 
 ## Maintenance rules
 

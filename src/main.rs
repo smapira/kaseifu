@@ -1402,16 +1402,22 @@ struct RenameCli {
 
 /// `rename`: management flags, or a document dry-run / execution.
 async fn handle_rename(args: RenameCli, format: OutputFormat) -> Result<()> {
-    let store = RenameStore::open(journal_path())?;
+    // Nothing is opened before the request is understood: a run that only prints
+    // the guidance, or that combines a management flag with a target, must not
+    // create the journal database behind the caller's back (the no-subcommand
+    // guidance behaves the same way, ZC-2). The store is opened only where it
+    // is actually read or written.
     if has_management(&args) {
         if args.target.is_some() {
             anyhow::bail!("management flags cannot be combined with a target file");
         }
+        let store = RenameStore::open(journal_path())?;
         return rename_management(&store, &args, format);
     }
     let Some(target) = args.target.as_deref() else {
         return rename_guidance(format);
     };
+    let store = RenameStore::open(journal_path())?;
     if args.recursive {
         return rename_batch(&store, target, &args, format).await;
     }

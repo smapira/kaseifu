@@ -1,6 +1,6 @@
 # Backlog milestones after AI rename Phase 9
 
-Last updated: 2026-10-21.
+Last updated: 2026-11-01.
 
 Purpose: group the remaining plan issues into milestones and make each issue's status discoverable from the directory path. Status directories are documented in `../issues/README.md`.
 
@@ -8,9 +8,9 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 
 | Status | Count | Directory |
 |---|---:|---|
-| Open | 2 | `../issues/open/` |
+| Open | 1 | `../issues/open/` |
 | Waiting for user/external resource | 8 | `../issues/waiting-user/` |
-| Done | 24 | `../issues/done/` |
+| Done | 25 | `../issues/done/` |
 
 ## M1 - Reliability and CLI clarity
 
@@ -27,6 +27,7 @@ Goal: reduce confusing user-visible behavior before adding larger features.
 | Done | [`organize-keywords`](../issues/done/20261019-done-organize-keywords.md) | `organize --keywords` sends user keywords to Jev as `user:` decision material (never into search), the report states what was sent or that nothing was, and every existing priority (rule, `--to`, `--select`) is unchanged. |
 | Done | [`organize-folder-target`](../issues/done/20261021-done-organize-folder-target.md) | `organize` and `classify` refuse a folder at the boundary (exit 1, before the policy, the key and the journal) instead of printing a verdict about it; `label` and `watch` keep their folder/directory shapes. |
 | Done | [`skill-coverage-and-exit-codes`](../issues/done/20261021-done-skill-coverage-and-exit-codes.md) | The embedded skill covers repository rules, `--keywords` and the index row; `skill check` reads 0 (match) / 1 (stale) / 3 (no file) so CI can tell drift from "never installed". |
+| Done | [`label-guidance-touches-state`](../issues/done/20261016-done-label-guidance-touches-state.md) | The `label` guidance path returns before the store is opened, so it creates no journal database; a management flag combined with a target is refused before anything is opened. |
 ## M2 - Media quality
 
 Goal: improve rename quality from real visual and document evidence.
@@ -58,7 +59,6 @@ Goal: keep measured claims and release boundaries reproducible.
 |---|---|---|
 | Done | [`perf-measurement-gaps`](../issues/done/20261015-done-perf-measurement-gaps.md) | Cold start, large batch, memory, and concurrency gaps have repeatable measurements. |
 | Open | [`build-rs-sdk-probe`](../issues/open/20261016-open-build-rs-sdk-probe.md) | A Command Line Tools build degrades with its reason instead of hard-failing. |
-| Open | [`label-guidance-touches-state`](../issues/open/20261016-open-label-guidance-touches-state.md) | The `label` guidance path creates no state file. |
 | Done | [`license-file`](../issues/done/20261016-done-license-file.md) | The next tag's tarball carries the MIT license text. |
 | Waiting-user | [`bottle-distribution`](../issues/waiting-user/20261016-waiting-bottle-distribution.md) | Phase 2 starts after Phase 1 ships (held 2026-10-16). |
 | Waiting-user | [`clean-mac-verification`](../issues/waiting-user/20261016-waiting-clean-mac-verification.md) | Xcode-free machine and clean machine confirm the install failure mode and cost. |

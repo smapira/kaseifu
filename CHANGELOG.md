@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`kaseifu label` without a target no longer creates the journal.** Printing
+  the guidance used to open the journal store first, so a command that only
+  answers "how do I use this" left `~/Library/Application Support/kaseifu/
+  kaseifu.db` behind (reported from the Homebrew Formula test). The store is now
+  opened only where it is read or written, and a management flag combined with a
+  target is refused before anything is opened either - the guidance path matches
+  the no-subcommand guidance, which never touched state.
+  `tests/v115_label_guidance_state_test.rs` pins the guidance path, both
+  management answers and the refusal.
+
 - **`organize` and `classify` refuse a folder instead of deciding one.**
   Issue #14 (real use of 0.13.0): a folder given to `organize` ran the whole
   file pipeline and printed a plausible verdict (exit 0, "no move") - only the
