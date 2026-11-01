@@ -246,9 +246,12 @@ fn result_heading(outcome: &OrganizeOutcome) -> (&'static str, &'static str) {
         OrganizeOutcome::WouldMove { .. } => ("WOULD MOVE", "Would move"),
         OrganizeOutcome::MoveFailed(_) => ("MOVE FAILED", "Move failed"),
         // A collision goes to REVIEW (docs/design/05-execute.md), and so
-        // does a rule destination that leaves its workspace.
+        // does a rule destination that leaves its workspace and one that
+        // lands in another working copy of the source's repository.
         OrganizeOutcome::Unplanable(
-            PlanError::Collision(_) | PlanError::DestinationOutsideWorkspace(_),
+            PlanError::Collision(_)
+            | PlanError::DestinationOutsideWorkspace(_)
+            | PlanError::DestinationInAnotherCheckout(_),
         ) => ("REVIEW", "REVIEW"),
         OrganizeOutcome::Refused | OrganizeOutcome::Unplanable(_) => ("NO MOVE", "No move"),
     }
@@ -412,6 +415,7 @@ fn plan_error_kind(error: &PlanError) -> &'static str {
         PlanError::DestinationNotADirectory(_) => "destination_not_a_directory",
         PlanError::DestinationExcluded(_) => "destination_excluded",
         PlanError::DestinationOutsideWorkspace(_) => "destination_outside_workspace",
+        PlanError::DestinationInAnotherCheckout(_) => "destination_in_another_checkout",
         PlanError::Collision(_) => "collision",
     }
 }
@@ -442,7 +446,9 @@ fn result_lines(report: &OrganizeReport, source: &Path, rich: bool, color: bool)
 }
 
 /// Human sentence for a failed plan; the Rust enum names never reach the
-/// user. `Collision` is rendered under the REVIEW heading (unchanged).
+/// user. `Collision`, `DestinationOutsideWorkspace` and
+/// `DestinationInAnotherCheckout` are rendered under the REVIEW heading
+/// (unchanged).
 ///
 /// Public so the interactive selection (ZC-13) reports a refused destination
 /// with exactly the same words as `organize`.
@@ -464,6 +470,12 @@ fn plan_error_message_with(error: &PlanError, shown: &dyn Fn(&Path) -> String) -
         PlanError::DestinationOutsideWorkspace(path) => {
             format!(
                 "destination is outside the policy workspace: {}",
+                shown(path)
+            )
+        }
+        PlanError::DestinationInAnotherCheckout(path) => {
+            format!(
+                "destination is in another working copy of the same repository: {}",
                 shown(path)
             )
         }

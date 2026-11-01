@@ -12,7 +12,7 @@ use kaseifu::config::{
     load_user, resolve, resolve_with_env, save_to,
 };
 use kaseifu::models::decision::DecisionContext;
-use kaseifu::operations::{mover, organize, plan, select as select_ops, undo};
+use kaseifu::operations::{checkout, mover, organize, plan, select as select_ops, undo};
 use kaseifu::platform::macos::fsevents;
 use kaseifu::presentation::renderers::{
     classify as classify_view, discover as discover_view, generic, inspect as inspect_view,
@@ -919,9 +919,20 @@ fn run_selected_move(
             );
         }
     };
+    // A human picked this destination, so it is allowed even when it is another
+    // working copy of the source's repository (issue #17): the report says so in
+    // one line instead of refusing.
+    let other_checkout = other_checkout_root(file, &candidate.path);
     print!(
         "{}",
-        select_view::render_plan(&move_plan, candidate, actually_move, mode.rich, mode.color)
+        select_view::render_plan(
+            &move_plan,
+            candidate,
+            actually_move,
+            mode.rich,
+            mode.color,
+            other_checkout.as_deref()
+        )
     );
 
     if !actually_move {
@@ -931,7 +942,16 @@ fn run_selected_move(
         println!("{}", select_view::cancelled_line());
         return Ok(());
     }
-    execute_manual_move_report(&move_plan, mode.rich, mode.color)
+    execute_manual_move_report(&move_plan, mode.rich, mode.color, other_checkout.as_deref())
+}
+
+/// The working-copy root a manual destination belongs to, when it is another
+/// working copy of the source's repository (issue #17).
+///
+/// `None` covers every ordinary case: the same checkout, a different
+/// repository, or a path outside git.
+fn other_checkout_root(file: &Path, destination: &Path) -> Option<PathBuf> {
+    checkout::other_working_copy(file, destination).map(|roots| roots.root)
 }
 
 /// Non-TTY guidance for `organize --select` (ZC-13).
@@ -976,11 +996,22 @@ fn handle_organize_to(
             );
         }
     };
+    // `--to` is a human naming the path, so a destination in another working
+    // copy of the same repository is allowed; one warning line says where the
+    // file lands (issue #17).
+    let other_checkout = other_checkout_root(file, destination);
     if !actually_move {
         if json {
             println!(
                 "{}",
-                organize_to_json(file, destination, &move_plan, false, None)
+                organize_to_json(
+                    file,
+                    destination,
+                    &move_plan,
+                    false,
+                    None,
+                    other_checkout.as_deref()
+                )
             );
         } else {
             print!(
@@ -990,7 +1021,8 @@ fn handle_organize_to(
                     destination,
                     false,
                     mode.rich,
-                    mode.color
+                    mode.color,
+                    other_checkout.as_deref()
                 )
             );
         }
@@ -1002,7 +1034,14 @@ fn handle_organize_to(
             if json {
                 println!(
                     "{}",
-                    organize_to_json(file, destination, &move_plan, true, Some(&operation_id))
+                    organize_to_json(
+                        file,
+                        destination,
+                        &move_plan,
+                        true,
+                        Some(&operation_id),
+                        other_checkout.as_deref()
+                    )
                 );
             } else {
                 print!(
@@ -1011,7 +1050,8 @@ fn handle_organize_to(
                         &move_plan,
                         &operation_id,
                         mode.rich,
-                        mode.color
+                        mode.color,
+                        other_checkout.as_deref()
                     )
                 );
             }
@@ -1043,14 +1083,20 @@ fn is_noop_to(file: &Path, destination: &Path) -> bool {
 }
 
 /// The `--to` JSON document (additive shape, only this flag prints it).
+///
+/// `other_checkout` adds one `checkout` object when the destination is another
+/// working copy of the source's repository (issue #17); every historical key
+/// keeps its name and type, and a run without that case prints the same
+/// document as before.
 fn organize_to_json(
     file: &Path,
     destination: &Path,
     plan: &plan::MovePlan,
     executed: bool,
     operation_id: Option<&str>,
+    other_checkout: Option<&Path>,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "organize_to": {
             "file": file.display().to_string(),
             "destination": destination.display().to_string(),
@@ -1058,7 +1104,16 @@ fn organize_to_json(
             "executed": executed,
             "operation_id": operation_id,
         }
-    })
+    });
+    if let Some(root) = other_checkout {
+        let raw = root.display().to_string();
+        value["organize_to"]["checkout"] = serde_json::json!({
+            "another_working_copy": true,
+            "root": raw,
+            "notice": select_view::cross_checkout_notice(&raw),
+        });
+    }
+    value
 }
 
 /// `--select --format json`: the candidate list, no interaction, no Jev.
@@ -1114,13 +1169,14 @@ fn execute_manual_move_report(
     plan: &kaseifu::operations::plan::MovePlan,
     rich: bool,
     color: bool,
+    other_checkout: Option<&Path>,
 ) -> Result<()> {
     let history = OperationHistory::open(journal_path())?;
     match mover::execute_manual_move(plan, &history) {
         Ok(mover::MoveOutcome::Moved { operation_id }) => {
             print!(
                 "{}",
-                select_view::render_moved(plan, &operation_id, rich, color)
+                select_view::render_moved(plan, &operation_id, rich, color, other_checkout)
             );
             Ok(())
         }

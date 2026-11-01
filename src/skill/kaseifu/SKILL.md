@@ -83,6 +83,13 @@ yet, the verdict says so (`Index  not indexed yet; candidates may be incomplete`
 JSON `target_indexed` `true` / `false` / `null`): candidates may be incomplete,
 and the row is a disclosure rather than a failure.
 
+`organize` also reviews a destination that belongs to another working copy of
+the file's repository (the primary checkout of a linked worktree, for example):
+`destination is in another working copy of the same repository: <folder>`, JSON
+`outcome.kind` `destination_in_another_checkout`, exit 0. `--to` and `--select`
+name the path themselves, so they warn instead (`another working copy of the
+same repository`) and stay allowed.
+
 ## Repository policy (`.kaseifu.toml`)
 
 A repository can commit placement rules next to its code. kaseifu reads the

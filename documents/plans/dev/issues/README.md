@@ -30,8 +30,7 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | [`20261015-waiting-local-checkout-pull.md`](waiting-user/20261015-waiting-local-checkout-pull.md) | M5 | Permission/action to update the non-Delta local checkout. |
 | [`20261016-waiting-bottle-distribution.md`](waiting-user/20261016-waiting-bottle-distribution.md) | M4 | Held 2026-10-16: start Phase 2 (prebuilt Homebrew bottles) after Phase 1 ships. |
 | [`20261016-waiting-clean-mac-verification.md`](waiting-user/20261016-waiting-clean-mac-verification.md) | M4 | Needs a Mac without Xcode (CLT only) and a clean Mac for the install failure mode and cost. |
-| [`20261021-waiting-rule-content-matching.md`](waiting-user/20261021-waiting-rule-content-matching.md) | M5 | Decision: may a `.kaseifu.toml` rule match file content, not only the path? (Recommendation: keep path-only; reported as [#16](https://github.com/smapira/kaseifu/issues/16).) |
-| [`20261021-waiting-cross-checkout-destination.md`](waiting-user/20261021-waiting-cross-checkout-destination.md) | M5 | Decision: REVIEW a destination that belongs to another working copy of the same repository, and warn on `--to`/`--select` (reported as [#17](https://github.com/smapira/kaseifu/issues/17)). |
+| [`20261101-waiting-rule-content-matching.md`](waiting-user/20261101-waiting-rule-content-matching.md) | M5 | Decision: may a `.kaseifu.toml` rule match file content, not only the path? (Recommendation: keep path-only; reported as [#16](https://github.com/smapira/kaseifu/issues/16).) |
 
 ### Done
 
@@ -62,6 +61,7 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | [`20261021-done-skill-coverage-and-exit-codes.md`](done/20261021-done-skill-coverage-and-exit-codes.md) | M1 | The skill covers `.kaseifu.toml`, `--keywords` and the index row; `skill check` = 0 match / 1 stale / 3 no file. |
 | [`20261021-done-repo-policy-example.md`](done/20261021-done-repo-policy-example.md) | M3 | The documented example captures the site and the prose states both matching bases; a `{name}` in a destination is refused. |
 | [`20261016-done-label-guidance-touches-state.md`](done/20261016-done-label-guidance-touches-state.md) | M1 | `label` opens the store only where it is read or written, so the guidance path creates no journal database; management flags and the plan path are unchanged. |
+| [`20261101-done-cross-checkout-destination.md`](done/20261101-done-cross-checkout-destination.md) | M1 | An automatic move into another working copy of the source's repository is REVIEW (`kind = destination_in_another_checkout`, exit 0); `--to`/`--select` warn and stay allowed; submodules and separate clones are unaffected. |
 
 ## Maintenance rules
 

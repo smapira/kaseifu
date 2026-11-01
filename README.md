@@ -256,6 +256,24 @@ names the reason and moves nothing. Executed moves are journaled on the
 same `[MANUAL]` path as `--select`, so `undo` reverses them, and
 `--format json` prints one `organize_to` object.
 
+### Another working copy of the same repository
+
+A destination can belong to a different checkout of the repository the file
+lives in - most often the primary checkout of a linked worktree, because
+Spotlight never returns the hidden worktree path itself. An automatic move
+there would leave the file as an untracked file in that other checkout, so
+`organize` (and `watch`) reports it as **REVIEW**: `destination is in another
+working copy of the same repository: <folder>`, `kind`
+`destination_in_another_checkout` in `--format json`, exit code 0 like every
+other REVIEW.
+
+`--to` and `--select` name the path themselves, so they stay allowed and print
+one warning line instead (`Warning: another working copy of the same repository
+(<checkout root>); undo reverses the move`); `--to --format json` adds one
+`checkout` object inside `organize_to`. The comparison is the git common
+directory, so a submodule or a separate clone of the same repository is a
+different repository and is unaffected.
+
 ### Repository policy (`.kaseifu.toml`)
 
 A repository can pin a placement decision in a file committed next to its code.

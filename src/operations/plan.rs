@@ -37,6 +37,11 @@ pub enum PlanError {
     /// workspace (the directory that holds the policy file), either directly
     /// or through a symbolic link.
     DestinationOutsideWorkspace(PathBuf),
+    /// The destination is in another working copy of the same git repository
+    /// (a linked worktree or another checkout of it, issue #17). An automatic
+    /// move there would land the file in a different checkout than the one the
+    /// file belongs to, so it is reviewed instead.
+    DestinationInAnotherCheckout(PathBuf),
     /// The destination already exists; Phase 5 never overwrites.
     Collision(PathBuf),
 }
@@ -82,7 +87,20 @@ pub fn build_move_plan_with(
         .find(|candidate| candidate.id == candidate_id)
         .ok_or_else(|| PlanError::UnknownCandidate(candidate_id.clone()))?;
 
-    let destination_path = checked_destination_path(source, &candidate.path)?;
+    let destination_path = joined_destination_path(source, &candidate.path)?;
+
+    // A destination in another working copy of the source's repository is
+    // reviewed, not moved (issue #17): the file would appear as an untracked
+    // file in a different checkout. Checked before the collision so the deeper
+    // reason is the one reported (#11).
+    if crate::operations::checkout::other_working_copy(source, &candidate.path).is_some() {
+        return Err(PlanError::DestinationInAnotherCheckout(
+            candidate.path.clone(),
+        ));
+    }
+    if destination_path.exists() {
+        return Err(PlanError::Collision(destination_path));
+    }
 
     Ok(MovePlan {
         source: source.to_path_buf(),
@@ -106,6 +124,12 @@ pub fn build_move_plan_with(
 /// [`crate::operations::mover::execute_manual_move`] records the move with
 /// NULL journal columns so a human move stays distinguishable from a Jev
 /// move.
+///
+/// A destination in another working copy of the same repository is *allowed*
+/// here (issue #17): a human named it, and `undo` reverses the move. The caller
+/// reports it as one warning line instead
+/// ([`crate::operations::checkout::other_working_copy`]); only the automatic
+/// path refuses it.
 pub fn build_manual_move_plan(
     source: &Path,
     candidate: &CandidateDestination,
@@ -137,6 +161,10 @@ pub fn build_manual_move_plan(
 /// The plan carries `rule_id` as its selection (the journal records it in the
 /// `candidate_id` column, the way `rename` records its naming rule) and no
 /// classifier numbers.
+///
+/// The workspace boundary also keeps a rule out of the cross-checkout check
+/// (issue #17): a rule destination is inside the file's own workspace, so it
+/// cannot be another working copy of the repository.
 pub fn build_rule_move_plan(
     source: &Path,
     destination_directory: &Path,
@@ -170,6 +198,21 @@ fn checked_destination_path(
     source: &Path,
     destination_directory: &Path,
 ) -> Result<PathBuf, PlanError> {
+    let destination_path = joined_destination_path(source, destination_directory)?;
+    if destination_path.exists() {
+        return Err(PlanError::Collision(destination_path));
+    }
+    Ok(destination_path)
+}
+
+/// The shape checks of [`checked_destination_path`] (source present and a
+/// regular file, destination an existing directory) plus the joined destination
+/// path, before the collision: `build_move_plan_with` needs that path to report
+/// a deeper reason (another working copy) ahead of the collision.
+fn joined_destination_path(
+    source: &Path,
+    destination_directory: &Path,
+) -> Result<PathBuf, PlanError> {
     if !source.exists() {
         return Err(PlanError::SourceMissing(source.to_path_buf()));
     }
@@ -181,14 +224,8 @@ fn checked_destination_path(
             destination_directory.to_path_buf(),
         ));
     }
-
     let file_name = source
         .file_name()
         .ok_or_else(|| PlanError::SourceMissing(source.to_path_buf()))?;
-    let destination_path = destination_directory.join(file_name);
-
-    if destination_path.exists() {
-        return Err(PlanError::Collision(destination_path));
-    }
-    Ok(destination_path)
+    Ok(destination_directory.join(file_name))
 }

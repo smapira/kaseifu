@@ -40,7 +40,7 @@ purpose (rules must be cheap, deterministic and readable before a run). The
 intent behind #12 is expressible today by naming the project in the pattern and
 pinning the destination; inferring a site the path does not name is a new
 capability and is recorded as a user decision in
-`../waiting-user/20261021-waiting-rule-content-matching.md`.
+`../waiting-user/20261101-waiting-rule-content-matching.md`.
 
 ## Verification
 

@@ -5,6 +5,10 @@
 //! terminal budget like the other renderers. Every row is an addition to the
 //! existing vocabulary ("dry run (no files moved)" etc.), and the plan is
 //! marked `[MANUAL]` so a human decision is never presented as a Jev one.
+//!
+//! A destination that is another working copy of the source's repository (issue
+//! #17) is allowed - a human named it and `undo` reverses the move - and adds
+//! exactly one warning line, so the reader still knows where the file lands.
 
 use crate::models::candidate::CandidateDestination;
 use crate::operations::plan::MovePlan;
@@ -60,14 +64,18 @@ fn menu_row(number: usize, candidate: &CandidateDestination, rich: bool, color: 
 ///
 /// Same rows as [`render_plan`], but the basis names the flag: nothing was
 /// selected from a menu, the destination was named on the command line.
+/// `other_checkout` is the working-copy root the destination belongs to when it
+/// is another working copy of the source's repository (issue #17): the move is
+/// allowed, and one warning line says where the file lands.
 pub fn render_explicit_plan(
     plan: &MovePlan,
     destination: &Path,
     execute_requested: bool,
     rich: bool,
     color: bool,
+    other_checkout: Option<&Path>,
 ) -> String {
-    let lines = vec![
+    let mut lines = vec![
         format!("From: {}", shown_path(&plan.source, rich, color)),
         format!(
             "Destination: {}",
@@ -82,6 +90,7 @@ pub fn render_explicit_plan(
             generic::dry_run_banner(execute_requested, color)
         ),
     ];
+    push_checkout_notice(&mut lines, other_checkout, rich, color);
     frame("KASEIFU / TO [MANUAL]", &lines, rich, color)
 }
 
@@ -91,8 +100,9 @@ pub fn render_explicit_moved(
     operation_id: &str,
     rich: bool,
     color: bool,
+    other_checkout: Option<&Path>,
 ) -> String {
-    let lines = vec![
+    let mut lines = vec![
         row(
             "Destination",
             &shown_path(&plan.destination_path, rich, color),
@@ -100,16 +110,20 @@ pub fn render_explicit_moved(
         row("Operation", operation_id),
         row("Undo", "kaseifu undo reverses this move"),
     ];
+    push_checkout_notice(&mut lines, other_checkout, rich, color);
     frame("KASEIFU / TO [MANUAL] / MOVED", &lines, rich, color)
 }
 
 /// Render the chosen move plan (dry run or the mode about to run).
+///
+/// `other_checkout` behaves as in [`render_explicit_plan`].
 pub fn render_plan(
     plan: &MovePlan,
     candidate: &CandidateDestination,
     execute_requested: bool,
     rich: bool,
     color: bool,
+    other_checkout: Option<&Path>,
 ) -> String {
     let basis = format!(
         "{} - {} (score {:.2}, {}; you selected it)",
@@ -118,7 +132,7 @@ pub fn render_plan(
         candidate.score,
         evidence_noun(candidate)
     );
-    let lines = vec![
+    let mut lines = vec![
         row("From", &shown_path(&plan.source, rich, color)),
         row(
             "Destination",
@@ -127,12 +141,19 @@ pub fn render_plan(
         row("Basis", &basis),
         row("Mode", &generic::dry_run_banner(execute_requested, color)),
     ];
+    push_checkout_notice(&mut lines, other_checkout, rich, color);
     frame("KASEIFU / SELECT [MANUAL]", &lines, rich, color)
 }
 
 /// Render the completed manual move.
-pub fn render_moved(plan: &MovePlan, operation_id: &str, rich: bool, color: bool) -> String {
-    let lines = vec![
+pub fn render_moved(
+    plan: &MovePlan,
+    operation_id: &str,
+    rich: bool,
+    color: bool,
+    other_checkout: Option<&Path>,
+) -> String {
+    let mut lines = vec![
         row(
             "Destination",
             &shown_path(&plan.destination_path, rich, color),
@@ -140,7 +161,34 @@ pub fn render_moved(plan: &MovePlan, operation_id: &str, rich: bool, color: bool
         row("Operation", operation_id),
         row("Undo", "kaseifu undo reverses this move"),
     ];
+    push_checkout_notice(&mut lines, other_checkout, rich, color);
     frame("KASEIFU / SELECT [MANUAL] / MOVED", &lines, rich, color)
+}
+
+/// One line added to a manual move whose destination is another working copy of
+/// the source's repository (issue #17).
+///
+/// `shown_root` is the destination's working-copy root, already rendered for the
+/// view. ASCII, one sentence: the move stays allowed (a human named the path)
+/// and `undo` reverses it, so the reader only has to decide whether landing in
+/// that checkout is what they meant.
+pub fn cross_checkout_notice(shown_root: &str) -> String {
+    format!(
+        "Warning: another working copy of the same repository ({shown_root}); undo reverses the move"
+    )
+}
+
+/// Append [`cross_checkout_notice`] when the destination is another working
+/// copy; nothing is added otherwise, so historical output stays identical.
+fn push_checkout_notice(
+    lines: &mut Vec<String>,
+    other_checkout: Option<&Path>,
+    rich: bool,
+    color: bool,
+) {
+    if let Some(root) = other_checkout {
+        lines.push(cross_checkout_notice(&shown_path(root, rich, color)));
+    }
 }
 
 /// The cancellation line (q, declined confirmation, Ctrl+C equivalent).

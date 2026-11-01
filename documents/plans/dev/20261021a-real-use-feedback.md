@@ -52,7 +52,7 @@ fell into it and the new test caught it.
   expresses "this project belongs to that site". Inferring a site the path does
   not name would mean reading the file body in rule matching: a new capability,
   recorded as a user decision
-  (`issues/waiting-user/20261021-waiting-rule-content-matching.md`).
+  (`issues/waiting-user/20261101-waiting-rule-content-matching.md`).
 - **D3: exit code 3 for a missing copy.** `skill check` is the one command a CI
   step reads a code from, and "refresh this copy" is a different repair from
   "this repository never had one". 3 keeps the existing 0/1/2 meanings intact

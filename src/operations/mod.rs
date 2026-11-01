@@ -1,3 +1,4 @@
+pub mod checkout;
 pub mod mover;
 pub mod organize;
 pub mod plan;

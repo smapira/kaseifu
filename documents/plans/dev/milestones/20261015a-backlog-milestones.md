@@ -9,8 +9,8 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 | Status | Count | Directory |
 |---|---:|---|
 | Open | 1 | `../issues/open/` |
-| Waiting for user/external resource | 8 | `../issues/waiting-user/` |
-| Done | 25 | `../issues/done/` |
+| Waiting for user/external resource | 7 | `../issues/waiting-user/` |
+| Done | 26 | `../issues/done/` |
 
 ## M1 - Reliability and CLI clarity
 
@@ -28,6 +28,8 @@ Goal: reduce confusing user-visible behavior before adding larger features.
 | Done | [`organize-folder-target`](../issues/done/20261021-done-organize-folder-target.md) | `organize` and `classify` refuse a folder at the boundary (exit 1, before the policy, the key and the journal) instead of printing a verdict about it; `label` and `watch` keep their folder/directory shapes. |
 | Done | [`skill-coverage-and-exit-codes`](../issues/done/20261021-done-skill-coverage-and-exit-codes.md) | The embedded skill covers repository rules, `--keywords` and the index row; `skill check` reads 0 (match) / 1 (stale) / 3 (no file) so CI can tell drift from "never installed". |
 | Done | [`label-guidance-touches-state`](../issues/done/20261016-done-label-guidance-touches-state.md) | The `label` guidance path returns before the store is opened, so it creates no journal database; a management flag combined with a target is refused before anything is opened. |
+| Done | [`cross-checkout-destination`](../issues/done/20261101-done-cross-checkout-destination.md) | An automatic move whose destination is another working copy of the source's repository (linked worktree or a second checkout of it) is REVIEW instead of a move, while `--to`/`--select` warn and stay allowed; submodules and separate clones are still allowed. |
+
 ## M2 - Media quality
 
 Goal: improve rename quality from real visual and document evidence.
@@ -74,8 +76,7 @@ Goal: track tasks that cannot be completed from the Delta worktree alone.
 | Waiting-user | [`trec-corpus-evaluation`](../issues/waiting-user/20261015-waiting-trec-corpus-evaluation.md) | NIST corpus is available and the evaluation direction is chosen. |
 | Waiting-user | [`snapshot-cleanup`](../issues/waiting-user/20261015-waiting-snapshot-cleanup.md) | Snapshot is deleted or retained with a recorded reason. |
 | Waiting-user | [`local-checkout-pull`](../issues/waiting-user/20261015-waiting-local-checkout-pull.md) | Non-Delta checkout is updated or intentionally left stale. |
-| Waiting-user | [`rule-content-matching`](../issues/waiting-user/20261021-waiting-rule-content-matching.md) | User decides whether a rule may match file content, not only the path (recommendation: keep path-only, one rule per project/site pair). |
-| Waiting-user | [`cross-checkout-destination`](../issues/waiting-user/20261021-waiting-cross-checkout-destination.md) | User decides whether a destination in another working copy of the same repository is REVIEWed (recommendation: yes) and `--to`/`--select` warned. |
+| Waiting-user | [`rule-content-matching`](../issues/waiting-user/20261101-waiting-rule-content-matching.md) | User decides whether a rule may match file content, not only the path (recommendation: keep path-only, one rule per project/site pair). |
 
 ## Milestone order
 

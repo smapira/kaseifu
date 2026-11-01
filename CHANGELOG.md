@@ -19,6 +19,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/v115_label_guidance_state_test.rs` pins the guidance path, both
   management answers and the refusal.
 
+- **A destination in another working copy of the same repository is REVIEWed,
+  not moved silently.** Issue #17: Discovery is machine-wide, so a candidate
+  destination can belong to a different checkout of the repository the file
+  lives in - measured 2026-10-19 on `seo-operations`, where organizing from
+  `.delta/worktrees/<id>/...` selected the *primary* checkout (Spotlight never
+  returns the hidden worktree path, so only the visible sibling could be a
+  candidate at all). `--execute` then put the file into that checkout as an
+  untracked file, and the report said nothing. An automatic move there is now
+  **REVIEW** (`destination is in another working copy of the same repository:
+  <folder>`, `outcome.kind = destination_in_another_checkout`, exit 0 like
+  every other REVIEW), decided by comparing git common directories without
+  spawning `git` - so a linked worktree, a second checkout of it, a submodule
+  (its own repository) and a separate clone stay distinguishable. `--to` and
+  `--select` name the path themselves, so they stay allowed and print one
+  warning line (`--to --format json` adds one `checkout` object). A collision
+  inside the other checkout keeps the cross-checkout reason rather than
+  `destination already exists`. `tests/v114_cross_checkout_destination_test.rs`
+  pins every case with hand-written `.git` files (no `git init`).
 - **`organize` and `classify` refuse a folder instead of deciding one.**
   Issue #14 (real use of 0.13.0): a folder given to `organize` ran the whole
   file pipeline and printed a plausible verdict (exit 0, "no move") - only the
