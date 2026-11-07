@@ -986,6 +986,7 @@ fn handle_organize_to(
         score: 0.0,
         evidence_count: 0,
         reasons: vec!["named with --to".to_string()],
+        origin: Default::default(),
     };
     let move_plan = match plan::build_manual_move_plan(file, &candidate) {
         Ok(move_plan) => move_plan,
@@ -2329,7 +2330,9 @@ fn handle_discover(file: &Path, all: bool, verbose: bool, format: OutputFormat) 
     let ctx = context::builder::build(file)?;
     let target_name = ctx.target.filename.clone();
     let normalized = normalize::normalize_with_options(ctx, &inspect_image_options())?;
-    let candidates = discovery::discover(normalized)?;
+    // The diagnostic view shows the same candidate set the pipeline uses,
+    // standard-folder prior included (issue #18).
+    let candidates = discovery::discover_with_priors(normalized)?;
 
     if mode.rich {
         discover_view::print_rich(&target_name, &candidates, all, verbose, mode.color);

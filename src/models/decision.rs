@@ -1,6 +1,6 @@
 //! Phase 4 Decision Context - the semantic question offered to Jev.
 
-use crate::models::candidate::CandidateDestination;
+use crate::models::candidate::{CandidateDestination, CandidateOrigin};
 use crate::models::file_context::{ImageMetadata, NormalizedFileContext};
 use serde::{Deserialize, Serialize};
 
@@ -53,6 +53,7 @@ impl DecisionContext {
                 path: candidate.path.display().to_string(),
                 evidence_count: candidate.evidence_count,
                 reasons: candidate.reasons.clone(),
+                origin: candidate.origin,
             })
             .collect();
 
@@ -73,6 +74,7 @@ impl DecisionContext {
                 path: String::new(),
                 evidence_count: 0,
                 reasons: Vec::new(),
+                origin: CandidateOrigin::default(),
             })
             .collect();
 
@@ -196,6 +198,12 @@ pub struct DecisionCandidate {
     pub evidence_count: usize,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub reasons: Vec<String>,
+    /// `spotlight` for a directory aggregated from index evidence,
+    /// `prior` for a standard operating-system folder offered because the
+    /// file's type belongs there (issue #18). Additive: a payload without it
+    /// reads as `spotlight`.
+    #[serde(default, skip_serializing_if = "CandidateOrigin::is_spotlight")]
+    pub origin: CandidateOrigin,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]

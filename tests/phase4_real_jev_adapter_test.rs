@@ -182,6 +182,7 @@ fn populated_context() -> DecisionContext {
         score: 15.0,
         evidence_count: 2,
         reasons: vec!["found 2 items".to_string()],
+        origin: Default::default(),
     }];
 
     DecisionContext::from_normalized(&normalized, &candidates)

@@ -49,6 +49,7 @@ fn report(
             score: decision.confidence,
             evidence_count: 1,
             reasons: vec!["fixture".to_string()],
+            origin: Default::default(),
         }],
         _ => Vec::new(),
     };

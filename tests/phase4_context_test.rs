@@ -26,7 +26,7 @@ use kaseifu::classifier::pipeline::classify_with_search;
 use kaseifu::models::CandidateDestination;
 use kaseifu::models::decision::DecisionContext;
 use kaseifu::models::file_context::NormalizedFileContext;
-use kaseifu::{context, discovery, normalize};
+use kaseifu::{context, normalize};
 
 // ---------------------------------------------------------------------------
 // Spy JevIntegration: records the DecisionContext, decides nothing
@@ -151,7 +151,17 @@ fn production_candidates(
     fixture: &Fixture,
     search: impl Fn(&str, usize) -> anyhow::Result<Vec<String>>,
 ) -> Vec<CandidateDestination> {
-    discovery::discover_with(production_normalized(fixture), search).unwrap()
+    // The production discovery path, not `discover_with`: it is what the
+    // classifier is handed, and it appends the standard-folder prior for the
+    // target's type (issue #18).
+    kaseifu::classifier::pipeline::discover_candidates_with_options(
+        &fixture.target,
+        search,
+        &kaseifu::context::image_metadata::MetadataOptions::default(),
+    )
+    .expect("discovery")
+    .1
+    .candidates
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +216,11 @@ async fn phase4_context_candidates_preserve_discovery_evidence() {
     let fixture = make_fixture("candidates");
     let search = stub_search(fixture.similar.clone());
     let discovered = production_candidates(&fixture, search.clone());
-    assert_eq!(discovered.len(), 2, "fixture must yield two candidates");
+    assert!(
+        discovered.len() >= 2,
+        "fixture must yield its two aggregated candidates (plus the standard folder \
+         for the target type, issue #18): {discovered:?}"
+    );
 
     let (spy, recorded) = SpyJevIntegration::new();
     let _ = classify_with_search(&fixture.target, &spy, search)

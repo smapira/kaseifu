@@ -643,6 +643,7 @@ fn image_context() -> DecisionContext {
         score: 1.0,
         evidence_count: 1,
         reasons: vec![],
+        origin: Default::default(),
     }];
     DecisionContext::from_normalized(&normalized, &candidates)
 }

@@ -210,11 +210,19 @@ async fn phase4_full_pipeline_no_candidates_yields_safe_none() {
     let fixture = make_fixture("no-candidates");
     let search = stub_search(Vec::new()); // Spotlight finds nothing
 
+    // Issue #18 gives a *typed* file one candidate even when the index knows
+    // nothing (the standard folder for its type), so the invariant tested here
+    // - no offerings, no Jev call - needs a type that maps to no standard
+    // folder. A `.png` correctly reaches the classifier now.
+    let target = fixture.root.join("CBX-notes.cbx");
+    fs::write(&target, b"fixture").unwrap();
+    xattr::set(&target, "CBX", b"Firefox\0").unwrap();
+
     // A mock that would fail loudly proves Jev is not consulted when there
     // are no choices to select from.
     let mock = MockJevIntegration::configured_error("must-not-be-called");
 
-    let decision = classify_with_search(&fixture.target, &mock, search)
+    let decision = classify_with_search(&target, &mock, search)
         .await
         .expect("no candidates is a safe outcome, not an error");
 

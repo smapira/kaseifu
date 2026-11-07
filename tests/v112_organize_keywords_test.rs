@@ -212,6 +212,7 @@ fn one_candidate() -> Vec<CandidateDestination> {
         score: 12.0,
         evidence_count: 2,
         reasons: vec!["found 2 items".to_string()],
+        origin: Default::default(),
     }]
 }
 

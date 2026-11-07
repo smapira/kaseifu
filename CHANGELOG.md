@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **OS standard directories are offered as candidates for an unindexed file.**
+  Issue #18: destination eligibility only had a refusal side (`~/Library/**`,
+  bundles, caches, system trees), so `~/Documents` and a repository directory
+  scored the same and a file Spotlight had not indexed yet produced *no*
+  candidate at all. `src/platform/user_dirs.rs` now names the standard folders
+  (`dirs` crate: the macOS folders, XDG on Linux) and maps the types this tool
+  already knows to them (`.pdf/.md/.csv` -> documents, `.png/.jpg` -> pictures,
+  `.mp4` -> video, `.mp3` -> audio, `.zip/.dmg` -> downloads). Discovery appends
+  the matching folder as a candidate with `origin: prior`, score 0.0, no
+  evidence rows and the reason `standard folder for documents (prior)`: it is
+  never mixed into a Spotlight cluster, so an unindexed machine still reads as
+  unindexed. Every ranked candidate keeps its ID (the prior continues the
+  numbering), a missing folder adds nothing, and `--format json` only gains the
+  additive `origin` key. `tests/v118_known_user_dirs_test.rs` plus the
+  indicator in `src/benchmark/candidate_prior.rs` (candidates for an unindexed
+  file: 0 -> 1).
+
 - **`organize` says why it left a file alone.** Issue #20: the rich output printed
   `[LEAVE] LEAVE` and `policy refused: automatic move not allowed` for two
   different states - an unindexed file with no candidate at all, and a file whose

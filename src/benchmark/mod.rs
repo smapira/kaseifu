@@ -18,6 +18,7 @@
 //!   moves, deletes, renames or rewrites a corpus document;
 //! * the corpus is never the user's normal file tree.
 
+pub mod candidate_prior;
 pub mod cli;
 pub mod gate;
 pub mod perf;

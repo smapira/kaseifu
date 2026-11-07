@@ -120,6 +120,7 @@ impl Fixture {
             score: 12.5,
             evidence_count: 1,
             reasons: vec!["found 1 items".to_string()],
+            origin: Default::default(),
         }
     }
 }

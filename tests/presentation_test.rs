@@ -14,6 +14,7 @@ fn cand(id: &str, score: f64) -> CandidateDestination {
         score,
         evidence_count: 1,
         reasons: vec!["exact normalized filename".to_string()],
+        origin: Default::default(),
     }
 }
 

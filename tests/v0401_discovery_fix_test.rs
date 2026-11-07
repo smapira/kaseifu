@@ -222,6 +222,7 @@ fn production_context() -> DecisionContext {
         score: 1.0,
         evidence_count: 1,
         reasons: vec![],
+        origin: Default::default(),
     }];
     DecisionContext::from_normalized(&normalized, &candidates)
 }
@@ -248,6 +249,7 @@ fn context_with_signals_and_metadata(
         score: 1.0,
         evidence_count: 1,
         reasons: vec![],
+        origin: Default::default(),
     }];
     DecisionContext::from_normalized(&normalized, &candidates)
 }

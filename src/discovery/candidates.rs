@@ -109,6 +109,7 @@ pub fn aggregate_by_directory_with_exclusions(
             score: s.score,
             evidence_count: s.evidence_count,
             reasons: s.reasons,
+            origin: Default::default(),
         })
         .collect();
 

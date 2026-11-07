@@ -621,6 +621,7 @@ fn plan_candidates(dir: &std::path::Path) -> Vec<kaseifu::models::candidate::Can
         score: 1.0,
         evidence_count: 1,
         reasons: vec![],
+        origin: Default::default(),
     }]
 }
 

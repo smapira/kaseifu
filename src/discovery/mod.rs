@@ -1,4 +1,7 @@
+use crate::models::candidate::{CandidateDestination, CandidateOrigin};
 use crate::models::{SimilarFile, file_context::NormalizedFileContext};
+use crate::platform::user_dirs::{self, UserDirKind};
+use std::path::PathBuf;
 
 // Internal functions have placeholder mode disabled for now
 mod candidates;
@@ -20,6 +23,85 @@ pub use search_terms::{extract_terms, normalize_terms};
 pub use similarity::{
     SimilarFiles, find_similar_files, find_similar_files_with, scan_similar_files_with,
 };
+
+/// [`discover`] plus the standard-folder prior (issue #18).
+///
+/// The diagnostic `discover` command and the production pipeline both want the
+/// same candidate set, and that set now includes the operating-system folder the
+/// file's type belongs in. `discover`/`discover_with` themselves stay exactly as
+/// they were: their callers pin the ranked list, and a prior whose presence
+/// depends on the machine's home layout must not move those numbers.
+pub fn discover_with_priors(
+    normalized: NormalizedFileContext,
+) -> anyhow::Result<Vec<CandidateDestination>> {
+    let extension = normalized.target.extension.clone();
+    let mut found = discover(normalized)?;
+    add_known_dir_priors(&mut found, extension.as_deref());
+    Ok(found)
+}
+
+/// Append the standard folder for this file type as a separate candidate.
+///
+/// The prior is not mixed into a Spotlight score: it carries score 0.0, no
+/// evidence rows and `origin: prior`, and its reason says which standard folder
+/// it is. That is the honest shape for "the index knows nothing about this file,
+/// but a PDF belongs in `~/Documents`" (issue #18), and it is what makes an
+/// unindexed file negotiable at all on a machine without Spotlight.
+///
+/// Nothing is added when the type maps to no standard folder, when the folder
+/// does not exist, when it is already a candidate, when it is on the
+/// never-a-destination list, or when the list is already at its bound.
+pub fn add_known_dir_priors(candidates: &mut Vec<CandidateDestination>, extension: Option<&str>) {
+    let known = user_dirs::known_dirs();
+    add_standard_dir_priors(candidates, extension, &known);
+}
+
+/// [`add_known_dir_priors`] over an explicit directory list (tests and callers
+/// that already resolved the platform answers).
+pub fn add_standard_dir_priors(
+    candidates: &mut Vec<CandidateDestination>,
+    extension: Option<&str>,
+    known: &[(UserDirKind, PathBuf)],
+) {
+    let Some(kind) = extension.and_then(user_dirs::kind_for_extension) else {
+        return;
+    };
+    if candidates.len() >= MAX_CANDIDATE_DESTINATIONS {
+        return;
+    }
+    let Some((_, directory)) = known.iter().find(|(known_kind, _)| *known_kind == kind) else {
+        return;
+    };
+    let shown = directory.to_string_lossy().to_string();
+    if is_excluded_destination(&shown) {
+        return;
+    }
+    if candidates
+        .iter()
+        .any(|candidate| same_directory(&candidate.path, directory))
+    {
+        return;
+    }
+    candidates.push(CandidateDestination {
+        id: format!("D{}", candidates.len() + 1),
+        path: directory.clone(),
+        score: 0.0,
+        evidence_count: 0,
+        reasons: vec![format!("standard folder for {} (prior)", kind.label())],
+        origin: CandidateOrigin::Prior,
+    });
+}
+
+/// True when two spellings name the same directory.
+///
+/// Compared by canonical path when both resolve (so a symlinked `~/Documents`
+/// and the real folder are one candidate) and by text otherwise.
+fn same_directory(left: &std::path::Path, right: &std::path::Path) -> bool {
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
 
 /// Maximum number of raw Spotlight hits fetched and scored per run.
 ///

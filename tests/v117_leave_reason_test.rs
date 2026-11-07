@@ -24,6 +24,7 @@ fn candidate(id: &str, path: &str, score: f64) -> CandidateDestination {
         score,
         evidence_count: 1,
         reasons: vec!["fixture".to_string()],
+        origin: Default::default(),
     }
 }
 

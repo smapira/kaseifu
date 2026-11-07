@@ -246,8 +246,10 @@ pub fn discover_candidates(
 ///
 /// Returns the normalized context together with the discovery outcome:
 /// both are needed to build the `DecisionContext` without losing
-/// information or re-deriving it.
-fn discover_candidates_with_options<F>(
+/// information or re-deriving it. Public because it is the seam that shows
+/// what the production path offers a classifier: the standard-folder prior is
+/// appended here (issue #18), after the ranked candidates.
+pub fn discover_candidates_with_options<F>(
     file: &Path,
     search: F,
     image_options: &MetadataOptions,
@@ -257,7 +259,14 @@ where
 {
     let raw = context::builder::build(file)?; // Observe
     let normalized = normalize::normalize_with_options(raw, image_options)?; // Normalize
-    let outcome = discovery::discover_with_outcome(normalized.clone(), search)?; // Discover
+    let mut outcome = discovery::discover_with_outcome(normalized.clone(), search)?; // Discover
+    // The standard folder for this file type is a separate candidate (issue
+    // #18): appended after the ranked ones, so every ID a decision can name
+    // keeps its meaning, and never merged into a Spotlight score.
+    discovery::add_known_dir_priors(
+        &mut outcome.candidates,
+        normalized.target.extension.as_deref(),
+    );
 
     Ok((normalized, outcome))
 }

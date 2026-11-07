@@ -57,6 +57,7 @@ fn candidate(id: &str, directory: &Path) -> CandidateDestination {
         score: 1.0,
         evidence_count: 1,
         reasons: Vec::new(),
+        origin: Default::default(),
     }
 }
 
