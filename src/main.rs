@@ -1871,6 +1871,7 @@ async fn rename_file(
             current_name,
             rule_label,
             reason,
+            facts,
         } => {
             emit_rename_report(
                 format,
@@ -1878,12 +1879,15 @@ async fn rename_file(
                     current_name: &current_name,
                     proposal: Option::None,
                     pattern: &rule_label,
-                    date_source: "",
+                    // The resolved date's provenance when the plan had already
+                    // resolved it; `""` means the hold came first, never that
+                    // resolution failed (issue #21).
+                    date_source: facts.date_source.unwrap_or(""),
                     status: "held",
                     reason: Some(&reason),
                     operation_id: Option::None,
                     target,
-                    perception: Option::None,
+                    perception: facts.perception.as_ref(),
                     video: Option::None,
                     directory: Option::None,
                 },

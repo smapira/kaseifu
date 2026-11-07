@@ -95,10 +95,18 @@ fn check_dot_entry(name: &str) -> Result<(), NameProblem> {
 
 /// Refuse `/`, NUL, backslash and `:` (Finder separator compatibility).
 fn check_separators(name: &str) -> Result<(), NameProblem> {
-    if name.contains('/') || name.contains('\0') || name.contains('\\') || name.contains(':') {
+    if has_separator(name) {
         return Err(NameProblem::Separator);
     }
     Ok(())
+}
+
+/// True when `value` carries a character a name may not contain.
+///
+/// The same set [`check_separators`] refuses, exposed so a caller can name
+/// *where* the character came from (a model title is not a file name).
+pub fn has_separator(value: &str) -> bool {
+    value.contains('/') || value.contains('\0') || value.contains('\\') || value.contains(':')
 }
 
 /// Refuse over-long names.

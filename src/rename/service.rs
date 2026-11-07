@@ -31,9 +31,9 @@ use super::rules::{
 };
 use super::store::RenameStore;
 use super::validate::{
-    DirectorySnapshot, FileSnapshot, NameProblem, check_directory_name, check_filename, is_symlink,
-    recheck_before_execute, recheck_directory_before_execute, sibling_path, snapshot,
-    snapshot_directory,
+    DirectorySnapshot, FileSnapshot, NameProblem, check_directory_name, check_filename,
+    has_separator, is_symlink, recheck_before_execute, recheck_directory_before_execute,
+    sibling_path, snapshot, snapshot_directory,
 };
 use super::video::{classify_video, is_video};
 
@@ -299,7 +299,49 @@ pub enum PlanOutcome {
         current_name: String,
         rule_label: String,
         reason: String,
+        /// What the plan already knew when it was withheld.
+        facts: HoldFacts,
     },
+}
+
+/// What a held plan had already learned when the proposal was withheld.
+///
+/// A hold happens at every stage (a poisoned name, a missing title, a failed
+/// validation), so each fact is carried only when the stage that produces it
+/// has run: `None` means "not reached yet", never "unavailable". A report
+/// that hardcoded these as empty made an image hold look like a resolution
+/// failure (issue #21), so the report reads them from here instead.
+#[derive(Debug, Clone, Default)]
+pub struct HoldFacts {
+    /// What perception contributed, when the hold happened after it ran.
+    pub perception: Option<PerceptionReport>,
+    /// The resolved naming date's provenance, when the date was resolved.
+    pub date_source: Option<&'static str>,
+}
+
+impl HoldFacts {
+    /// Nothing has run yet: the hold happened before perception and before
+    /// the date was resolved (a poisoned name, an unknown pattern).
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Perception ran; the date may not have been resolved yet.
+    pub fn from_perception(perception: &PerceptionReport) -> Self {
+        Self {
+            perception: Some(perception.clone()),
+            date_source: None,
+        }
+    }
+
+    /// The date was resolved, so its provenance is known (with whatever
+    /// perception contributed on this path).
+    fn from_facts(facts: &PlanFacts) -> Self {
+        Self {
+            perception: facts.perception.clone(),
+            date_source: Some(facts.date.source),
+        }
+    }
 }
 
 /// Why planning or execution failed outright.
@@ -392,6 +434,7 @@ async fn plan_image_rename(
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
             reason: "probable prompt injection; proposal withheld".to_string(),
+            facts: HoldFacts::none(),
         });
     }
     // Perception before the model call: the labels ride in the same request
@@ -410,6 +453,7 @@ async fn plan_image_rename(
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
             reason: "probable prompt injection; proposal withheld".to_string(),
+            facts: HoldFacts::from_perception(&perception),
         });
     }
     if !labels.is_empty() || !ocr_text.is_empty() {
@@ -424,6 +468,7 @@ async fn plan_image_rename(
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
             reason,
+            facts: HoldFacts::from_perception(&perception),
         });
     }
     if let Some(reason) = file_title_hold(&semantic, &context) {
@@ -431,6 +476,7 @@ async fn plan_image_rename(
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
             reason,
+            facts: HoldFacts::from_perception(&perception),
         });
     }
     let (date, _) = resolve_plan_date(&context, None, DateMode::Image);
@@ -477,6 +523,7 @@ async fn plan_video_rename(
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
             reason: "probable prompt injection; proposal withheld".to_string(),
+            facts: HoldFacts::none(),
         });
     }
     let (video, labels) = match perceive_video(provider, target) {
@@ -486,8 +533,15 @@ async fn plan_video_rename(
                 current_name: context.target.filename.clone(),
                 rule_label: selection.label(),
                 reason,
+                facts: HoldFacts::none(),
             });
         }
+    };
+    // The frames produced a label set, so the perception fact is known from
+    // here on (a held video reports it instead of `null`).
+    let video_perception = PerceptionReport::Labels {
+        labels: labels.labels.clone(),
+        text: Vec::new(),
     };
     context.video = Some(video.info.clone());
     context.perception = Some(labels.clone());
@@ -497,6 +551,7 @@ async fn plan_video_rename(
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
             reason,
+            facts: HoldFacts::from_perception(&video_perception),
         });
     }
     if let Some(reason) = file_title_hold(&semantic, &context) {
@@ -504,6 +559,7 @@ async fn plan_video_rename(
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
             reason,
+            facts: HoldFacts::from_perception(&video_perception),
         });
     }
     let (date, _) = resolve_plan_date(&context, None, DateMode::Video);
@@ -548,6 +604,7 @@ async fn plan_document_rename(
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
             reason: "probable prompt injection; proposal withheld".to_string(),
+            facts: HoldFacts::none(),
         });
     }
     let semantic = analyze(provider, &context).await?;
@@ -556,6 +613,7 @@ async fn plan_document_rename(
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
             reason,
+            facts: HoldFacts::none(),
         });
     }
     let (date, _) = resolve_plan_date(&context, document_ymd, DateMode::Document);
@@ -616,6 +674,7 @@ async fn plan_directory_rename(
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
             reason,
+            facts: HoldFacts::none(),
         });
     }
     context
@@ -627,6 +686,7 @@ async fn plan_directory_rename(
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
             reason,
+            facts: HoldFacts::none(),
         });
     }
     if let Some(reason) = folder_echo_hold(&semantic, &facts) {
@@ -634,6 +694,7 @@ async fn plan_directory_rename(
             current_name: context.target.filename.clone(),
             rule_label: selection.label(),
             reason,
+            facts: HoldFacts::none(),
         });
     }
     let (date, _) = resolve_plan_date(&context, None, DateMode::Directory);
@@ -839,6 +900,14 @@ fn finish_directory_plan(
         )));
     }
     let current_name = context.target.filename.clone();
+    if let Some(reason) = title_hold_reason(semantic, facts) {
+        return Ok(PlanOutcome::Held {
+            current_name,
+            rule_label: selection.label(),
+            reason,
+            facts: HoldFacts::from_facts(facts),
+        });
+    }
     let inputs = rule_inputs(semantic, context, options, date, "");
     let template = plan_template(store, selection)?;
     let stem = match resolve_template(&template, &inputs, &date_format) {
@@ -848,6 +917,7 @@ fn finish_directory_plan(
                 current_name,
                 rule_label: selection.label(),
                 reason: error.to_string(),
+                facts: HoldFacts::from_facts(facts),
             });
         }
     };
@@ -860,7 +930,8 @@ fn finish_directory_plan(
         return Ok(PlanOutcome::Held {
             current_name,
             rule_label: selection.label(),
-            reason: problem.to_string(),
+            reason: proposal_problem_reason(&proposal, problem),
+            facts: HoldFacts::from_facts(facts),
         });
     }
     assemble_plan(
@@ -1255,6 +1326,18 @@ fn finish_plan(
     }
     let current_name = context.target.filename.clone();
     let current_extension = context.target.extension.clone().unwrap_or_default();
+    // The model's title is checked before the template runs: a title carrying
+    // `/` used to reach the validator as part of the assembled proposal, and
+    // the validator's first complaint ("path separator") read as if the file's
+    // own name were bad (issue #21).
+    if let Some(reason) = title_hold_reason(semantic, facts) {
+        return Ok(PlanOutcome::Held {
+            current_name,
+            rule_label: selection.label(),
+            reason,
+            facts: HoldFacts::from_facts(facts),
+        });
+    }
     let inputs = rule_inputs(semantic, context, options, date, &current_extension);
     let template = plan_template(store, selection)?;
     let stem = match resolve_template(&template, &inputs, &date_format) {
@@ -1267,6 +1350,7 @@ fn finish_plan(
                 current_name,
                 rule_label: selection.label(),
                 reason: error.to_string(),
+                facts: HoldFacts::from_facts(facts),
             });
         }
     };
@@ -1281,7 +1365,8 @@ fn finish_plan(
         return Ok(PlanOutcome::Held {
             current_name,
             rule_label: selection.label(),
-            reason: "title is empty after removing the echoed extension".to_string(),
+            reason: empty_stem_reason(semantic, facts),
+            facts: HoldFacts::from_facts(facts),
         });
     }
     let proposal = format!("{stem}.{current_extension}");
@@ -1289,7 +1374,8 @@ fn finish_plan(
         return Ok(PlanOutcome::Held {
             current_name,
             rule_label: selection.label(),
-            reason: problem.to_string(),
+            reason: proposal_problem_reason(&proposal, problem),
+            facts: HoldFacts::from_facts(facts),
         });
     }
     assemble_plan(
@@ -1368,6 +1454,67 @@ fn camera_label(context: &NormalizedFileContext) -> String {
     parts.join(" ")
 }
 
+/// Why the model's title cannot name the target, or `None` when it can.
+///
+/// The title is the model's answer, not the target's name. Validating the
+/// assembled proposal reported the validator's first complaint about the
+/// *combination* ("name must not contain a path separator"), which read as if
+/// the file's own name were bad and hid the real cause: the model answered
+/// with a slash (issue #21). The title is checked here, before the template
+/// runs, so the reason names where the character came from.
+fn title_hold_reason(semantic: &SemanticInfo, facts: &PlanFacts) -> Option<String> {
+    let title = semantic.title.as_deref().unwrap_or_default().trim();
+    if title.is_empty() {
+        return Some(no_title_reason(facts));
+    }
+    if title == "." || title == ".." {
+        return Some("the model's title is a dot entry; proposal withheld".to_string());
+    }
+    has_separator(title)
+        .then(|| "the model's title contains a path separator; proposal withheld".to_string())
+}
+
+/// The reason a proposal with no title at all is withheld.
+///
+/// An image whose perception failed has nothing to describe, so the hold names
+/// that cause too: "no proposal" and "perception unavailable" are different
+/// states for the reader (issue #21).
+fn no_title_reason(facts: &PlanFacts) -> String {
+    match facts.perception.as_ref() {
+        Some(PerceptionReport::Unavailable(reason)) => format!(
+            "no title could be drawn from this file; image perception: {reason}; proposal withheld"
+        ),
+        _ => "no title could be drawn from this file; proposal withheld".to_string(),
+    }
+}
+
+/// The reason a stem that normalised away is withheld.
+///
+/// The echoed-extension case keeps its own sentence (a `note.txt` title for
+/// `note.txt` is the model repeating the name, not a missing answer).
+fn empty_stem_reason(semantic: &SemanticInfo, facts: &PlanFacts) -> String {
+    let title = semantic.title.as_deref().unwrap_or_default().trim();
+    if title.is_empty() {
+        return no_title_reason(facts);
+    }
+    "title is empty after removing the echoed extension".to_string()
+}
+
+/// The reason a validated proposal is refused, with the cause named.
+///
+/// The validator's own wording is kept for every case it describes exactly
+/// (an extension change, a collision, an over-long name); a separator is the
+/// one case the validator cannot attribute, because a builtin template has no
+/// separator and the file name is not what is being validated.
+fn proposal_problem_reason(proposal: &str, problem: NameProblem) -> String {
+    match problem {
+        NameProblem::Separator if has_separator(proposal) => {
+            "the proposed name contains a path separator; proposal withheld".to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
 /// Assemble the validated plan, detecting no-ops.
 ///
 /// The snapshot follows the target's kind: a folder is identified by its
@@ -1405,6 +1552,12 @@ fn assemble_plan(
             current_name: current_name.to_string(),
             rule_label: selection.label(),
             reason: NameProblem::Collision(destination.display().to_string()).to_string(),
+            // The date was resolved for this plan, so the report can say where
+            // the proposed prefix came from even though nothing is proposed.
+            facts: HoldFacts {
+                perception: perception.clone(),
+                date_source: Some(date.source),
+            },
         });
     }
     let snapshot = if directory.is_some() {

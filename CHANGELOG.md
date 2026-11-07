@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A held `kaseifu label` proposal names its real cause.** Issue #21: a PNG on
+  the Desktop answered `"proposal": null` with `reason: name must not contain a
+  path separator`, `perception: null` and `date_source: ""`, which reads as if
+  the file's own name were bad and says nothing about what actually happened.
+  The character came from *the model's title*, and the validator was the first
+  component to complain about the assembled name. `label` now checks the title
+  before the template runs, so a title carrying `/`, `\` or `:` is held as
+  `the model's title contains a path separator`, an answer with no title is held
+  as `no title could be drawn from this file` (with the perception reason when
+  the image path could not perceive anything, so "nothing to describe" and
+  "perception unavailable" stay distinguishable), and a held report carries the
+  perception it obtained and the date source it resolved instead of `null` and
+  `""`. `date_source` stays `""` only when the hold happened before the date
+  was resolved - it is never invented. Normal proposals (text, image, folder)
+  are unchanged, and `--format json` keeps every key. `new
+  tests/v116_label_proposal_reason_test.rs`.
+
 ## [0.13.1] - 2026-11-01
 
 ### Fixed
