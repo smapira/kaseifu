@@ -159,36 +159,35 @@ fn v118_the_production_path_offers_the_prior_when_the_folder_exists() {
     let root = sandbox("view");
     let target = root.join("invoice.pdf");
     std::fs::write(&target, b"%PDF-1.4\n").expect("fixture");
+    let documents = root.join("Documents");
+    std::fs::create_dir_all(&documents).expect("documents");
+    // An explicit standard-folder list: the production seam takes the list as a
+    // parameter for exactly this reason (issue #18), so this test does not
+    // depend on the machine's own home layout.
+    let known = user_dirs::existing_dirs(vec![(UserDirKind::Document, documents.clone())]);
 
-    // The production discovery path with a search that finds nothing: the
-    // unindexed case the issue measured.
-    let (_, outcome) = kaseifu::classifier::pipeline::discover_candidates_with_options(
+    let (_, outcome) = kaseifu::classifier::pipeline::discover_candidates_with_priors(
         &target,
         |_query, _limit| Ok(Vec::new()),
         &kaseifu::context::image_metadata::MetadataOptions::default(),
+        &known,
     )
     .expect("discover");
-    let documents = user_dirs::known_dirs()
-        .into_iter()
-        .find(|(kind, _)| *kind == UserDirKind::Document)
-        .map(|(_, path)| path);
 
-    // The assertion is about the relationship, never about this machine's
-    // layout: a machine without `~/Documents` offers no prior and must not
-    // invent one.
-    match documents {
-        Some(documents) => {
-            assert_eq!(outcome.candidates.len(), 1, "only the prior is offered");
-            let prior = &outcome.candidates[0];
-            assert_eq!(prior.origin, CandidateOrigin::Prior);
-            assert_eq!(prior.path, documents);
-            assert_eq!(outcome.target_indexed, Some(false));
-        }
-        None => assert!(
-            outcome.candidates.is_empty(),
-            "no standard folder exists: {:?}",
-            outcome.candidates
-        ),
-    }
+    assert_eq!(outcome.candidates.len(), 1, "only the prior is offered");
+    let prior = &outcome.candidates[0];
+    assert_eq!(prior.origin, CandidateOrigin::Prior);
+    assert_eq!(prior.path, documents);
+    assert_eq!(outcome.target_indexed, Some(false));
+
+    // No standard folder of that kind: nothing is invented.
+    let (_, outcome) = kaseifu::classifier::pipeline::discover_candidates_with_priors(
+        &target,
+        |_query, _limit| Ok(Vec::new()),
+        &kaseifu::context::image_metadata::MetadataOptions::default(),
+        &[],
+    )
+    .expect("discover");
+    assert!(outcome.candidates.is_empty(), "{:?}", outcome.candidates);
     let _ = std::fs::remove_dir_all(&root);
 }

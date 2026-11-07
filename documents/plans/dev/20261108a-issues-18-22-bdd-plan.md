@@ -80,8 +80,8 @@ provider is `FakeSemanticProvider`, so nothing needs Apple Intelligence.
 
 | ID | Behavior | Test |
 |---|---|---|
-| B19-1 | The `mdfind` invocation carries `-onlyin <root>` for every root, home first by default; the argument vector is unit-tested (no process). | `spotlight::tests::the_default_scope_is_the_home_directory`, `...::extra_roots_are_added_once` |
-| B19-2 | `--roots DIR` (repeatable) on `organize`, `classify` and `discover` replaces the scope with the named roots; without the flag the home directory is the scope. | `v119_onlyin_reaches_the_search_boundary`, `v119_roots_flag_scope` |
+| B19-1 | The `mdfind` invocation carries `-onlyin <root>` for every root, home first by default; the argument vector is unit-tested (no process). | `v119_the_default_scope_is_the_home_directory`, `v119_extra_roots_are_each_scoped` |
+| B19-2 | `--roots DIR` (repeatable) on `organize`, `classify` and `discover` replaces the scope with the named roots; without the flag the home directory is the scope. | `v119_a_search_runs_once_per_root_and_stays_bounded`, `v119_the_scope_reaches_the_search_the_pipeline_uses` |
 | B19-3 | A directory deeper below the home is penalised (`depth`), so a shallow standard folder wins a tie. | `v119_depth_penalty_orders_otherwise_equal_directories` |
 | B19-4 | A directory inside a git working tree (an ancestor holds `.git`) is penalised, so a repository path with equal filename similarity does not outrank a user folder. | `v119_a_worktree_path_does_not_outrank_a_user_folder` |
 | B19-5 | A directory that is the standard folder for the target's kind gets the prior bonus (#18 vocabulary). | `v119_the_standard_folder_gets_the_prior_bonus` |

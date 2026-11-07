@@ -900,7 +900,13 @@ fn finish_directory_plan(
         )));
     }
     let current_name = context.target.filename.clone();
-    if let Some(reason) = title_hold_reason(semantic, facts) {
+    let inputs = rule_inputs(semantic, context, options, date, "");
+    let template = plan_template(store, selection)?;
+    // Same rule as a file (issue #21): the model's title is checked before the
+    // template fills it in, and only when the template uses it.
+    if template.contains("{title}")
+        && let Some(reason) = title_hold_reason(semantic, facts)
+    {
         return Ok(PlanOutcome::Held {
             current_name,
             rule_label: selection.label(),
@@ -908,8 +914,6 @@ fn finish_directory_plan(
             facts: HoldFacts::from_facts(facts),
         });
     }
-    let inputs = rule_inputs(semantic, context, options, date, "");
-    let template = plan_template(store, selection)?;
     let stem = match resolve_template(&template, &inputs, &date_format) {
         Ok(stem) => stem,
         Err(error) => {
@@ -930,7 +934,7 @@ fn finish_directory_plan(
         return Ok(PlanOutcome::Held {
             current_name,
             rule_label: selection.label(),
-            reason: proposal_problem_reason(&proposal, problem),
+            reason: proposal_problem_reason(problem),
             facts: HoldFacts::from_facts(facts),
         });
     }
@@ -1326,11 +1330,15 @@ fn finish_plan(
     }
     let current_name = context.target.filename.clone();
     let current_extension = context.target.extension.clone().unwrap_or_default();
-    // The model's title is checked before the template runs: a title carrying
-    // `/` used to reach the validator as part of the assembled proposal, and
-    // the validator's first complaint ("path separator") read as if the file's
-    // own name were bad (issue #21).
-    if let Some(reason) = title_hold_reason(semantic, facts) {
+    let inputs = rule_inputs(semantic, context, options, date, &current_extension);
+    let template = plan_template(store, selection)?;
+    // The model's title is checked before the template fills it in, and only
+    // when the template actually uses it: a stored template that names a file
+    // from `{date}` and `{category}` alone does not need a title, so holding it
+    // for a missing one would refuse a rename that never depended on the answer.
+    if template.contains("{title}")
+        && let Some(reason) = title_hold_reason(semantic, facts)
+    {
         return Ok(PlanOutcome::Held {
             current_name,
             rule_label: selection.label(),
@@ -1338,8 +1346,6 @@ fn finish_plan(
             facts: HoldFacts::from_facts(facts),
         });
     }
-    let inputs = rule_inputs(semantic, context, options, date, &current_extension);
-    let template = plan_template(store, selection)?;
     let stem = match resolve_template(&template, &inputs, &date_format) {
         // The model sometimes echoes the file name including its extension;
         // the extension is owned by the rule engine, so a trailing match is
@@ -1374,7 +1380,7 @@ fn finish_plan(
         return Ok(PlanOutcome::Held {
             current_name,
             rule_label: selection.label(),
-            reason: proposal_problem_reason(&proposal, problem),
+            reason: proposal_problem_reason(problem),
             facts: HoldFacts::from_facts(facts),
         });
     }
@@ -1502,13 +1508,13 @@ fn empty_stem_reason(semantic: &SemanticInfo, facts: &PlanFacts) -> String {
 
 /// The reason a validated proposal is refused, with the cause named.
 ///
-/// The validator's own wording is kept for every case it describes exactly
-/// (an extension change, a collision, an over-long name); a separator is the
-/// one case the validator cannot attribute, because a builtin template has no
-/// separator and the file name is not what is being validated.
-fn proposal_problem_reason(proposal: &str, problem: NameProblem) -> String {
+/// A separator at this point came from the template inputs (a `--prefix`, a
+/// `{parent}` name, a custom template), never from the target's own name: the
+/// file name was already legal when it was observed, and the model's title is
+/// checked before the template runs.
+fn proposal_problem_reason(problem: NameProblem) -> String {
     match problem {
-        NameProblem::Separator if has_separator(proposal) => {
+        NameProblem::Separator => {
             "the proposed name contains a path separator; proposal withheld".to_string()
         }
         other => other.to_string(),

@@ -122,6 +122,31 @@ fn v117_zero_candidates_says_so() {
 }
 
 #[test]
+fn v117_the_zero_candidate_sentence_follows_the_index_state() {
+    // A search that knew the file: "not indexed yet" would be a false claim.
+    let indexed = text(&report(Some("NONE"), 0.23, Vec::new(), Some(true)));
+    assert!(
+        indexed.contains("none of the folders the index knows is usable"),
+        "got:\n{indexed}"
+    );
+    assert!(
+        !indexed.contains("may not know this file yet"),
+        "got:\n{indexed}"
+    );
+
+    // No search at all (the target produced no terms): neither claim applies.
+    let unsearched = text(&report(Some("NONE"), 0.23, Vec::new(), None));
+    assert!(
+        unsearched.contains("there was nothing to search for"),
+        "got:\n{unsearched}"
+    );
+    assert!(
+        !unsearched.contains("may not know this file yet"),
+        "got:\n{unsearched}"
+    );
+}
+
+#[test]
 fn v117_below_the_threshold_lists_the_candidates() {
     // The measured second kind: candidates existed, the confidence did not.
     let report = report(
@@ -300,12 +325,23 @@ fn v117_a_decided_verdict_keeps_its_rows() {
 
 #[test]
 fn v117_a_rule_hit_never_shows_a_leave_reason() {
+    // A repository rule decided this file: policy is `none`, the candidate list
+    // is empty, and no LEAVE sentence may appear (the rule section replaces the
+    // policy section entirely).
     let mut report = report(Some("NONE"), 0.0, Vec::new(), None);
     report.policy = DecisionAction::None;
-    if !matches!(report.policy, DecisionAction::Leave { .. }) {
-        assert!(
-            !text(&report).contains("no candidate destinations found"),
-            "a non-LEAVE policy never renders the LEAVE rows"
-        );
-    }
+    report.rule = Some(kaseifu::repo_policy::RuleMatch {
+        rule: "invoices".to_string(),
+        match_glob: "inbox/**".to_string(),
+        reason: Some("fixture".to_string()),
+        destination: PathBuf::from(SINK),
+        workspace: PathBuf::from("/data"),
+    });
+    let out = text(&report);
+    assert!(out.contains("== Repo policy =="), "got:\n{out}");
+    assert!(
+        !out.contains("no candidate destinations found"),
+        "a rule hit renders no LEAVE reason:\n{out}"
+    );
+    assert!(!out.contains("== Policy =="), "got:\n{out}");
 }

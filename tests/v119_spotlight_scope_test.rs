@@ -167,41 +167,58 @@ fn v119_a_worktree_path_does_not_outrank_a_user_folder() {
     let root = sandbox("worktree");
     let checkout = root.join("checkout");
     let repository_images = checkout.join("public/system/images/11/email");
-    let user_images = root.join("Pictures/2024");
     std::fs::create_dir_all(&repository_images).expect("repo");
-    std::fs::create_dir_all(&user_images).expect("user");
     std::fs::create_dir_all(checkout.join(".git")).expect("git dir");
+
+    // The user folder is a path outside every working tree (no `.git` ancestor),
+    // and the fixture home makes both depths comparable: the term under test is
+    // the working tree, not the depth.
+    let home = Path::new("/Users/test");
+    let user_images = home.join("Pictures/Decoy");
     let shape = DirectoryShape {
-        home: Some(root.clone()),
+        home: Some(home.to_path_buf()),
         known_dir: None,
     };
 
-    // Equal filename evidence in both, the shape of the measured case.
+    let (repository_score, repository_reasons) =
+        adjust_for_shape(0.4, &repository_images.to_string_lossy(), &shape);
+    let (user_score, user_reasons) = adjust_for_shape(0.4, &user_images.to_string_lossy(), &shape);
+
+    assert!(
+        repository_reasons
+            .iter()
+            .any(|reason| reason == "inside a git working tree"),
+        "the worktree term must fire for the checkout: {repository_reasons:?}"
+    );
+    assert!(
+        !user_reasons
+            .iter()
+            .any(|reason| reason == "inside a git working tree"),
+        "and never for a folder outside a working tree: {user_reasons:?}"
+    );
+    assert!(
+        user_score > repository_score,
+        "a worktree path must not outrank a user folder: {repository_score} vs {user_score}"
+    );
+
+    // And the penalised directory is still offered: a subtraction, not an
+    // exclusion.
     let candidates = ranked(
         vec![
             evidence(&repository_images, 0.4),
             evidence(&user_images, 0.4),
         ],
-        &shape,
+        &DirectoryShape {
+            home: Some(home.to_path_buf()),
+            known_dir: None,
+        },
     );
-    assert_eq!(
-        candidates[0].path,
-        user_images,
-        "a worktree path must not outrank a user folder: {:?}",
-        candidates
-            .iter()
-            .map(|c| (&c.path, c.score))
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(candidates[0].path, user_images);
     assert!(
         candidates
             .iter()
-            .find(|candidate| candidate.path == repository_images)
-            .expect("the repository path stays a candidate")
-            .reasons
-            .iter()
-            .any(|reason| reason == "inside a git working tree"),
-        "the worktree reason is reported"
+            .any(|candidate| candidate.path == repository_images),
+        "the repository path stays a candidate: {candidates:?}"
     );
     let _ = std::fs::remove_dir_all(&root);
 }

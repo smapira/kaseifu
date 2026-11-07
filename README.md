@@ -138,6 +138,12 @@ background, so results depend on its current state:
   list). `mdls` can still print values for those files, so "`mdls` shows it"
   does not mean "search finds it".
 
+The search is scoped to your home directory: `mdfind` runs with
+`-onlyin <home>`, so a repository checkout or a system folder cannot win a
+match against a file that lives in your home. Pass `--roots DIR` (repeatable)
+to `organize`, `classify` or the diagnostic `discover` to search named
+directories instead - an external volume is searched only when you name it.
+
 If a run finds no candidates, the file is probably not indexed yet: run
 `KASEIFU_DEBUG=1 kaseifu classify <file>` to see the search terms and hit
 count, wait for the index, or force an import with `mdimport <file>`.

@@ -1279,14 +1279,13 @@ fn handle_move(
     format: OutputFormat,
 ) -> Result<()> {
     let actually_move = execute && !dry_run;
-    let mode = resolve_mode(format);
     let planned = relocate::plan_relocate(path, destination)
         .map_err(|error| anyhow::anyhow!("cannot move this path: {error}"))?;
 
     if !actually_move {
         relocate::dry_run(&planned)
             .map_err(|error| anyhow::anyhow!("cannot move this path: {error}"))?;
-        print_move_report(&planned, Option::None, false, mode.rich, mode.color, format);
+        print_move_report(&planned, Option::None, false, format);
         return Ok(());
     }
 
@@ -1295,14 +1294,7 @@ fn handle_move(
         .map_err(|error| anyhow::anyhow!("move failed: {error}"))?
     {
         relocate::RelocateOutcome::Moved { operation_id } => {
-            print_move_report(
-                &planned,
-                Some(&operation_id),
-                true,
-                mode.rich,
-                mode.color,
-                format,
-            );
+            print_move_report(&planned, Some(&operation_id), true, format);
             Ok(())
         }
         // `execute_relocate` always performs the move; this arm keeps the
@@ -1312,12 +1304,13 @@ fn handle_move(
 }
 
 /// The `move` report: text rows or one `move` JSON document.
+///
+/// No colour and no box: the report is four facts, and the same words read the
+/// same way in a pipe, an agent transcript and a terminal.
 fn print_move_report(
     plan: &relocate::RelocatePlan,
     operation_id: Option<&str>,
     executed: bool,
-    rich: bool,
-    color: bool,
     format: OutputFormat,
 ) {
     let kind = plan.kind.as_str();
@@ -1333,18 +1326,21 @@ fn print_move_report(
         }
     })
     .to_string();
-    let lines = vec![
+    let mut lines = vec![
         format!("source: {}", plan.source.display()),
         format!("destination: {}", plan.destination_path.display()),
         format!("kind: {kind}"),
-        if executed {
-            format!("operation_id: {}", operation_id.unwrap_or_default())
-        } else {
-            "mode: dry-run (nothing moved; pass --execute to move)".to_string()
-        },
-        "undo reverses the move".to_string(),
     ];
-    let _ = (rich, color);
+    if executed {
+        lines.push(format!(
+            "operation_id: {}",
+            operation_id.unwrap_or_default()
+        ));
+        // Only a performed move can be undone; a dry run must not promise it.
+        lines.push("undo reverses the move".to_string());
+    } else {
+        lines.push("mode: dry-run (nothing moved; pass --execute to move)".to_string());
+    }
     emit_report(format, "Move", &lines, &json);
 }
 

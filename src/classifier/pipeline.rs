@@ -31,6 +31,7 @@ use crate::context::image_metadata::MetadataOptions;
 use crate::models::candidate::CandidateDestination;
 use crate::models::decision::{DecisionContext, JevDecision, validate_probabilities};
 use crate::models::file_context::NormalizedFileContext;
+use crate::platform::user_dirs;
 use crate::{context, discovery, normalize};
 
 pub use crate::discovery::DiscoveryOutcome;
@@ -257,15 +258,33 @@ pub fn discover_candidates_with_options<F>(
 where
     F: Fn(&str, usize) -> Result<Vec<String>>,
 {
+    discover_candidates_with_priors(file, search, image_options, &user_dirs::known_dirs())
+}
+
+/// [`discover_candidates_with_options`] with an explicit standard-folder list.
+///
+/// The list is a parameter for the same reason the search is: the production
+/// caller passes the machine's real standard folders, and a test passes its
+/// own, so no test depends on the developer's home layout (issue #18).
+pub fn discover_candidates_with_priors<F>(
+    file: &Path,
+    search: F,
+    image_options: &MetadataOptions,
+    known_dirs: &[(crate::platform::user_dirs::UserDirKind, std::path::PathBuf)],
+) -> Result<(NormalizedFileContext, DiscoveryOutcome)>
+where
+    F: Fn(&str, usize) -> Result<Vec<String>>,
+{
     let raw = context::builder::build(file)?; // Observe
     let normalized = normalize::normalize_with_options(raw, image_options)?; // Normalize
     let mut outcome = discovery::discover_with_outcome(normalized.clone(), search)?; // Discover
     // The standard folder for this file type is a separate candidate (issue
     // #18): appended after the ranked ones, so every ID a decision can name
     // keeps its meaning, and never merged into a Spotlight score.
-    discovery::add_known_dir_priors(
+    discovery::add_standard_dir_priors(
         &mut outcome.candidates,
         normalized.target.extension.as_deref(),
+        known_dirs,
     );
 
     Ok((normalized, outcome))

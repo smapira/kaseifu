@@ -10,8 +10,13 @@
 //!
 //! A same-volume move is one `rename`. Crossing volumes copies the tree,
 //! verifies the copy (file count and byte total) and only then removes the
-//! source; any failure removes the partial copy and leaves the source alone.
+//! source; a failed copy removes the partial copy and leaves the source alone,
+//! and a source that cannot be removed is reported with both sides intact
+//! (a verified copy is never deleted because the other side failed).
 
+use crate::context::directory::{
+    is_bundle_container, is_cache_or_temp, is_library_tree, is_system_area, is_system_tree_name,
+};
 use crate::discovery::is_excluded_destination;
 use crate::storage::history::OperationHistory;
 use std::io;
@@ -42,8 +47,8 @@ pub enum RelocateError {
     /// The source is neither a regular file nor a folder (a socket, a device,
     /// a symbolic link).
     SourceNotMovable(PathBuf),
-    /// The source is on the never-a-destination list (`~/Library/**`, caches,
-    /// system trees): moving *out* of one is not this command's business.
+    /// The source is in an area this command does not move things out of
+    /// (a Library tree, a cache, a system area, an app bundle).
     SourceExcluded(PathBuf),
     DestinationNotADirectory(PathBuf),
     DestinationExcluded(PathBuf),
@@ -67,7 +72,7 @@ impl std::fmt::Display for RelocateError {
             ),
             Self::SourceExcluded(path) => write!(
                 f,
-                "source is not a folder kaseifu moves: {}",
+                "source is in an area kaseifu does not move things out of: {}",
                 path.display()
             ),
             Self::DestinationNotADirectory(path) => {
@@ -120,7 +125,7 @@ pub fn plan_relocate(source: &Path, destination: &Path) -> Result<RelocatePlan, 
     // The never-a-destination rules come first: a place a person never picks
     // (`~/Library/**`, caches, system trees) is refused as *that*, not as "not a
     // directory", and the answer needs no filesystem read of the destination.
-    if is_excluded_destination(&canonical_text(source)) {
+    if is_out_of_bounds_source(&canonical_text(source)) {
         return Err(RelocateError::SourceExcluded(source.to_path_buf()));
     }
     if is_excluded_destination(&destination.to_string_lossy()) {
@@ -197,6 +202,26 @@ fn canonical_text(path: &Path) -> String {
         Ok(canonical) => canonical.to_string_lossy().to_string(),
         Err(_) => path.to_string_lossy().to_string(),
     }
+}
+
+/// True when a *source* tree is out of bounds.
+///
+/// The source side is the tree rules only: a Library tree, a system area, a
+/// cache or temporary area, an app bundle. The destination predicate also
+/// refuses hidden and machine-generated names, which a source the user named
+/// explicitly may legitimately have - `kaseifu move ~/Desktop/.env --to
+/// ~/Documents/backup` is a move the user asked for, and so is one out of a
+/// timestamp-named folder (the folder population issue #22 measured).
+fn is_out_of_bounds_source(path: &str) -> bool {
+    let components: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
+    components.iter().any(|part| is_bundle_container(part))
+        || is_library_tree(&components)
+        || is_cache_or_temp(&components)
+        || is_system_area(&components)
+        || (path.starts_with('/')
+            && components
+                .first()
+                .is_some_and(|name| is_system_tree_name(name)))
 }
 
 fn same_directory(left: &Path, right: &Path) -> bool {
@@ -282,9 +307,12 @@ fn crosses_devices(error: &io::Error) -> bool {
 /// Copy the tree, verify it, then remove the source.
 ///
 /// Public because it is the whole cross-volume path, and a test that has no
-/// second volume still has to exercise it: a failure at any step removes the
-/// partial copy, so the source is either whole or still there, never
-/// half-moved.
+/// second volume still has to exercise it.
+///
+/// A failed copy or a failed verification removes the partial copy: the source
+/// is then untouched. A source that cannot be removed is a different failure
+/// and is reported with **both** sides intact - a verified copy is never
+/// deleted because the other side failed, or the data would exist nowhere.
 pub fn copy_then_remove(source: &Path, destination: &Path) -> io::Result<()> {
     let tally = match copy_tree(source, destination) {
         Ok(tally) => tally,
@@ -298,8 +326,10 @@ pub fn copy_then_remove(source: &Path, destination: &Path) -> io::Result<()> {
         return Err(error);
     }
     if let Err(error) = remove_path(source) {
-        let _ = remove_path(destination);
-        return Err(error);
+        return Err(io::Error::other(format!(
+            "copied to {} but the source could not be removed ({error}); both were left in place",
+            destination.display()
+        )));
     }
     Ok(())
 }
@@ -449,6 +479,38 @@ mod tests {
         );
         assert!(source.join("a.txt").is_file(), "the source is untouched");
         assert!(!destination.exists(), "no partial copy is left behind");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_source_that_cannot_be_removed_keeps_both_sides() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = sandbox("source-locked");
+        let source = root.join("source");
+        std::fs::create_dir_all(&source).expect("source");
+        std::fs::write(source.join("a.txt"), b"a").expect("a");
+        let destination = root.join("destination");
+
+        // Readable but not writable: the copy succeeds, removing the children
+        // does not.
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o555))
+            .expect("read-only source");
+        let result = copy_then_remove(&source, &destination);
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).expect("restore");
+
+        let error = result.expect_err("the source cannot be removed");
+        assert!(
+            error.to_string().contains("both were left in place"),
+            "{error}"
+        );
+        // The verified copy is kept: deleting it would lose the only copy of
+        // anything the partial removal already took.
+        assert_eq!(
+            std::fs::read(destination.join("a.txt")).expect("copy"),
+            b"a"
+        );
+        assert!(source.join("a.txt").is_file(), "the source is still there");
         let _ = std::fs::remove_dir_all(&root);
     }
 

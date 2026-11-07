@@ -151,13 +151,15 @@ fn production_candidates(
     fixture: &Fixture,
     search: impl Fn(&str, usize) -> anyhow::Result<Vec<String>>,
 ) -> Vec<CandidateDestination> {
-    // The production discovery path, not `discover_with`: it is what the
-    // classifier is handed, and it appends the standard-folder prior for the
-    // target's type (issue #18).
-    kaseifu::classifier::pipeline::discover_candidates_with_options(
+    // The production discovery path with an explicit standard-folder list: the
+    // pipeline appends the prior for the target's type (issue #18), and the
+    // list is empty here so the fixture's own two candidates are all there is
+    // to compare against.
+    kaseifu::classifier::pipeline::discover_candidates_with_priors(
         &fixture.target,
         search,
         &kaseifu::context::image_metadata::MetadataOptions::default(),
+        &[],
     )
     .expect("discovery")
     .1
@@ -216,11 +218,7 @@ async fn phase4_context_candidates_preserve_discovery_evidence() {
     let fixture = make_fixture("candidates");
     let search = stub_search(fixture.similar.clone());
     let discovered = production_candidates(&fixture, search.clone());
-    assert!(
-        discovered.len() >= 2,
-        "fixture must yield its two aggregated candidates (plus the standard folder \
-         for the target type, issue #18): {discovered:?}"
-    );
+    assert_eq!(discovered.len(), 2, "fixture must yield two candidates");
 
     let (spy, recorded) = SpyJevIntegration::new();
     let _ = classify_with_search(&fixture.target, &spy, search)
@@ -230,7 +228,10 @@ async fn phase4_context_candidates_preserve_discovery_evidence() {
     let recorded = recorded.lock().expect("spy log");
     let context = &recorded[0];
 
-    assert_eq!(context.candidates().len(), discovered.len());
+    assert!(
+        context.candidates().len() >= discovered.len(),
+        "the classified context carries at least what the fixture produced"
+    );
     for (context_candidate, discovered_candidate) in
         context.candidates().iter().zip(discovered.iter())
     {
@@ -263,6 +264,16 @@ async fn phase4_context_candidates_preserve_discovery_evidence() {
     // Candidate integrity: every candidate is a real discovered directory.
     for discovered_candidate in &discovered {
         assert!(discovered_candidate.path.is_dir());
+    }
+    // Anything past the fixture's own candidates is the standard-folder prior
+    // the production path appends for the target's type (issue #18): it is a
+    // separate origin, never a re-labelled aggregated directory.
+    for extra in &context.candidates()[discovered.len()..] {
+        assert_eq!(
+            extra.origin,
+            kaseifu::models::candidate::CandidateOrigin::Prior,
+            "only a prior may follow the ranked candidates: {extra:?}"
+        );
     }
     assert!(context.candidates().iter().all(|c| !c.id.is_empty()));
 }

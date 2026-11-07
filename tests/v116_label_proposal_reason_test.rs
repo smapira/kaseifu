@@ -260,6 +260,60 @@ async fn v116_a_hold_before_the_date_claims_no_date_source() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+async fn v116_a_separator_from_the_prefix_is_named_as_the_proposal() {
+    // The separator does not come from the model here: it comes from a template
+    // input the user typed. The reason then names the proposal, and the
+    // validator's own sentence stays reserved for a genuinely bad target name.
+    let dir = work_dir("prefix-separator");
+    let target = write_bytes(&dir, "notes.md", b"# Notes\n\nA short agenda.\n");
+    let store = RenameStore::open_in_memory().expect("store");
+    let provider = FakeSemanticProvider::returning(info(Some("Agenda")));
+    let options = RenameOptions {
+        template: Some("{prefix}_{title}".to_string()),
+        prefix: Some("2026/11".to_string()),
+        ..RenameOptions::default()
+    };
+
+    let outcome = plan_rename(&provider, &store, &target, &options)
+        .await
+        .expect("plan");
+    let (reason, _) = held(outcome);
+    assert_eq!(
+        reason, "the proposed name contains a path separator; proposal withheld",
+        "the proposal is the culprit: {reason}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn v116_a_template_without_the_title_does_not_need_one() {
+    // A stored template that names the file from `{date}` and `{category}`
+    // alone never depends on the model's title, so a missing title is not a
+    // reason to withhold it (issue #21 tightened the *reason*, not the rules).
+    let dir = work_dir("no-title-template");
+    let target = write_bytes(&dir, "notes.md", b"# Notes\n\nAgenda only.\n");
+    let store = RenameStore::open_in_memory().expect("store");
+    let mut semantic = info(None);
+    semantic.category = Some("Meeting".to_string());
+    let provider = FakeSemanticProvider::returning(semantic);
+    let options = RenameOptions {
+        template: Some("{date}_{category}".to_string()),
+        ..RenameOptions::default()
+    };
+
+    let outcome = plan_rename(&provider, &store, &target, &options)
+        .await
+        .expect("plan");
+    let plan = ready(outcome);
+    assert!(
+        plan.proposal.ends_with("_Meeting.md"),
+        "proposal: {}",
+        plan.proposal
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn v116_normal_proposals_do_not_change() {
     let dir = work_dir("normal");
     let store = RenameStore::open_in_memory().expect("store");

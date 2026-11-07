@@ -80,7 +80,11 @@ reported.
 `--keywords KEY` (repeatable; not a search term) adds decision material for Jev
 only, so the candidate list does not change; the report states what was sent
 (`keywords.sent_to_jev`), and the flag cannot be combined with `--to` or
-`--select`, which never consult Jev. When Spotlight has no entry for the file
+`--select`, which never consult Jev. The Spotlight search is scoped to the home
+directory (`mdfind -onlyin <home>`), so a checkout or a system folder cannot
+outrank a home folder; `--roots DIR` (repeatable, on `organize`, `classify` and
+`discover`) searches named directories instead, and an external volume is
+searched only when it is named. When Spotlight has no entry for the file
 yet, the verdict says so (`Index  not indexed yet; candidates may be incomplete`;
 JSON `target_indexed` `true` / `false` / `null`): candidates may be incomplete,
 and the row is a disclosure rather than a failure.

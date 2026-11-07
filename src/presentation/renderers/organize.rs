@@ -41,13 +41,25 @@ const INDEX_LAG_NOTICE: &str = "not indexed yet; candidates may be incomplete";
 /// How many candidates a LEAVE report lists before it stops (issue #20).
 const SHOWN_LEAVE_CANDIDATES: usize = 3;
 
-/// The LEAVE notice when Discovery offered nothing at all.
+/// The LEAVE notices when Discovery offered nothing at all, one per index state.
 ///
 /// Kept separate from the "too weak" sentence because the next step differs:
 /// nothing to choose from is an index question, several weak options are a
-/// decision the user can make (issue #20 measured both kinds in one run).
-const NO_CANDIDATE_NOTICE: &str =
+/// decision the user can make (issue #20 measured both kinds in one run). The
+/// index state is part of the sentence: claiming "the index may not know this
+/// file yet" after a search that *did* know it (every neighbour was unusable)
+/// or after no search ran at all would be the same misreporting the issue is
+/// about.
+const NO_CANDIDATE_NOT_INDEXED: &str =
     "no candidate destinations found; the index may not know this file yet";
+
+/// The same leave, after a search that knew the file.
+const NO_CANDIDATE_INDEXED: &str =
+    "no candidate destinations found; none of the folders the index knows is usable";
+
+/// The same leave, when no search could run (the target had no search terms).
+const NO_CANDIDATE_NO_SEARCH: &str =
+    "no candidate destinations found; there was nothing to search for";
 
 /// The guidance line under a candidate list on a LEAVE verdict.
 const SELECT_HINT: &str = "choose one yourself: kaseifu organize <file> --select";
@@ -345,7 +357,7 @@ fn leave_lines(
     }
     if report.candidates.is_empty() {
         return vec![
-            theme::paint(NO_CANDIDATE_NOTICE, theme::ANSI_AMBER, color),
+            theme::paint(no_candidate_notice(report), theme::ANSI_AMBER, color),
             NAME_FOLDER_HINT.to_string(),
         ];
     }
@@ -363,6 +375,15 @@ fn leave_lines(
     );
     lines.push(SELECT_HINT.to_string());
     lines
+}
+
+/// The zero-candidate sentence for the index state this run actually has.
+fn no_candidate_notice(report: &OrganizeReport) -> &'static str {
+    match report.target_indexed {
+        Some(true) => NO_CANDIDATE_INDEXED,
+        Some(false) => NO_CANDIDATE_NOT_INDEXED,
+        None => NO_CANDIDATE_NO_SEARCH,
+    }
 }
 
 /// Why the verdict left the file, given the evidence that existed.
