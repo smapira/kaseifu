@@ -1,6 +1,6 @@
 # Issue directory map
 
-Last updated: 2026-11-01.
+Last updated: 2026-11-08.
 
 This directory has two kinds of records:
 
@@ -62,6 +62,11 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | [`20261021-done-repo-policy-example.md`](done/20261021-done-repo-policy-example.md) | M3 | The documented example captures the site and the prose states both matching bases; a `{name}` in a destination is refused. |
 | [`20261016-done-label-guidance-touches-state.md`](done/20261016-done-label-guidance-touches-state.md) | M1 | `label` opens the store only where it is read or written, so the guidance path creates no journal database; management flags and the plan path are unchanged. |
 | [`20261101-done-cross-checkout-destination.md`](done/20261101-done-cross-checkout-destination.md) | M1 | An automatic move into another working copy of the source's repository is REVIEW (`kind = destination_in_another_checkout`, exit 0); `--to`/`--select` warn and stay allowed; submodules and separate clones are unaffected. |
+| [`20261108-done-label-empty-proposal-reason.md`](done/20261108-done-label-empty-proposal-reason.md) | M1 | A held `label` names the real cause (the model's title carried a separator, no title, perception unavailable) and reports the perception and date source it had instead of `null` and `""`. |
+| [`20261108-done-leave-reason-visibility.md`](done/20261108-done-leave-reason-visibility.md) | M1 | `organize` distinguishes no candidate / below the review threshold / classifier `NONE`, lists the offered candidates, and says what the index knows. |
+| [`20261108-done-known-user-dirs-prior.md`](done/20261108-done-known-user-dirs-prior.md) | M1 | An unindexed file still has the OS standard folder for its type as a candidate (`origin: prior`), on macOS and Linux, with no new dependency. |
+| [`20261108-done-spotlight-scope-and-path-shape.md`](done/20261108-done-spotlight-scope-and-path-shape.md) | M1 | The Spotlight query is scoped with `-onlyin` (home by default, `--roots` to name others), and path shape subtracts a score instead of excluding a candidate. |
+| [`20261108-done-directory-move-command.md`](done/20261108-done-directory-move-command.md) | M3 | `kaseifu move <path> --to <dir>` moves a file or a folder without a decision, journaled with its `kind` and reversible by `undo`; `organize` still refuses a folder. |
 
 ## Maintenance rules
 

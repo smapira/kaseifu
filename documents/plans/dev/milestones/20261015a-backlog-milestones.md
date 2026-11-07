@@ -1,6 +1,6 @@
 # Backlog milestones after AI rename Phase 9
 
-Last updated: 2026-11-01.
+Last updated: 2026-11-08.
 
 Purpose: group the remaining plan issues into milestones and make each issue's status discoverable from the directory path. Status directories are documented in `../issues/README.md`.
 
@@ -10,7 +10,7 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 |---|---:|---|
 | Open | 1 | `../issues/open/` |
 | Waiting for user/external resource | 7 | `../issues/waiting-user/` |
-| Done | 26 | `../issues/done/` |
+| Done | 31 | `../issues/done/` |
 
 ## M1 - Reliability and CLI clarity
 
@@ -29,6 +29,10 @@ Goal: reduce confusing user-visible behavior before adding larger features.
 | Done | [`skill-coverage-and-exit-codes`](../issues/done/20261021-done-skill-coverage-and-exit-codes.md) | The embedded skill covers repository rules, `--keywords` and the index row; `skill check` reads 0 (match) / 1 (stale) / 3 (no file) so CI can tell drift from "never installed". |
 | Done | [`label-guidance-touches-state`](../issues/done/20261016-done-label-guidance-touches-state.md) | The `label` guidance path returns before the store is opened, so it creates no journal database; a management flag combined with a target is refused before anything is opened. |
 | Done | [`cross-checkout-destination`](../issues/done/20261101-done-cross-checkout-destination.md) | An automatic move whose destination is another working copy of the source's repository (linked worktree or a second checkout of it) is REVIEW instead of a move, while `--to`/`--select` warn and stay allowed; submodules and separate clones are still allowed. |
+| Done | [`label-empty-proposal-reason`](../issues/done/20261108-done-label-empty-proposal-reason.md) | A held `label` names the real cause (title separator, no title, perception unavailable) and carries the perception and date source it had; normal proposals are unchanged. |
+| Done | [`leave-reason-visibility`](../issues/done/20261108-done-leave-reason-visibility.md) | `organize` tells no candidate from below the review threshold from classifier `NONE`, lists the offered candidates, and states the index state. |
+| Done | [`known-user-dirs-prior`](../issues/done/20261108-done-known-user-dirs-prior.md) | An unindexed file has the OS standard folder for its type as a candidate on macOS and Linux, with no new crate dependency. |
+| Done | [`spotlight-scope-and-path-shape`](../issues/done/20261108-done-spotlight-scope-and-path-shape.md) | `mdfind` is scoped with `-onlyin` (home by default, `--roots` to name others) and path shape subtracts a score instead of removing a candidate. |
 
 ## M2 - Media quality
 
@@ -52,6 +56,7 @@ Goal: complete workflow affordances and document the exact behavior of multi-ite
 | Done | [`unicode-normalization-conflicts`](../issues/done/20261015-done-unicode-normalization-conflicts.md) | User chooses dependency exception, in-house limited normalization, or documented limitation. |
 | Done | [`repo-policy-file`](../issues/done/20261019-done-repo-policy-file.md) | `organize` honors `.kaseifu.toml` rules (rule name and reason in the proposal) with every existing safety intact. |
 | Done | [`repo-policy-example`](../issues/done/20261021-done-repo-policy-example.md) | The documented example captures the site (`content/{project}/sites/{site}/**` into `sites/<site>/content/`) and the prose states what each matcher sees; a `{name}` in a destination is refused instead of becoming a directory name. |
+| Done | [`directory-move-command`](../issues/done/20261108-done-directory-move-command.md) | `kaseifu move <path> --to <dir>` files a file or a folder with no decision, journals its `kind`, reverses with `undo`, and `organize` keeps refusing a folder. |
 
 ## M4 - Measurement and release hygiene
 
