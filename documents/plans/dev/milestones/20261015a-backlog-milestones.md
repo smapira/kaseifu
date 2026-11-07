@@ -10,7 +10,7 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 |---|---:|---|
 | Open | 1 | `../issues/open/` |
 | Waiting for user/external resource | 7 | `../issues/waiting-user/` |
-| Done | 31 | `../issues/done/` |
+| Done | 32 | `../issues/done/` |
 
 ## M1 - Reliability and CLI clarity
 
@@ -57,6 +57,7 @@ Goal: complete workflow affordances and document the exact behavior of multi-ite
 | Done | [`repo-policy-file`](../issues/done/20261019-done-repo-policy-file.md) | `organize` honors `.kaseifu.toml` rules (rule name and reason in the proposal) with every existing safety intact. |
 | Done | [`repo-policy-example`](../issues/done/20261021-done-repo-policy-example.md) | The documented example captures the site (`content/{project}/sites/{site}/**` into `sites/<site>/content/`) and the prose states what each matcher sees; a `{name}` in a destination is refused instead of becoming a directory name. |
 | Done | [`directory-move-command`](../issues/done/20261108-done-directory-move-command.md) | `kaseifu move <path> --to <dir>` files a file or a folder with no decision, journals its `kind`, reverses with `undo`, and `organize` keeps refusing a folder. |
+| Done | [`move-create-dir`](../issues/done/20261108-done-move-create-dir.md) | `move --create-dir` creates the destination and missing parents first, `<PATH>...` moves several paths in one batch with a per-path result, and `undo` removes a created directory once it is empty. |
 
 ## M4 - Measurement and release hygiene
 

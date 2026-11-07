@@ -67,6 +67,7 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | [`20261108-done-known-user-dirs-prior.md`](done/20261108-done-known-user-dirs-prior.md) | M1 | An unindexed file still has the OS standard folder for its type as a candidate (`origin: prior`), on macOS and Linux, with no new dependency. |
 | [`20261108-done-spotlight-scope-and-path-shape.md`](done/20261108-done-spotlight-scope-and-path-shape.md) | M1 | The Spotlight query is scoped with `-onlyin` (home by default, `--roots` to name others), and path shape subtracts a score instead of excluding a candidate. |
 | [`20261108-done-directory-move-command.md`](done/20261108-done-directory-move-command.md) | M3 | `kaseifu move <path> --to <dir>` moves a file or a folder without a decision, journaled with its `kind` and reversible by `undo`; `organize` still refuses a folder. |
+| [`20261108-done-move-create-dir.md`](done/20261108-done-move-create-dir.md) | M3 | `move --create-dir` creates the destination (and missing parents) first and `<PATH>...` moves several paths as one batch; a failure is per path, and `undo` removes a directory kaseifu created once it is empty. |
 
 ## Maintenance rules
 
