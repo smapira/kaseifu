@@ -37,6 +37,27 @@ pub struct Explanation {
     pub confidence_gap: f64,
     /// How far margin still is from the auto-move threshold (0 = met).
     pub margin_gap: f64,
+    /// How much evidence the run had, when the caller knows it.
+    ///
+    /// `None` for views that do not carry a candidate list: the rows and the
+    /// JSON keys appear only where the number exists, so no historical output
+    /// grows a claim it cannot make (issue #20).
+    pub candidates: Option<CandidateContext>,
+}
+
+/// The evidence behind a verdict: how many destinations were offered and
+/// whether the index knew the file at all.
+///
+/// A LEAVE verdict reads completely differently with zero candidates (nothing
+/// to choose from, so the index is the suspect) than with several (the evidence
+/// was too weak to pick one), which is why both numbers ride along with the
+/// explanation (issue #20).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CandidateContext {
+    /// How many candidate destinations the run offered.
+    pub count: usize,
+    /// Spotlight's knowledge of the source, when a search ran.
+    pub target_indexed: Option<bool>,
 }
 
 /// Build the explanation for one validated decision.
@@ -55,6 +76,18 @@ pub fn explain(
         destination_path: destination_path.map(|path| path.to_string_lossy().into_owned()),
         confidence_gap: rounded_gap(thresholds.auto_move_confidence - decision.confidence),
         margin_gap: rounded_gap(thresholds.auto_move_margin - decision.margin),
+        candidates: None,
+    }
+}
+
+impl Explanation {
+    /// [`explain`] plus the evidence counts of the run that produced it.
+    pub fn with_candidates(mut self, count: usize, target_indexed: Option<bool>) -> Self {
+        self.candidates = Some(CandidateContext {
+            count,
+            target_indexed,
+        });
+        self
     }
 }
 
@@ -116,9 +149,10 @@ impl Explanation {
     }
 
     /// The `--explain` rows: confidence / margin / thresholds / verdict /
-    /// resolved destination in one screen.
+    /// resolved destination in one screen, plus the evidence counts when the
+    /// caller carries them (organize, issue #20).
     pub fn lines(&self, destination_display: &str) -> Vec<String> {
-        vec![
+        let mut lines = vec![
             row(
                 "Confidence",
                 &format!(
@@ -144,12 +178,20 @@ impl Explanation {
             ),
             row("Verdict", self.verdict()),
             row("Destination", destination_display),
-        ]
+        ];
+        if let Some(context) = self.candidates {
+            lines.push(row("Candidates", &context.count.to_string()));
+            lines.push(row("Index", context.index_line()));
+        }
+        lines
     }
 
     /// The additive `explanation` object for `--format json` (ZC-5).
+    ///
+    /// The evidence counts are added only when the caller carries them, so a
+    /// run without a candidate list keeps its exact key set (issue #20).
     pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut value = serde_json::json!({
             "confidence": self.confidence,
             "margin": self.margin,
             "thresholds": {
@@ -163,7 +205,23 @@ impl Explanation {
             "near_auto_move": self.near_auto_move(),
             "confidence_gap": self.confidence_gap,
             "margin_gap": self.margin_gap,
-        })
+        });
+        if let Some(context) = self.candidates {
+            value["candidate_count"] = serde_json::json!(context.count);
+            value["target_indexed"] = serde_json::json!(context.target_indexed);
+        }
+        value
+    }
+}
+
+impl CandidateContext {
+    /// One line for the INDEX row: what the index is known to contain.
+    fn index_line(&self) -> &'static str {
+        match self.target_indexed {
+            Some(true) => "indexed",
+            Some(false) => "not indexed yet; candidates may be incomplete",
+            None => "unknown (no search ran)",
+        }
     }
 }
 

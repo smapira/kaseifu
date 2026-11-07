@@ -57,6 +57,9 @@ fn organize_report(confidence: f64, margin: f64) -> OrganizeReport {
     let classification = classify_report(confidence, margin);
     let policy = policy::decision::evaluate(&classification.decision);
     OrganizeReport {
+        // The decision names D1, so the run offered D1 (issue #20 reads the
+        // list to tell "nothing found" from "nothing convincing").
+        candidates: classification.candidates.clone(),
         decision: classification.decision,
         policy,
         candidate_path: Some(PathBuf::from(SINK_DIR)),

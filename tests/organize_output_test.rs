@@ -5,6 +5,7 @@
 //! path display, the mode wording, the human-readable plan errors, and the
 //! ASCII/plain rules. No Jev call and no filesystem access.
 
+use kaseifu::models::candidate::CandidateDestination;
 use kaseifu::models::decision::{DecisionAction, JevDecision};
 use kaseifu::operations::organize::{OrganizeOutcome, OrganizeReport};
 use kaseifu::operations::plan::PlanError;
@@ -34,10 +35,28 @@ fn report(
     outcome: OrganizeOutcome,
 ) -> OrganizeReport {
     let policy = policy::decision::evaluate(&decision);
+    // The decision's own selection is the only candidate this fixture
+    // offered: a report whose decision names D1 had a D1 to name, and one that
+    // names NONE offered none (issue #20 reads this list).
+    let selected = decision
+        .destination_id
+        .as_deref()
+        .filter(|id| *id != "NONE");
+    let candidates = match (selected, candidate_path) {
+        (Some(_), Some(path)) => vec![CandidateDestination {
+            id: "D1".to_string(),
+            path: PathBuf::from(path),
+            score: decision.confidence,
+            evidence_count: 1,
+            reasons: vec!["fixture".to_string()],
+        }],
+        _ => Vec::new(),
+    };
     OrganizeReport {
         decision,
         policy,
         candidate_path: candidate_path.map(PathBuf::from),
+        candidates,
         target_indexed: None,
         outcome,
         rule: None,

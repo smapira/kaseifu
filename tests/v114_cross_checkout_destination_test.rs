@@ -833,6 +833,9 @@ fn v114_the_checkout_review_renders_as_review() {
         decision: auto_move_to_d1(),
         policy: kaseifu::models::decision::DecisionAction::AutoMove("D1".to_string()),
         candidate_path: Some(notes.clone()),
+        // An AUTO MOVE verdict never renders the LEAVE reason rows, so the
+        // list stays empty in this hand-built report.
+        candidates: Vec::new(),
         target_indexed: None,
         outcome: kaseifu::operations::organize::OrganizeOutcome::Unplanable(error),
         rule: None,

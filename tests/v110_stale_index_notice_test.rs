@@ -406,6 +406,9 @@ fn v110_no_notice_without_an_index_claim() {
             },
             policy: DecisionAction::AutoMove("D1".to_string()),
             candidate_path: Some(selected.clone()),
+            // This report is built by hand; the LEAVE reason rows (issue #20)
+            // never run for an AUTO MOVE verdict, so the list is empty.
+            candidates: Vec::new(),
             target_indexed,
             rule: None,
             outcome: OrganizeOutcome::WouldMove {

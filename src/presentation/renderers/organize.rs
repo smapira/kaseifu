@@ -16,6 +16,8 @@
 //!   so the mode line never splits the decision information; the near-miss
 //!   line (ZC-5) and the `--explain` section are additions only.
 
+use crate::models::candidate::CandidateDestination;
+use crate::models::decision::DecisionAction;
 use crate::operations::organize::{OrganizeOutcome, OrganizeReport};
 use crate::operations::plan::PlanError;
 use crate::policy::decision::Thresholds;
@@ -35,6 +37,23 @@ const KEY_WIDTH: usize = 13;
 /// [`OrganizeReport::target_indexed`]). One line, no advice: the README's
 /// Spotlight section explains waiting for the index or `mdimport`.
 const INDEX_LAG_NOTICE: &str = "not indexed yet; candidates may be incomplete";
+
+/// How many candidates a LEAVE report lists before it stops (issue #20).
+const SHOWN_LEAVE_CANDIDATES: usize = 3;
+
+/// The LEAVE notice when Discovery offered nothing at all.
+///
+/// Kept separate from the "too weak" sentence because the next step differs:
+/// nothing to choose from is an index question, several weak options are a
+/// decision the user can make (issue #20 measured both kinds in one run).
+const NO_CANDIDATE_NOTICE: &str =
+    "no candidate destinations found; the index may not know this file yet";
+
+/// The guidance line under a candidate list on a LEAVE verdict.
+const SELECT_HINT: &str = "choose one yourself: kaseifu organize <file> --select";
+
+/// The guidance line when there was nothing to choose from.
+const NAME_FOLDER_HINT: &str = "name a folder yourself: kaseifu organize <file> --to <dir>";
 
 /// Render the Rich (Cyber Dashboard) panel.
 ///
@@ -134,7 +153,11 @@ pub fn render_text_with(
         Some(rule) => push_section(&mut out, "Repo policy", &rule_lines(rule, false, false)),
         None => {
             push_section(&mut out, "Decision", &decision_lines(report, false, false));
-            push_section(&mut out, "Policy", &policy_lines(report, false, thresholds));
+            push_section(
+                &mut out,
+                "Policy",
+                &policy_lines(report, false, false, thresholds),
+            );
             if explain {
                 push_section(
                     &mut out,
@@ -189,7 +212,7 @@ fn sections(
             ));
             sections.push(Section::headed(
                 "POLICY",
-                policy_lines(report, color, thresholds),
+                policy_lines(report, rich, color, thresholds),
             ));
             if explain {
                 sections.push(Section::headed(
@@ -287,15 +310,94 @@ fn decision_lines(report: &OrganizeReport, rich: bool, color: bool) -> Vec<Strin
 
 /// POLICY rows: the Rust verdict, with the same wording as `classify`.
 ///
-/// `thresholds` feeds the ZC-5 near-miss line only; the verdict rows keep
-/// their historical (default-threshold) wording.
-fn policy_lines(report: &OrganizeReport, color: bool, thresholds: Thresholds) -> Vec<String> {
+/// `thresholds` feeds the ZC-5 near-miss line and the LEAVE reasons (issue
+/// #20) only; the verdict rows keep their historical (default-threshold)
+/// wording.
+fn policy_lines(
+    report: &OrganizeReport,
+    rich: bool,
+    color: bool,
+    thresholds: Thresholds,
+) -> Vec<String> {
     let (kind, reason) = generic::policy_view(&report.policy);
     let mut lines = vec![generic::decision_line(kind, color), reason];
+    lines.extend(leave_lines(report, rich, color, thresholds));
     if let Some(near) = explanation_for(report, thresholds).near_line() {
         lines.push(near);
     }
     lines
+}
+
+/// The extra POLICY rows a LEAVE verdict needs (issue #20).
+///
+/// `[LEAVE]` alone cannot tell "nothing was found" from "nothing was
+/// convincing", and the measured run mixed both in six attempts. Nothing is
+/// printed for a decided verdict (AUTO MOVE / REVIEW), so those reports keep
+/// their exact rows.
+fn leave_lines(
+    report: &OrganizeReport,
+    rich: bool,
+    color: bool,
+    thresholds: Thresholds,
+) -> Vec<String> {
+    if !matches!(report.policy, DecisionAction::Leave { .. }) || report.rule.is_some() {
+        return Vec::new();
+    }
+    if report.candidates.is_empty() {
+        return vec![
+            theme::paint(NO_CANDIDATE_NOTICE, theme::ANSI_AMBER, color),
+            NAME_FOLDER_HINT.to_string(),
+        ];
+    }
+    let mut lines = vec![theme::paint(
+        &leave_reason(report, thresholds),
+        theme::ANSI_AMBER,
+        color,
+    )];
+    lines.extend(
+        report
+            .candidates
+            .iter()
+            .take(SHOWN_LEAVE_CANDIDATES)
+            .map(|candidate| candidate_row(candidate, rich, color)),
+    );
+    lines.push(SELECT_HINT.to_string());
+    lines
+}
+
+/// Why the verdict left the file, given the evidence that existed.
+///
+/// Two shapes: the classifier named a destination but the confidence was under
+/// the review threshold (the evidence was too weak), or it named none at all
+/// (every offered candidate lost to NONE). Both lines stay inside one panel
+/// row, so the reason never widens the report.
+fn leave_reason(report: &OrganizeReport, thresholds: Thresholds) -> String {
+    let selected = report
+        .decision
+        .destination_id
+        .as_deref()
+        .is_some_and(|id| id != "NONE");
+    let offered = format!(
+        "{} candidate{} offered",
+        report.candidates.len(),
+        if report.candidates.len() == 1 {
+            ""
+        } else {
+            "s"
+        }
+    );
+    if selected {
+        return format!(
+            "below the review threshold ({:.2}): {offered}",
+            thresholds.review_confidence
+        );
+    }
+    format!("no destination was selected; {offered}")
+}
+
+/// One candidate line: its ID (the identity `--select` and Jev use) and path.
+fn candidate_row(candidate: &CandidateDestination, rich: bool, color: bool) -> String {
+    row(&candidate.id, &shown_path(&candidate.path, rich, color))
 }
 
 /// EXPLANATION rows (ZC-5): effective thresholds and the resolved
@@ -317,6 +419,9 @@ fn explanation_lines(
 }
 
 /// The explanation for one organize report under the effective thresholds.
+///
+/// Carries the evidence counts too, so `--explain` can say how many candidates
+/// existed and whether the index knew the file (issue #20).
 pub fn explanation_for(
     report: &OrganizeReport,
     thresholds: Thresholds,
@@ -327,6 +432,7 @@ pub fn explanation_for(
         thresholds,
         report.candidate_path.as_deref(),
     )
+    .with_candidates(report.candidates.len(), report.target_indexed)
 }
 
 /// Structured `--format json` report (ZC-7).

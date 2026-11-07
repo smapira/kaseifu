@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`organize` says why it left a file alone.** Issue #20: the rich output printed
+  `[LEAVE] LEAVE` and `policy refused: automatic move not allowed` for two
+  different states - an unindexed file with no candidate at all, and a file whose
+  candidates missed the review threshold - so nothing told the reader whether to
+  wait for the index or to pick a folder. The POLICY section now names the state
+  (`no candidate destinations found; the index may not know this file yet`, with
+  `--to <dir>` as the next step, or `below the review threshold (0.60): 4
+  candidates offered`), lists the first three candidates by ID and path, and
+  points at `--select`; a destination the classifier answered as `NONE` is
+  reported as `no destination was selected` instead of a threshold miss.
+  `--explain` gains `Candidates` and `Index` rows, and its JSON object gains
+  `candidate_count` and `target_indexed` (additive; a decided verdict keeps its
+  exact rows). `tests/v117_leave_reason_test.rs`, plus the matching scenarios in
+  `tests/user-test-plan.csv`.
+
 ### Fixed
 
 - **A held `kaseifu label` proposal names its real cause.** Issue #21: a PNG on

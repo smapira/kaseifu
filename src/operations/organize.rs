@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::classifier::jev::JevIntegration;
 use crate::classifier::keywords::KeywordDelivery;
 use crate::classifier::pipeline;
+use crate::models::candidate::CandidateDestination;
 use crate::models::decision::{DecisionAction, JevDecision};
 use crate::operations::mover::{self, MoveOutcome};
 use crate::operations::plan::{self, PlanError};
@@ -24,6 +25,14 @@ pub struct OrganizeReport {
     pub policy: DecisionAction,
     /// Destination directory of the selected candidate (from discovery).
     pub candidate_path: Option<PathBuf>,
+    /// Every candidate destination Discovery offered, ranked.
+    ///
+    /// Empty when no search ran (a repository policy rule decided the file) or
+    /// when the search offered nothing. The list is what lets a LEAVE report
+    /// say whether nothing was found or nothing was convincing, which are
+    /// different next steps (issue #20); it is display data only and never
+    /// changes the policy, the plan or the execution path.
+    pub candidates: Vec<CandidateDestination>,
     /// Whether Spotlight knew the source file when the candidates were
     /// discovered.
     ///
@@ -198,6 +207,7 @@ where
         decision,
         policy: action,
         candidate_path,
+        candidates,
         target_indexed,
         outcome,
         rule: None,
@@ -241,6 +251,9 @@ pub fn rule_report(
         decision: JevDecision::default(),
         policy: DecisionAction::None,
         candidate_path: None,
+        // A rule hit consults no index, so there is no candidate list either
+        // (and the LEAVE reason it would describe does not apply).
+        candidates: Vec::new(),
         // A rule hit consults no index, so nothing is claimed about it.
         target_indexed: None,
         outcome,
