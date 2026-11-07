@@ -154,7 +154,7 @@ fn commit_undo(
         )
         .map_err(|error| UndoError::History(error.to_string()))?;
 
-    match std::fs::rename(&paths.moved_file, &paths.original_path) {
+    match crate::operations::relocate::transfer(&paths.moved_file, &paths.original_path) {
         Ok(()) => finalize_undo_success(history, &undo_id, entry, &paths.original_path),
         Err(error) => {
             let _ = history.mark_failure(&undo_id, &error.to_string());

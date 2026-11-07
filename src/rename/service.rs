@@ -1611,6 +1611,12 @@ pub fn execute_plan_in_batch(
             confidence: Option::None,
             margin: Option::None,
             batch_id,
+            // A rename moves the same kind it observed (issue #22): the
+            // journal now says which, for every row this build writes.
+            kind: Some(match plan.snapshot {
+                SourceSnapshot::File(_) => "file",
+                SourceSnapshot::Directory(_) => "dir",
+            }),
         })
         .map_err(|error| RenameError::History(error.to_string()))?;
     match std::fs::rename(&plan.source, &plan.destination) {

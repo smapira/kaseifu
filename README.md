@@ -222,6 +222,28 @@ still decides first and the report says the keywords were not used;
 `--keywords` cannot be combined with `--select` or `--to`, which never
 consult Jev. `classify` accepts the same flag.
 
+### Move a file or a folder (no decision)
+
+`organize` decides where a file belongs, and it refuses a folder on purpose.
+When you already know the destination, `move` is the plain move:
+
+```bash
+kaseifu move ~/Desktop/spec --to ~/Documents/archive            # dry run
+kaseifu move ~/Desktop/spec --to ~/Documents/archive --execute  # move it
+kaseifu move ~/Desktop/example.pdf --to ~/Documents/Invoices --execute
+```
+
+Nothing is classified, so no API key is read and no network is used. The
+destination must already exist, the never-a-destination rules still refuse
+`~/Library/**`, caches and system trees (on both ends), a collision is never
+overwritten, and a folder cannot move into its own subtree. The move is
+journaled with its `kind` (`file` or `dir`), `kaseifu undo` reverses it, and a
+move across volumes copies the tree, verifies the copy (file count and bytes)
+and only then removes the source - a failure leaves the source whole and no
+partial copy behind. `--format json` prints one `move` object (`source`,
+`destination_directory`, `destination_path`, `kind`, `executed`,
+`operation_id`).
+
 ### Choose the destination yourself
 
 Jev's choice is a suggestion; `--select` lets you pick from the candidate

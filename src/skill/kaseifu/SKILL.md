@@ -63,6 +63,8 @@ kaseifu organize <file>                                     # dry run
 kaseifu organize <file> --execute                           # move it (journaled)
 kaseifu organize <file> --to ~/Documents/Invoices --execute # non-interactive destination
 kaseifu organize <file> --keywords "2026 tax year"          # extra decision material
+kaseifu move <path> --to <dir>                              # move a file or a folder, no decision
+kaseifu move <path> --to <dir> --execute                    # ... and perform it
 kaseifu undo                                                # put the last move back
 kaseifu undo --last 3                                       # the last three moves
 kaseifu undo --batch <id>                                   # exactly one batch, by its printed id
@@ -89,6 +91,15 @@ the file's repository (the primary checkout of a linked worktree, for example):
 `outcome.kind` `destination_in_another_checkout`, exit 0. `--to` and `--select`
 name the path themselves, so they warn instead (`another working copy of the
 same repository`) and stay allowed.
+
+`kaseifu move <path> --to <dir> [--execute]` is the path with no decision in it:
+a file **or** a folder goes where the owner says, with no classifier call, no key
+and no network. Dry run is the default. The destination must already exist, the
+never-a-destination rules refuse `~/Library/**`, caches and system trees on both
+ends, a collision is never overwritten, and a folder cannot move into its own
+subtree. The journal records `kind` (`file` / `dir`) and `undo` reverses it; a
+move across volumes copies, verifies (file count and bytes) and then removes the
+source, so a failure leaves the source whole.
 
 ## Repository policy (`.kaseifu.toml`)
 

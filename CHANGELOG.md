@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`kaseifu move <path> --to <dir>` files a file *or* a folder with no decision
+  in it.** Issue #22: `organize` refuses a folder on purpose (#14: a folder move
+  needs its own journal, undo and `--select` semantics), so there was no way to
+  file a directory at all - and 13 of 15 real `~/Desktop` targets were folders.
+  `move` runs no discovery and no classifier: no API key, no network, dry run by
+  default, `--execute` the only mutation. The never-a-destination rules refuse
+  `~/Library/**`, caches and system trees on **both** ends, a collision is never
+  overwritten, and a folder cannot move into its own subtree. The journal gains
+  an additive `kind` column (`file` / `dir`; old rows read as no kind, which is
+  `file`), `undo` reverses the move through the same helper, and a cross-volume
+  move copies the tree, verifies it (file count and bytes) and only then removes
+  the source - a failure removes the partial copy and leaves the source whole.
+  `--format json` prints one `move` object. `tests/v120_move_command_test.rs`;
+  `organize --to` keeps refusing a folder (`tests/v113_folder_target_test.rs`).
+
 - **The Spotlight search is scoped to the home directory, and the ranking knows
   path shape.** Issue #19: `mdfind` had no `-onlyin`, so a picture on the
   Desktop ranked a repository checkout first, and the score had no term for

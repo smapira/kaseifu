@@ -100,6 +100,8 @@ fn journaled_move(
             confidence: None,
             margin: None,
             batch_id,
+            // These fixtures are hand-written moves of files (issue #22).
+            kind: Some("file"),
         })
         .expect("record move");
     std::fs::rename(&source, &destination).expect("simulate the move");

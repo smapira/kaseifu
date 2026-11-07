@@ -12,7 +12,7 @@ use kaseifu::config::{
     load_user, resolve, resolve_with_env, save_to,
 };
 use kaseifu::models::decision::DecisionContext;
-use kaseifu::operations::{checkout, mover, organize, plan, select as select_ops, undo};
+use kaseifu::operations::{checkout, mover, organize, plan, relocate, select as select_ops, undo};
 use kaseifu::platform::macos::fsevents;
 use kaseifu::presentation::renderers::{
     classify as classify_view, discover as discover_view, generic, inspect as inspect_view,
@@ -139,6 +139,28 @@ enum Commands {
         /// Scope the Spotlight search to these directories instead of the home directory (repeatable; another volume must be named explicitly).
         #[arg(long, value_name = "DIR", num_args = 1..)]
         roots: Vec<PathBuf>,
+    },
+
+    /// Move one path into a directory. No decision, no classifier.
+    ///
+    /// A file *or* a folder goes where you say: `organize` decides where a
+    /// file belongs and refuses a folder on purpose, so this is the plain move
+    /// for the case you already know the answer to. Nothing is classified, no
+    /// key is read and no network is used. Dry run by default (`--execute`
+    /// performs it), the move is journaled and `kaseifu undo` reverses it,
+    /// and the never-a-destination rules still refuse `~/Library`, caches and
+    /// system trees.
+    Move {
+        path: PathBuf,
+        /// Directory to move the path into (must already exist).
+        #[arg(long, value_name = "DIR", required = true)]
+        to: PathBuf,
+        /// Perform the move (default is a dry run; cannot be combined with --dry-run).
+        #[arg(long, conflicts_with = "dry_run")]
+        execute: bool,
+        /// Request a dry run explicitly (the default).
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Restore files moved by earlier runs (newest first).
@@ -471,6 +493,12 @@ async fn dispatch(
         } => handle_watch(&paths, execute, dry_run, format, overrides).await,
         Commands::Rename(boxed) => handle_rename(*boxed, format).await,
         Commands::Undo { last, batch } => handle_undo(last, batch.as_deref(), format),
+        Commands::Move {
+            path,
+            to,
+            execute,
+            dry_run,
+        } => handle_move(&path, &to, execute, dry_run, format),
         Commands::Discover {
             file,
             all,
@@ -1236,6 +1264,88 @@ fn execute_manual_move_report(
         }
         Err(error) => anyhow::bail!("move failed: {error:?}"),
     }
+}
+
+/// `move`: one path into one directory, no decision involved (issue #22).
+///
+/// The command exists because `organize` refuses a folder on purpose (#14) and
+/// the journal, `undo` and the destination rules already handle folders. Dry
+/// run is the default; `--execute` is the only mutation path.
+fn handle_move(
+    path: &Path,
+    destination: &Path,
+    execute: bool,
+    dry_run: bool,
+    format: OutputFormat,
+) -> Result<()> {
+    let actually_move = execute && !dry_run;
+    let mode = resolve_mode(format);
+    let planned = relocate::plan_relocate(path, destination)
+        .map_err(|error| anyhow::anyhow!("cannot move this path: {error}"))?;
+
+    if !actually_move {
+        relocate::dry_run(&planned)
+            .map_err(|error| anyhow::anyhow!("cannot move this path: {error}"))?;
+        print_move_report(&planned, Option::None, false, mode.rich, mode.color, format);
+        return Ok(());
+    }
+
+    let history = OperationHistory::open(journal_path())?;
+    match relocate::execute_relocate(&planned, &history)
+        .map_err(|error| anyhow::anyhow!("move failed: {error}"))?
+    {
+        relocate::RelocateOutcome::Moved { operation_id } => {
+            print_move_report(
+                &planned,
+                Some(&operation_id),
+                true,
+                mode.rich,
+                mode.color,
+                format,
+            );
+            Ok(())
+        }
+        // `execute_relocate` always performs the move; this arm keeps the
+        // outcome match exhaustive.
+        relocate::RelocateOutcome::WouldMove => anyhow::bail!("the move was not performed"),
+    }
+}
+
+/// The `move` report: text rows or one `move` JSON document.
+fn print_move_report(
+    plan: &relocate::RelocatePlan,
+    operation_id: Option<&str>,
+    executed: bool,
+    rich: bool,
+    color: bool,
+    format: OutputFormat,
+) {
+    let kind = plan.kind.as_str();
+    let destination = plan.destination_path.to_string_lossy().to_string();
+    let json = serde_json::json!({
+        "move": {
+            "source": plan.source.to_string_lossy(),
+            "destination_directory": plan.destination_directory.to_string_lossy(),
+            "destination_path": destination,
+            "kind": kind,
+            "executed": executed,
+            "operation_id": operation_id,
+        }
+    })
+    .to_string();
+    let lines = vec![
+        format!("source: {}", plan.source.display()),
+        format!("destination: {}", plan.destination_path.display()),
+        format!("kind: {kind}"),
+        if executed {
+            format!("operation_id: {}", operation_id.unwrap_or_default())
+        } else {
+            "mode: dry-run (nothing moved; pass --execute to move)".to_string()
+        },
+        "undo reverses the move".to_string(),
+    ];
+    let _ = (rich, color);
+    emit_report(format, "Move", &lines, &json);
 }
 
 /// `watch`: validate roots, then run the debounced FSEvents loop.

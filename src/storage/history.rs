@@ -5,10 +5,14 @@
 //! filesystem mutation can never be unjournaled.
 //!
 //! Columns: id, timestamp, operation, source_path, destination_path,
-//! candidate_id, confidence, margin, result, error, undone_at, batch_id.
+//! candidate_id, confidence, margin, result, error, undone_at, batch_id, kind.
 //!
 //! `batch_id` arrived later (batch undo): old journals lack the column and
 //! gain it through the additive migration in [`OperationHistory::open`].
+//! `kind` arrived with `kaseifu move` (issue #22): it records whether the moved
+//! entry was a `file` or a `dir`. Old rows read as no kind, which is `file` - a
+//! row written before the column existed can only describe a file, because a
+//! folder move had no path of its own.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -64,6 +68,9 @@ pub struct HistoryEntry {
     /// The rename batch this row belongs to (`None` for single moves and
     /// for rows written before the column existed).
     pub batch_id: Option<String>,
+    /// `"file"` or `"dir"` for a move this build wrote; `None` for a row that
+    /// predates the column (which means a file: issue #22).
+    pub kind: Option<String>,
 }
 
 /// The append-oriented operation journal.
@@ -107,6 +114,7 @@ impl OperationHistory {
         )
         .context("initialize journal schema")?;
         ensure_batch_column(&conn)?;
+        ensure_kind_column(&conn)?;
         Ok(Self { conn })
     }
 }
@@ -126,6 +134,9 @@ pub struct PendingRecord<'a> {
     pub margin: Option<f64>,
     /// The rename batch the operation belongs to (`None` for single moves).
     pub batch_id: Option<&'a str>,
+    /// What was moved: `"file"` or `"dir"` (issue #22). `None` writes no kind,
+    /// which readers treat as a file.
+    pub kind: Option<&'a str>,
 }
 
 impl OperationHistory {
@@ -150,6 +161,35 @@ impl OperationHistory {
             confidence,
             margin,
             batch_id: None,
+            kind: None,
+        })
+    }
+
+    /// Record a move and what it moved (`file` or `dir`, issue #22).
+    ///
+    /// The selection columns are `None` because the move carries no decision:
+    /// exactly the shape [`record_pending`](Self::record_pending) writes for a
+    /// `--to` move, plus the entry kind.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_pending_kind(
+        &self,
+        operation: &str,
+        source: &Path,
+        destination: &Path,
+        candidate_id: Option<&str>,
+        confidence: Option<f64>,
+        margin: Option<f64>,
+        kind: &str,
+    ) -> Result<String> {
+        self.record_pending_in_batch(PendingRecord {
+            operation,
+            source,
+            destination,
+            candidate_id,
+            confidence,
+            margin,
+            batch_id: None,
+            kind: Some(kind),
         })
     }
 
@@ -160,8 +200,8 @@ impl OperationHistory {
         self.conn.execute(
             "INSERT INTO operations
                 (id, timestamp, operation, source_path, destination_path,
-                 candidate_id, confidence, margin, result, batch_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9)",
+                 candidate_id, confidence, margin, result, batch_id, kind)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'pending', ?9, ?10)",
             rusqlite::params![
                 id,
                 now(),
@@ -172,6 +212,7 @@ impl OperationHistory {
                 pending.confidence,
                 pending.margin,
                 pending.batch_id,
+                pending.kind,
             ],
         )?;
         Ok(id)
@@ -208,7 +249,7 @@ impl OperationHistory {
     pub fn last_successful_move(&self) -> Result<Option<HistoryEntry>> {
         let mut statement = self.conn.prepare(
             "SELECT id, timestamp, operation, source_path, destination_path,
-                    candidate_id, confidence, margin, result, error, undone_at, batch_id
+                    candidate_id, confidence, margin, result, error, undone_at, batch_id, kind
              FROM operations
              WHERE operation = 'move' AND result = 'success' AND undone_at IS NULL
              ORDER BY rowid DESC
@@ -228,7 +269,7 @@ impl OperationHistory {
     pub fn successful_moves_in_batch(&self, batch_id: &str) -> Result<Vec<HistoryEntry>> {
         let mut statement = self.conn.prepare(
             "SELECT id, timestamp, operation, source_path, destination_path,
-                    candidate_id, confidence, margin, result, error, undone_at, batch_id
+                    candidate_id, confidence, margin, result, error, undone_at, batch_id, kind
              FROM operations
              WHERE operation = 'move' AND result = 'success' AND undone_at IS NULL
                AND batch_id = ?1
@@ -260,7 +301,7 @@ impl OperationHistory {
     pub fn entries(&self) -> Result<Vec<HistoryEntry>> {
         let mut statement = self.conn.prepare(
             "SELECT id, timestamp, operation, source_path, destination_path,
-                    candidate_id, confidence, margin, result, error, undone_at, batch_id
+                    candidate_id, confidence, margin, result, error, undone_at, batch_id, kind
              FROM operations
              ORDER BY rowid ASC",
         )?;
@@ -290,6 +331,9 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
         // missing index reads as no batch (old journals keep working there
         // without the migration, which needs a writable connection).
         batch_id: row.get(11).unwrap_or(None),
+        // Same legacy tolerance as `batch_id`: the read-only inspection path
+        // selects the shorter column list.
+        kind: row.get(12).unwrap_or(None),
     })
 }
 
@@ -328,6 +372,23 @@ fn ensure_batch_column(conn: &Connection) -> Result<()> {
     if !existing.iter().any(|name| name == "batch_id") {
         conn.execute("ALTER TABLE operations ADD COLUMN batch_id TEXT", [])
             .context("migrate journal schema (batch_id)")?;
+    }
+    Ok(())
+}
+
+/// Additive entry-kind migration (issue #22): old journals lack `kind`, new
+/// ones have it. Rows written before it read as no kind, which is `file`.
+fn ensure_kind_column(conn: &Connection) -> Result<()> {
+    let existing: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_table_info('operations')")
+        .context("inspect journal schema")?
+        .query_map([], |row| row.get(0))
+        .context("inspect journal schema")?
+        .map(|name| name.unwrap_or_default())
+        .collect();
+    if !existing.iter().any(|name| name == "kind") {
+        conn.execute("ALTER TABLE operations ADD COLUMN kind TEXT", [])
+            .context("migrate journal schema (kind)")?;
     }
     Ok(())
 }
