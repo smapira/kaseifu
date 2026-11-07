@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use crate::discovery::SimilarFile;
 use crate::discovery::destinations::is_excluded_destination;
-use crate::discovery::scoring::{adjust_for_age, aggregate_directory_score, median_timestamp};
+use crate::discovery::scoring::{
+    DirectoryShape, adjust_for_age, adjust_for_shape, aggregate_directory_score, median_timestamp,
+};
 use crate::models::candidate::CandidateDestination;
 
 pub fn aggregate_by_directory(
@@ -14,6 +16,21 @@ pub fn aggregate_by_directory(
 pub fn aggregate_by_directory_with_exclusions(
     similar_files: Vec<SimilarFile>,
     excluded_dirs: &[String],
+) -> anyhow::Result<Vec<CandidateDestination>> {
+    aggregate_by_directory_with_shape(similar_files, excluded_dirs, &DirectoryShape::default())
+}
+
+/// [`aggregate_by_directory_with_exclusions`] with the path-shape facts of this
+/// run (issue #19).
+///
+/// The shape adjustment is applied to the directory score, next to the age
+/// adjustment, and its reasons are appended to the evidence a candidate already
+/// reports. A default [`DirectoryShape`] changes no number, so every historical
+/// caller keeps its exact ranking.
+pub fn aggregate_by_directory_with_shape(
+    similar_files: Vec<SimilarFile>,
+    excluded_dirs: &[String],
+    shape: &DirectoryShape,
 ) -> anyhow::Result<Vec<CandidateDestination>> {
     if similar_files.is_empty() {
         return Ok(Vec::new());
@@ -68,7 +85,9 @@ pub fn aggregate_by_directory_with_exclusions(
             .map(|ts| (now_unix - ts).max(0) as f64 / 86_400.0)
             .filter(|d| *d >= 1.0);
         let (score, bonus) = adjust_for_age(base, age_days);
-        let reasons = build_reasons(files, evidence_count, age_days, bonus);
+        let mut reasons = build_reasons(files, evidence_count, age_days, bonus);
+        let (score, shape_reasons) = adjust_for_shape(score, &dir, shape);
+        reasons.extend(shape_reasons);
         crate::debug!(
             "  dir={} base={:.2} age_days={:?} bonus={:.2} score={:.2}",
             dir,

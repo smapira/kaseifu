@@ -321,7 +321,16 @@ fn v042c_pdf_exact_match_keeps_ranking_first() {
     let candidates = discover_with_hits(context, hits);
 
     assert_eq!(candidates[0].path, exact);
-    assert!((candidates[0].score - 1.0).abs() < 1e-9);
+    // Issue #19 subtracts the path shape from a directory score (this fixture
+    // lives inside a git working tree, so it is penalised) and never removes a
+    // candidate: an exact filename match still ranks first, and the score stays
+    // inside the scale.
+    assert!(
+        candidates[0].score > candidates[1].score,
+        "scores: {:?}",
+        candidates.iter().map(|c| c.score).collect::<Vec<_>>()
+    );
+    assert!((0.0..=1.0).contains(&candidates[0].score));
     assert!(
         candidates[0]
             .reasons

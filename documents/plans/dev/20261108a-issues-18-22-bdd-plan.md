@@ -203,12 +203,17 @@ forbid. The fixture is the shape the issue measured:
 | Indicator | Before | After | Issue |
 |---|---|---|---|
 | candidates for an unindexed target with no hits | 0 | 1 (Picture prior, `origin: prior`) | #18 |
-| rank of the repository path vs `~/Pictures/2024` (equal filename evidence) | tie, decided by path asc (repository path wins: `OS` < `Pictures`) | `~/Pictures/2024` first (depth + worktree penalty) | #19 |
+| rank of the repository path vs `~/Pictures/2024` (equal filename evidence) | tie, decided by path asc (repository path wins: `OS` < `Pictures`) | `~/Pictures/2024` first (depth 10 + worktree penalty) | #19 |
 | confidence band of a LEAVE run with hits | unchanged | unchanged (penalties change the rank, not the Jev numbers) | #19 |
 
-The numbers themselves are pinned in the module test
-`benchmark::candidate_prior::the_shape_terms_move_the_repository_path_down`
-so a later coefficient change is a deliberate one.
+The numbers themselves are pinned in two module tests so a later coefficient
+change is a deliberate one: `benchmark::candidate_prior::the_prior_takes_an_\nunindexed_file_from_zero_to_one_candidate` and
+`benchmark::candidate_prior::the_shape_terms_move_the_repository_path_down`.
+Both run on a fixture (the issue's directory shape), never on the developer's
+index: a real `mdfind` corpus cannot be measured without reading the machine's
+index, which the constraints forbid. Coefficients: `DEPTH_BASE_LEVELS 3`,
+`DEPTH_PENALTY_PER_LEVEL 0.015` (capped at 8 levels = 0.12),
+`WORKTREE_PENALTY 0.18`, `KNOWN_DIR_BONUS 0.10`.
 
 ## 7. Open points (not blocking the implementation)
 

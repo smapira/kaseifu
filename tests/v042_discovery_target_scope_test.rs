@@ -264,9 +264,13 @@ fn v042_pdf_exact_match_beyond_the_old_hit_window_still_wins() {
     let candidates = discover_with_hits(pdf_context(&target), hits);
 
     assert_eq!(candidates[0].path, exact_dir);
+    // The path shape of this fixture is subtracted (issue #19: it lives in a
+    // git working tree), which changes the number but not the ranking, the
+    // strong-signal reason or the fact that the exact match wins over 60
+    // weaker hits.
     assert!(
-        (candidates[0].score - 1.0).abs() < 1e-9,
-        "exact match scores 1.0"
+        candidates[0].score > candidates[1].score,
+        "the exact match must still win"
     );
     assert!(
         candidates[0]

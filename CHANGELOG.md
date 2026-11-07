@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Spotlight search is scoped to the home directory, and the ranking knows
+  path shape.** Issue #19: `mdfind` had no `-onlyin`, so a picture on the
+  Desktop ranked a repository checkout first, and the score had no term for
+  depth, "inside a working tree" or "this is the standard folder". The search
+  now runs once per root with `-onlyin <root>`, the home directory by default,
+  and `--roots DIR` (repeatable, on `organize`, `classify` and the diagnostic
+  `discover`) searches named directories instead - another volume is searched
+  only when it is named. The directory score is adjusted by path shape instead
+  of excluding anything: `-0.015` per level beyond three below the home (capped
+  at eight levels), `-0.18` inside a git working tree, `+0.10` for the standard
+  folder of the target's type (#18), with the reasons listed in the candidate's
+  evidence. A penalised directory stays a candidate (score clamped at 0.0).
+  `tests/v119_spotlight_scope_test.rs`, and the before/after indicator in
+  `src/benchmark/candidate_prior.rs` (a repository path tied with
+  `~/Pictures/2024` before; the user folder wins after).
+
 - **OS standard directories are offered as candidates for an unindexed file.**
   Issue #18: destination eligibility only had a refusal side (`~/Library/**`,
   bundles, caches, system trees), so `~/Documents` and a repository directory

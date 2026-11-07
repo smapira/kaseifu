@@ -12,12 +12,13 @@ mod similarity;
 
 // Re-export public API
 pub use candidates::{
-    aggregate_by_directory, aggregate_by_directory_with_exclusions, breakdown_line,
+    aggregate_by_directory, aggregate_by_directory_with_exclusions,
+    aggregate_by_directory_with_shape, breakdown_line,
 };
 pub use destinations::is_excluded_destination;
 pub use scoring::{
-    aggregate_directory_score, extension_match, filename_similarity, normalize_name, score_file,
-    token_jaccard,
+    DirectoryShape, adjust_for_shape, aggregate_directory_score, depth_below_home, extension_match,
+    filename_similarity, normalize_name, score_file, token_jaccard,
 };
 pub use search_terms::{extract_terms, normalize_terms};
 pub use similarity::{
@@ -25,7 +26,6 @@ pub use similarity::{
 };
 
 /// [`discover`] plus the standard-folder prior (issue #18).
-///
 /// The diagnostic `discover` command and the production pipeline both want the
 /// same candidate set, and that set now includes the operating-system folder the
 /// file's type belongs in. `discover`/`discover_with` themselves stay exactly as
@@ -34,10 +34,46 @@ pub use similarity::{
 pub fn discover_with_priors(
     normalized: NormalizedFileContext,
 ) -> anyhow::Result<Vec<CandidateDestination>> {
+    discover_with_priors_and_search(normalized, |query, limit| {
+        crate::platform::macos::spotlight::search(query, limit)
+    })
+}
+
+/// [`discover_with_priors`] with an injectable search boundary.
+///
+/// `--roots` (issue #19) is a capturing closure over this seam, so the scope of
+/// a run never needs a second discovery implementation.
+pub fn discover_with_priors_and_search<F>(
+    normalized: NormalizedFileContext,
+    search: F,
+) -> anyhow::Result<Vec<CandidateDestination>>
+where
+    F: Fn(&str, usize) -> anyhow::Result<Vec<String>>,
+{
     let extension = normalized.target.extension.clone();
-    let mut found = discover(normalized)?;
+    let mut found = discover_with(normalized, search)?;
     add_known_dir_priors(&mut found, extension.as_deref());
     Ok(found)
+}
+
+/// The path-shape facts for one discovery run: the home directory and the
+/// standard folder for the target's type (issues #18 and #19).
+///
+/// Resolved once per run so the aggregation never re-reads the environment per
+/// candidate directory.
+fn directory_shape(target_extension: Option<&str>) -> DirectoryShape {
+    let known = target_extension
+        .and_then(user_dirs::kind_for_extension)
+        .and_then(|kind| {
+            user_dirs::known_dirs()
+                .into_iter()
+                .find(|(known_kind, _)| *known_kind == kind)
+                .map(|(_, path)| path)
+        });
+    DirectoryShape {
+        home: dirs::home_dir(),
+        known_dir: known,
+    }
 }
 
 /// Append the standard folder for this file type as a separate candidate.
@@ -212,10 +248,12 @@ where
     // Step 3: Aggregate similar files by parent directory
     // The target's own parent directory is never a move destination, and a
     // directory the user could not have picked (app store, cache, hidden
-    // tree, generated name) is dropped by the aggregation itself — see
-    // `destinations` for the rules.
+    // tree, generated name) is dropped by the aggregation itself - see
+    // `destinations` for the rules. The path-shape facts of this run adjust
+    // the directory score (issue #19) and never remove a candidate.
+    let shape = directory_shape(target_ext.as_deref());
     let mut candidates =
-        candidates::aggregate_by_directory_with_exclusions(similar_files, &[target_parent])?;
+        candidates::aggregate_by_directory_with_shape(similar_files, &[target_parent], &shape)?;
 
     // Step 4: Keep the ranked head. Truncation lives here (and not in the
     // search) so the ranking, not the raw hit order, decides the cut.

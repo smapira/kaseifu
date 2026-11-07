@@ -136,6 +136,9 @@ enum Commands {
         /// Extra keywords sent to Jev as decision material (repeatable, non-empty; not search terms; cannot be combined with --select or --to).
         #[arg(long, value_name = "KEY", num_args = 1.., value_parser = keyword_value, conflicts_with_all = ["select", "to"])]
         keywords: Vec<String>,
+        /// Scope the Spotlight search to these directories instead of the home directory (repeatable; another volume must be named explicitly).
+        #[arg(long, value_name = "DIR", num_args = 1..)]
+        roots: Vec<PathBuf>,
     },
 
     /// Restore files moved by earlier runs (newest first).
@@ -164,6 +167,9 @@ enum Commands {
         all: bool,
         #[arg(long)]
         verbose: bool,
+        /// Scope the Spotlight search to these directories (repeatable).
+        #[arg(long, value_name = "DIR", num_args = 1..)]
+        roots: Vec<PathBuf>,
     },
 
     /// Decide where a file belongs without moving anything.
@@ -190,6 +196,9 @@ enum Commands {
         /// Extra keywords sent to Jev as decision material (repeatable, non-empty; not search terms).
         #[arg(long, value_name = "KEY", num_args = 1.., value_parser = keyword_value)]
         keywords: Vec<String>,
+        /// Scope the Spotlight search to these directories instead of the home directory (repeatable; another volume must be named explicitly).
+        #[arg(long, value_name = "DIR", num_args = 1..)]
+        roots: Vec<PathBuf>,
     },
 
     /// Watch directories and organize changed files automatically.
@@ -436,6 +445,7 @@ async fn dispatch(
             explain,
             to,
             keywords,
+            roots,
         } => {
             dispatch_organize(
                 OrganizeOptions {
@@ -447,6 +457,7 @@ async fn dispatch(
                     explain,
                     to,
                     keywords,
+                    roots,
                 },
                 format,
                 overrides,
@@ -460,14 +471,25 @@ async fn dispatch(
         } => handle_watch(&paths, execute, dry_run, format, overrides).await,
         Commands::Rename(boxed) => handle_rename(*boxed, format).await,
         Commands::Undo { last, batch } => handle_undo(last, batch.as_deref(), format),
-        Commands::Discover { file, all, verbose } => handle_discover(&file, all, verbose, format),
+        Commands::Discover {
+            file,
+            all,
+            verbose,
+            roots,
+        } => handle_discover(&file, all, verbose, &roots, format),
         Commands::Classify {
             file,
             all,
             verbose,
             explain,
             keywords,
-        } => handle_classify(&file, all, verbose, explain, &keywords, format, overrides).await,
+            roots,
+        } => {
+            handle_classify(
+                &file, all, verbose, explain, &keywords, &roots, format, overrides,
+            )
+            .await
+        }
         Commands::Skill { action } => handle_skill(action, format),
         _ => unreachable!("support commands route through dispatch_support"),
     }
@@ -527,6 +549,7 @@ struct OrganizeOptions {
     explain: bool,
     to: Option<PathBuf>,
     keywords: Vec<String>,
+    roots: Vec<PathBuf>,
 }
 
 /// Value parser for `--keywords`: trim the edges and refuse anything empty.
@@ -589,6 +612,7 @@ async fn dispatch_organize(
             options.execute,
             options.dry_run,
             options.yes,
+            &options.roots,
             format,
             overrides,
         )
@@ -600,6 +624,7 @@ async fn dispatch_organize(
             options.dry_run,
             options.explain,
             &options.keywords,
+            &options.roots,
             format,
             overrides,
         )
@@ -758,12 +783,14 @@ fn handle_scan(path: &Path, format: OutputFormat) {
 /// historical sections. `--keywords` (v112) ride the boundary decorator into
 /// the Jev request only; a repository rule wins over them and the report says
 /// so instead of dropping them silently.
+#[allow(clippy::too_many_arguments)]
 async fn handle_organize(
     file: &Path,
     execute: bool,
     dry_run: bool,
     explain: bool,
     keywords: &[String],
+    roots: &[PathBuf],
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
@@ -798,13 +825,14 @@ async fn handle_organize(
     let jev = KeywordJevIntegration::new(&real, keywords);
     let history = OperationHistory::open(journal_path())?;
 
-    let mut report = organize::organize_file_with_full(
+    let mut report = organize::organize_file_with_search(
         file,
         &jev,
         &history,
         actually_move,
         policy_thresholds(&resolved),
         &kaseifu::context::image_metadata::MetadataOptions::from_resolved(&resolved.metadata),
+        scoped_search(roots),
     )
     .await?;
     report.keywords = jev.delivery();
@@ -868,6 +896,7 @@ async fn handle_organize_select(
     execute: bool,
     dry_run: bool,
     yes: bool,
+    roots: &[PathBuf],
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
@@ -875,7 +904,7 @@ async fn handle_organize_select(
     let mode = resolve_mode(format);
 
     if format == OutputFormat::Json {
-        return print_select_candidates(file, execute, overrides);
+        return print_select_candidates(file, execute, roots, overrides);
     }
 
     // TTY first: without a terminal the selection must fail before any work
@@ -884,7 +913,7 @@ async fn handle_organize_select(
         anyhow::bail!(SELECT_NON_TTY_GUIDANCE);
     }
 
-    let candidates = select_candidates(file, overrides)?;
+    let candidates = select_candidates(file, roots, overrides)?;
     if candidates.is_empty() {
         print!("{}", select_view::no_candidates_text(mode.rich, mode.color));
         return Ok(());
@@ -1067,6 +1096,18 @@ fn handle_organize_to(
     }
 }
 
+/// The Spotlight scope for this run (issue #19).
+///
+/// `--roots` names directories to search instead of the home directory, and an
+/// empty list keeps the default scope (the home). The closure is the same
+/// boundary every pipeline entry point already accepts, so the scope reaches
+/// `mdfind` without a second discovery implementation.
+fn scoped_search(roots: &[PathBuf]) -> impl Fn(&str, usize) -> Result<Vec<String>> + '_ {
+    move |query: &str, limit: usize| {
+        kaseifu::platform::macos::spotlight::search_in(query, limit, roots)
+    }
+}
+
 /// True when `--to` names the directory the file already sits in.
 ///
 /// Compared by canonical path so `./docs`, `docs/` and symlinked spellings
@@ -1118,14 +1159,19 @@ fn organize_to_json(
 }
 
 /// `--select --format json`: the candidate list, no interaction, no Jev.
-fn print_select_candidates(file: &Path, execute: bool, overrides: &CliOverrides) -> Result<()> {
+fn print_select_candidates(
+    file: &Path,
+    execute: bool,
+    roots: &[PathBuf],
+    overrides: &CliOverrides,
+) -> Result<()> {
     if execute {
         anyhow::bail!(
             "--format json lists the candidate destinations and does not select; \
              run without --format json to select and move interactively"
         );
     }
-    let candidates = select_candidates(file, overrides)?;
+    let candidates = select_candidates(file, roots, overrides)?;
     println!("{}", serde_json::to_string_pretty(&candidates)?);
     Ok(())
 }
@@ -1133,14 +1179,16 @@ fn print_select_candidates(file: &Path, execute: bool, overrides: &CliOverrides)
 /// Discovery for the selection flow (observe -> normalize -> discover; no Jev).
 fn select_candidates(
     file: &Path,
+    roots: &[PathBuf],
     overrides: &CliOverrides,
 ) -> Result<Vec<kaseifu::models::candidate::CandidateDestination>> {
     let resolved = resolve_for(overrides)?;
-    let (_, candidates) = pipeline::discover_candidates(
+    let (_, outcome) = pipeline::discover_candidates_with_options(
         file,
+        scoped_search(roots),
         &kaseifu::context::image_metadata::MetadataOptions::from_resolved(&resolved.metadata),
     )?;
-    Ok(candidates)
+    Ok(outcome.candidates)
 }
 
 /// Ask until a valid answer arrives; `None` means the user cancelled.
@@ -2325,14 +2373,20 @@ fn to_step(result: Result<undo::UndoOutcome, undo::UndoError>) -> UndoStep {
 }
 
 /// `discover`: similar-file search plus scored directory aggregation.
-fn handle_discover(file: &Path, all: bool, verbose: bool, format: OutputFormat) -> Result<()> {
+fn handle_discover(
+    file: &Path,
+    all: bool,
+    verbose: bool,
+    roots: &[PathBuf],
+    format: OutputFormat,
+) -> Result<()> {
     let mode = resolve_mode(format);
     let ctx = context::builder::build(file)?;
     let target_name = ctx.target.filename.clone();
     let normalized = normalize::normalize_with_options(ctx, &inspect_image_options())?;
     // The diagnostic view shows the same candidate set the pipeline uses,
     // standard-folder prior included (issue #18).
-    let candidates = discovery::discover_with_priors(normalized)?;
+    let candidates = discovery::discover_with_priors_and_search(normalized, scoped_search(roots))?;
 
     if mode.rich {
         discover_view::print_rich(&target_name, &candidates, all, verbose, mode.color);
@@ -2346,12 +2400,14 @@ fn handle_discover(file: &Path, all: bool, verbose: bool, format: OutputFormat) 
 ///
 /// `--keywords` (v112) ride the same boundary decorator as `organize`; the
 /// decision object gains the additive `keywords` key when the flag is given.
+#[allow(clippy::too_many_arguments)]
 async fn handle_classify(
     file: &Path,
     all: bool,
     verbose: bool,
     explain: bool,
     keywords: &[String],
+    roots: &[PathBuf],
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
@@ -2367,9 +2423,10 @@ async fn handle_classify(
     // keywords too, exactly as Jev will receive them.
     let jev = KeywordJevIntegration::new(&observer, keywords);
 
-    let mut report = pipeline::classify_report_with_options(
+    let mut report = pipeline::classify_report_with_search_and_options(
         file,
         &jev,
+        scoped_search(roots),
         &kaseifu::context::image_metadata::MetadataOptions::from_resolved(&resolved.metadata),
     )
     .await?;

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::models::file_context::{Evidence, EvidenceSource};
@@ -117,8 +118,82 @@ fn normalize_mdls_value(raw: &str) -> String {
 }
 
 pub fn search(query: &str, limit: usize) -> Result<Vec<String>> {
+    search_in(query, limit, &default_roots())
+}
+
+/// The roots a search is scoped to when the caller names none.
+///
+/// The user's home directory: an index also holds `/System`, `/Applications`
+/// and every mounted volume, and a file that lives in the home is never best
+/// matched by a path outside it (measured: a picture in `~/Desktop` ranked a
+/// repository checkout first, issue #19). An empty result here means the home
+/// could not be resolved; the search then runs unscoped, exactly as before.
+pub fn default_roots() -> Vec<PathBuf> {
+    dirs::home_dir().into_iter().collect()
+}
+
+/// The `mdfind` argument vector for one query scoped to `roots`.
+///
+/// `mdfind` takes one `-onlyin` scope per invocation, so a multi-root search
+/// runs once per root and merges (see [`search_in`]). The vector is built by a
+/// pure function so the scope can be asserted without starting a process.
+pub fn search_arguments(query: &str, root: Option<&Path>) -> Vec<OsString> {
+    let mut arguments: Vec<OsString> = Vec::new();
+    if let Some(root) = root {
+        arguments.push(OsString::from("-onlyin"));
+        arguments.push(root.as_os_str().to_owned());
+    }
+    arguments.push(OsString::from(query));
+    arguments
+}
+
+/// [`search`] scoped to explicit roots.
+///
+/// One `mdfind` call per root, results concatenated in root order and bounded
+/// by `limit` across all of them. An empty `roots` falls back to
+/// [`default_roots`]; when even that is empty the query runs unscoped (the
+/// historical behavior) rather than returning nothing.
+pub fn search_in(query: &str, limit: usize, roots: &[PathBuf]) -> Result<Vec<String>> {
+    search_in_with(query, limit, roots, run_mdfind)
+}
+
+/// [`search_in`] with an injectable runner (`query`, scope, limit).
+///
+/// The seam exists so the scope can be asserted without starting `mdfind`: the
+/// acceptance for issue #19 is that the *invocation* is scoped, and a test that
+/// ran the real command would read the developer's index.
+pub fn search_in_with<F>(
+    query: &str,
+    limit: usize,
+    roots: &[PathBuf],
+    run: F,
+) -> Result<Vec<String>>
+where
+    F: Fn(&str, Option<&Path>, usize) -> Result<Vec<String>>,
+{
+    let scopes: Vec<PathBuf> = if roots.is_empty() {
+        default_roots()
+    } else {
+        roots.to_vec()
+    };
+    if scopes.is_empty() {
+        return run(query, None, limit);
+    }
+    let mut hits: Vec<String> = Vec::new();
+    for scope in &scopes {
+        if hits.len() >= limit {
+            break;
+        }
+        let found = run(query, Some(scope), limit.saturating_sub(hits.len()))?;
+        hits.extend(found);
+    }
+    Ok(hits)
+}
+
+/// One `mdfind` invocation, optionally scoped to one root.
+fn run_mdfind(query: &str, root: Option<&Path>, limit: usize) -> Result<Vec<String>> {
     let output = Command::new("mdfind")
-        .arg(query)
+        .args(search_arguments(query, root))
         .output()
         .context("failed to execute mdfind")?;
 

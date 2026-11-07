@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 pub const W_FILENAME: f64 = 0.60;
 pub const W_TOKEN: f64 = 0.25;
@@ -261,6 +262,130 @@ pub fn aggregate_directory_score(mut scores: Vec<f64>) -> f64 {
     let top3: Vec<f64> = scores.into_iter().take(3).collect();
     let mean = top3.iter().sum::<f64>() / top3.len() as f64;
     (DIR_W_MAX * max + DIR_W_MEAN_TOP3 * mean).clamp(0.0, 1.0)
+}
+
+// ---------------------------------------------------------------------------
+// Path shape (issue #19)
+// ---------------------------------------------------------------------------
+
+/// Path levels below the home directory that are free of the depth penalty.
+///
+/// `~/Pictures/2024` is two levels down and is exactly where files belong, so
+/// the first levels must cost nothing.
+pub const DEPTH_BASE_LEVELS: usize = 3;
+
+/// Penalty per path level beyond [`DEPTH_BASE_LEVELS`].
+pub const DEPTH_PENALTY_PER_LEVEL: f64 = 0.015;
+
+/// How many levels the depth penalty counts at most.
+pub const MAX_DEPTH_LEVELS: usize = 8;
+
+/// Penalty for a directory inside a git working tree.
+///
+/// Measured (issue #19): a checkout's `public/system/images/...` directory
+/// outranked a user folder on equal filename evidence. Code belongs in a
+/// repository, pictures do not, and the path shape is the only evidence that
+/// says so without a list of banned paths.
+pub const WORKTREE_PENALTY: f64 = 0.18;
+
+/// Bonus for the standard folder of the target's own type (issue #18).
+pub const KNOWN_DIR_BONUS: f64 = 0.10;
+
+/// How far up the tree the worktree check walks before giving up.
+const MAX_ANCESTOR_LEVELS: usize = 32;
+
+/// The path-shape facts a directory score is adjusted with.
+///
+/// Default (no home, no standard folder) adjusts nothing, so a caller that does
+/// not know these facts keeps the historical score exactly.
+#[derive(Debug, Clone, Default)]
+pub struct DirectoryShape {
+    /// The user's home directory, the reference for depth.
+    pub home: Option<PathBuf>,
+    /// The standard folder for the target's type, when one exists.
+    pub known_dir: Option<PathBuf>,
+}
+
+/// Path levels of `dir` below `home` (the whole component count when the
+/// directory is outside the home, and 0 when no home is known).
+pub fn depth_below_home(dir: &str, home: Option<&Path>) -> usize {
+    let components: Vec<&str> = dir.split('/').filter(|part| !part.is_empty()).collect();
+    let Some(home) = home else {
+        return 0;
+    };
+    let home_text = home.to_string_lossy();
+    let home_components: Vec<&str> = home_text
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect();
+    let inside_home = components.len() >= home_components.len()
+        && components[..home_components.len()] == home_components[..];
+    if inside_home {
+        return components.len() - home_components.len();
+    }
+    components.len()
+}
+
+/// True when an ancestor of `dir` holds a `.git` entry.
+///
+/// The nearest entry decides: a repository checkout, a linked worktree (a
+/// `.git` file) and its subdirectories all answer true, and a plain folder of
+/// documents answers false. The walk stops after [`MAX_ANCESTOR_LEVELS`] so a
+/// pathological path cannot make scoring unbounded.
+fn is_inside_git_worktree(dir: &str) -> bool {
+    let mut current = Path::new(dir);
+    for _ in 0..MAX_ANCESTOR_LEVELS {
+        if current.join(".git").exists() {
+            return true;
+        }
+        match current.parent() {
+            Some(parent) if parent != current => current = parent,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// The shape adjustment for one directory: the adjusted score and the reasons
+/// to report.
+///
+/// Penalties are capped and the score is clamped, so a penalised directory
+/// stays a candidate: the issue asks for a subtraction, never an exclusion.
+/// The bonus applies only to the standard folder for the target's type.
+pub fn adjust_for_shape(score: f64, dir: &str, shape: &DirectoryShape) -> (f64, Vec<String>) {
+    let mut reasons = Vec::new();
+    let mut adjusted = score;
+
+    let depth = depth_below_home(dir, shape.home.as_deref());
+    let levels = depth
+        .saturating_sub(DEPTH_BASE_LEVELS)
+        .min(MAX_DEPTH_LEVELS);
+    if levels > 0 {
+        adjusted -= DEPTH_PENALTY_PER_LEVEL * levels as f64;
+        reasons.push(format!("depth penalty: {depth} levels below home"));
+    }
+
+    if is_inside_git_worktree(dir) {
+        adjusted -= WORKTREE_PENALTY;
+        reasons.push("inside a git working tree".to_string());
+    }
+
+    if let Some(known) = shape.known_dir.as_deref()
+        && same_directory(dir, known)
+    {
+        adjusted += KNOWN_DIR_BONUS;
+        reasons.push("standard folder for this file type".to_string());
+    }
+
+    (adjusted.clamp(0.0, 1.0), reasons)
+}
+
+/// True when both spellings name the same directory (canonical when possible).
+fn same_directory(dir: &str, known: &Path) -> bool {
+    match (std::fs::canonicalize(dir), std::fs::canonicalize(known)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => Path::new(dir) == known,
+    }
 }
 
 #[cfg(test)]
