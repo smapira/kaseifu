@@ -237,18 +237,26 @@ When you already know the destination, `move` is the plain move:
 kaseifu move ~/Desktop/spec --to ~/Documents/archive            # dry run
 kaseifu move ~/Desktop/spec --to ~/Documents/archive --execute  # move it
 kaseifu move ~/Desktop/example.pdf --to ~/Documents/Invoices --execute
+kaseifu move ~/Desktop/a.txt ~/Desktop/b.txt --to ~/Documents/Inbox --create-dir --execute
 ```
 
 Nothing is classified, so no API key is read and no network is used. The
-destination must already exist, the never-a-destination rules still refuse
-`~/Library/**`, caches and system trees (on both ends), a collision is never
-overwritten, and a folder cannot move into its own subtree. The move is
-journaled with its `kind` (`file` or `dir`), `kaseifu undo` reverses it, and a
-move across volumes copies the tree, verifies the copy (file count and bytes)
-and only then removes the source - a failure leaves the source whole and no
-partial copy behind. `--format json` prints one `move` object (`source`,
-`destination_directory`, `destination_path`, `kind`, `executed`,
-`operation_id`).
+destination must already exist unless `--create-dir` is passed, which creates it
+(and any missing parent) first - the never-a-destination rules are checked on
+every level that would be created, so `~/Library/**` or a cache tree is refused
+rather than made. A collision is never overwritten, and a folder cannot move into
+its own subtree. Several paths go in one run: they are one journal batch, each
+path is reported on its own, one failure does not roll the others back, and the
+run exits non-zero when any path failed. The journal records `kind` (`file` or
+`dir`); `kaseifu undo` reverses the moves and removes a directory kaseifu created
+once it is empty (an undo that would remove something in use leaves it alone). A
+move across volumes copies the tree, verifies the copy (file count and bytes) and
+only then removes the source - a failure leaves the source whole and no partial
+copy behind. `--format json` prints one `move` object. One path keeps the keys
+issue #22 introduced (`source`, `destination_directory`, `destination_path`,
+`kind`, `executed`, `operation_id`); every run also carries `items` and
+`create_directories`, and a run of several paths carries `batch_id` and
+`created_directories` instead of the single-path scalars.
 
 ### Choose the destination yourself
 

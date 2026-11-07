@@ -69,6 +69,9 @@ pub struct UndoOutcome {
     pub undone_move_id: String,
     /// Where the file was restored to.
     pub restored_to: PathBuf,
+    /// Directories this undo removed because kaseifu created them and the
+    /// restore left them empty (issue #25).
+    pub removed_directories: Vec<PathBuf>,
 }
 
 /// Undo the most recent successful move.
@@ -176,9 +179,15 @@ fn finalize_undo_success(
     if let Err(error) = history.mark_undone(&entry.id) {
         return Err(UndoError::History(error.to_string()));
     }
+    // A directory this run created is removed once the restore leaves it empty
+    // (issue #25). Best effort by design: the files are already back, and a
+    // directory someone started using stays exactly where it is.
+    let removed_directories =
+        crate::operations::relocate::remove_created_directories(history, entry.batch_id.as_deref());
     Ok(UndoOutcome {
         operation_id: undo_id.to_string(),
         undone_move_id: entry.id.clone(),
         restored_to: original_path.to_path_buf(),
+        removed_directories,
     })
 }

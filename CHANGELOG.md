@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`move --create-dir` and several paths in one run.** Issue #25: filing a
+  desktop needed a `mkdir` per destination and one `move` per path (13 folders,
+  15 paths). `kaseifu move <path>... --to <dir> --create-dir` creates the
+  destination (and any missing parent) before the first move, and moves every
+  named path in one run. The never-a-destination rules are checked on each level
+  the run would create, an existing file where the folder should go is refused
+  rather than replaced, and a dry run prints the directory it would create plus
+  the destination of every path. The journal records the creation per level as
+  an `mkdir` row in the same batch, so `undo` removes a directory kaseifu
+  created once the restore leaves it empty (a directory someone started using
+  stays); when nothing could be moved, the run removes the empty directory it
+  made instead of leaving it behind. Each path is reported on its own, one
+  failure does not roll the other moves back, and the exit code is non-zero when
+  any path failed. `--format json` remains additive: one path keeps the keys
+  issue #22 introduced, and every run gains `items` / `create_directories` (a
+  multi-path run carries `batch_id` and `created_directories`).
+  `tests/v121_move_create_dir_test.rs`; `organize` still refuses a folder
+  (`tests/v113_folder_target_test.rs`).
+
 - **`kaseifu move <path> --to <dir>` files a file *or* a folder with no decision
   in it.** Issue #22: `organize` refuses a folder on purpose (#14: a folder move
   needs its own journal, undo and `--select` semantics), so there was no way to

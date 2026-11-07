@@ -165,31 +165,26 @@ impl OperationHistory {
         })
     }
 
-    /// Record a move and what it moved (`file` or `dir`, issue #22).
+    /// Record the creation of one directory **before** creating it (issue #25).
     ///
-    /// The selection columns are `None` because the move carries no decision:
-    /// exactly the shape [`record_pending`](Self::record_pending) writes for a
-    /// `--to` move, plus the entry kind.
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_pending_kind(
+    /// The row is an `mkdir` operation: the parent is `source_path`, the
+    /// directory itself is `destination_path`, and the batch id links it to the
+    /// moves of the same invocation (that link is what lets `undo` remove the
+    /// directories this run created, and only while they are empty).
+    pub fn record_directory_creation(
         &self,
-        operation: &str,
-        source: &Path,
-        destination: &Path,
-        candidate_id: Option<&str>,
-        confidence: Option<f64>,
-        margin: Option<f64>,
-        kind: &str,
+        directory: &Path,
+        batch_id: Option<&str>,
     ) -> Result<String> {
         self.record_pending_in_batch(PendingRecord {
-            operation,
-            source,
-            destination,
-            candidate_id,
-            confidence,
-            margin,
-            batch_id: None,
-            kind: Some(kind),
+            operation: "mkdir",
+            source: directory.parent().unwrap_or(directory),
+            destination: directory,
+            candidate_id: None,
+            confidence: None,
+            margin: None,
+            batch_id,
+            kind: Some("dir"),
         })
     }
 
@@ -274,6 +269,29 @@ impl OperationHistory {
              WHERE operation = 'move' AND result = 'success' AND undone_at IS NULL
                AND batch_id = ?1
              ORDER BY rowid DESC",
+        )?;
+        let mut rows = statement.query([batch_id])?;
+        let mut entries = Vec::new();
+        while let Some(row) = rows.next()? {
+            entries.push(row_to_entry(row)?);
+        }
+        Ok(entries)
+    }
+
+    /// The directories this batch created and has not removed, deepest first.
+    ///
+    /// Deepest first because `remove_dir` refuses a non-empty directory: the
+    /// undo of a created tree has to come from the inside out, and the
+    /// emptiness check is the whole safety rule (a directory someone started
+    /// using is never removed).
+    pub fn created_directories_in_batch(&self, batch_id: &str) -> Result<Vec<HistoryEntry>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, timestamp, operation, source_path, destination_path,
+                    candidate_id, confidence, margin, result, error, undone_at, batch_id, kind
+             FROM operations
+             WHERE operation = 'mkdir' AND result = 'success' AND undone_at IS NULL
+               AND batch_id = ?1
+             ORDER BY length(destination_path) DESC",
         )?;
         let mut rows = statement.query([batch_id])?;
         let mut entries = Vec::new();
@@ -488,6 +506,16 @@ fn now() -> String {
 fn new_operation_id() -> String {
     format!(
         "op-{}-{}",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    )
+}
+
+/// Batch id helper, shared by every run that groups journal rows for
+/// `undo --batch` (a `label --recursive` batch and a `move` of several paths).
+pub fn new_batch_id() -> String {
+    format!(
+        "batch-{}-{}",
         std::process::id(),
         Utc::now().timestamp_nanos_opt().unwrap_or_default()
     )

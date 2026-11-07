@@ -202,14 +202,7 @@ pub struct BatchReport {
 
 /// One batch's identity for undo (`batch-` + process id + nanos).
 fn new_batch_id() -> String {
-    format!(
-        "batch-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|age| age.as_nanos())
-            .unwrap_or_default()
-    )
+    crate::storage::history::new_batch_id()
 }
 
 impl BatchReport {

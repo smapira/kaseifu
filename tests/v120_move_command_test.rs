@@ -14,7 +14,7 @@ use kaseifu::operations::relocate::{
     transfer,
 };
 use kaseifu::operations::undo::undo_last_move;
-use kaseifu::storage::history::OperationHistory;
+use kaseifu::storage::history::{OperationHistory, PendingRecord};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -166,15 +166,16 @@ fn v120_undo_batch_still_works() {
     std::fs::create_dir_all(&to).expect("filed");
     let history = OperationHistory::open_in_memory().expect("journal");
     history
-        .record_pending_kind(
-            "move",
-            &from.join("one.txt"),
-            &to.join("one.txt"),
-            None,
-            None,
-            None,
-            "file",
-        )
+        .record_pending_in_batch(PendingRecord {
+            operation: "move",
+            source: &from.join("one.txt"),
+            destination: &to.join("one.txt"),
+            candidate_id: None,
+            confidence: None,
+            margin: None,
+            batch_id: None,
+            kind: Some("file"),
+        })
         .expect("row");
     drop(history);
 
@@ -187,15 +188,16 @@ fn v120_undo_batch_still_works() {
     let second = root.join("b.txt");
     std::fs::create_dir_all(root.join("target")).expect("target");
     let id = history
-        .record_pending_kind(
-            "move",
-            &first,
-            &root.join("target/a.txt"),
-            None,
-            None,
-            None,
-            "file",
-        )
+        .record_pending_in_batch(PendingRecord {
+            operation: "move",
+            source: &first,
+            destination: &root.join("target/a.txt"),
+            candidate_id: None,
+            confidence: None,
+            margin: None,
+            batch_id: None,
+            kind: Some("file"),
+        })
         .expect("row");
     transfer(&first, &root.join("target/a.txt")).expect("move");
     history.mark_success(&id).expect("success");

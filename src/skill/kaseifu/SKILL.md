@@ -65,6 +65,7 @@ kaseifu organize <file> --to ~/Documents/Invoices --execute # non-interactive de
 kaseifu organize <file> --keywords "2026 tax year"          # extra decision material
 kaseifu move <path> --to <dir>                              # move a file or a folder, no decision
 kaseifu move <path> --to <dir> --execute                    # ... and perform it
+kaseifu move <path>... --to <dir> --create-dir --execute    # several paths, destination created first
 kaseifu undo                                                # put the last move back
 kaseifu undo --last 3                                       # the last three moves
 kaseifu undo --batch <id>                                   # exactly one batch, by its printed id
@@ -98,12 +99,16 @@ same repository`) and stay allowed.
 
 `kaseifu move <path> --to <dir> [--execute]` is the path with no decision in it:
 a file **or** a folder goes where the owner says, with no classifier call, no key
-and no network. Dry run is the default. The destination must already exist, the
-never-a-destination rules refuse `~/Library/**`, caches and system trees on both
-ends, a collision is never overwritten, and a folder cannot move into its own
-subtree. The journal records `kind` (`file` / `dir`) and `undo` reverses it; a
-move across volumes copies, verifies (file count and bytes) and then removes the
-source, so a failure leaves the source whole.
+and no network. Dry run is the default. The destination must already exist
+unless `--create-dir` is passed, the never-a-destination rules refuse
+`~/Library/**`, caches and system trees on both ends (a path `--create-dir`
+would make included), a collision is never overwritten, and a folder cannot move
+into its own subtree. Several paths in one run are one batch: each path is
+reported on its own, one failure does not roll the others back, and the exit code
+is non-zero when any path failed. The journal records `kind` (`file` / `dir`) and
+`undo` reverses the moves; a directory kaseifu created is removed once the undo
+leaves it empty. A move across volumes copies, verifies (file count and bytes)
+and then removes the source, so a failure leaves the source whole.
 
 ## Repository policy (`.kaseifu.toml`)
 

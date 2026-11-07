@@ -18,7 +18,7 @@ use crate::context::directory::{
     is_bundle_container, is_cache_or_temp, is_library_tree, is_system_area, is_system_tree_name,
 };
 use crate::discovery::is_excluded_destination;
-use crate::storage::history::OperationHistory;
+use crate::storage::history::{OperationHistory, PendingRecord};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -119,24 +119,159 @@ pub enum RelocateOutcome {
     WouldMove,
 }
 
+/// A move of one or more paths into one destination directory (issue #25).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MoveBatch {
+    /// Where every path goes.
+    pub destination_directory: PathBuf,
+    /// The levels that must be created first, outermost first. Empty when the
+    /// directory already exists, or when creation was not requested.
+    pub missing_directories: Vec<PathBuf>,
+    /// One entry per requested path, in the order the user gave them.
+    pub items: Vec<MoveItem>,
+}
+
+impl MoveBatch {
+    /// The plans that are ready to run (a failed item is reported as it is).
+    pub fn planned(&self) -> impl Iterator<Item = &RelocatePlan> {
+        self.items.iter().filter_map(|item| item.plan.as_ref().ok())
+    }
+}
+
+/// One requested path and what planning made of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MoveItem {
+    /// The path the user named (kept so a refusal still names it).
+    pub source: PathBuf,
+    /// The validated move, or the reason there is none.
+    pub plan: Result<RelocatePlan, RelocateError>,
+}
+
+/// What one path did during an executed batch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItemOutcome {
+    /// The journal id of the move, when it happened.
+    pub operation_id: Option<String>,
+    /// Why it did not happen; `None` when it did.
+    pub error: Option<RelocateError>,
+}
+
+impl ItemOutcome {
+    /// True when this path was moved.
+    pub fn moved(&self) -> bool {
+        self.operation_id.is_some()
+    }
+}
+
+/// The result of executing a batch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BatchOutcome {
+    /// The id that groups this run's journal rows for `undo --batch`.
+    pub batch_id: String,
+    /// One result per requested path, in the same order as [`MoveBatch::items`].
+    pub items: Vec<ItemOutcome>,
+    /// The directories this run created and kept.
+    pub created_directories: Vec<PathBuf>,
+}
+
 /// Validate one move without touching anything.
 pub fn plan_relocate(source: &Path, destination: &Path) -> Result<RelocatePlan, RelocateError> {
-    let kind = source_kind(source)?;
+    // The one-path form keeps its historical contract: the destination has to
+    // exist, and a plan never creates anything.
+    destination_levels(destination, false)?;
+    plan_item(source, destination)
+}
+
+/// Plan a move of every path into `destination`, creating it when `create`.
+///
+/// The destination is validated once (it is shared), then each path is
+/// validated on its own: one unreadable source must not stop the others, which
+/// is what lets the command report per item.
+pub fn plan_batch(
+    paths: &[PathBuf],
+    destination: &Path,
+    create: bool,
+) -> Result<MoveBatch, RelocateError> {
+    let missing_directories = destination_levels(destination, create)?;
+    let mut items = Vec::with_capacity(paths.len());
+    let mut destinations: Vec<PathBuf> = Vec::with_capacity(paths.len());
+    for path in paths {
+        let plan = plan_item(path, destination).and_then(|plan| {
+            // Two paths with the same name would both target one file: the plan
+            // names that as a collision instead of letting the second move fail
+            // halfway through the batch.
+            if destinations.contains(&plan.destination_path) {
+                return Err(RelocateError::Collision(plan.destination_path));
+            }
+            destinations.push(plan.destination_path.clone());
+            Ok(plan)
+        });
+        items.push(MoveItem {
+            source: path.clone(),
+            plan,
+        });
+    }
+    Ok(MoveBatch {
+        destination_directory: destination.to_path_buf(),
+        missing_directories,
+        items,
+    })
+}
+
+/// The destination levels a move has to create, outermost first (issue #25).
+///
+/// Empty when the directory already exists. `create = false` keeps the
+/// historical refusal, and an existing non-directory is refused either way: a
+/// file where the folder should go is never replaced.
+fn destination_levels(destination: &Path, create: bool) -> Result<Vec<PathBuf>, RelocateError> {
     // The never-a-destination rules come first: a place a person never picks
     // (`~/Library/**`, caches, system trees) is refused as *that*, not as "not a
-    // directory", and the answer needs no filesystem read of the destination.
-    if is_out_of_bounds_source(&canonical_text(source)) {
-        return Err(RelocateError::SourceExcluded(source.to_path_buf()));
-    }
+    // directory".
     if is_excluded_destination(&destination.to_string_lossy()) {
         return Err(RelocateError::DestinationExcluded(
             destination.to_path_buf(),
         ));
     }
-    if !destination.is_dir() {
+    if destination.is_dir() {
+        return Ok(Vec::new());
+    }
+    if destination.exists() || !create {
         return Err(RelocateError::DestinationNotADirectory(
             destination.to_path_buf(),
         ));
+    }
+    let mut levels = Vec::new();
+    let mut current = Some(destination);
+    while let Some(path) = current {
+        if path.as_os_str().is_empty() || path.is_dir() {
+            break;
+        }
+        // A file in the way is refused, never replaced.
+        if path.exists() {
+            return Err(RelocateError::DestinationNotADirectory(path.to_path_buf()));
+        }
+        // The rule applies to every level this run would create, not just the
+        // leaf (issue #25: a created path is a destination too).
+        if is_excluded_destination(&path.to_string_lossy()) {
+            return Err(RelocateError::DestinationExcluded(path.to_path_buf()));
+        }
+        levels.push(path.to_path_buf());
+        current = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty());
+    }
+    levels.reverse();
+    Ok(levels)
+}
+
+/// Validate one path against a destination already known to be usable (it
+/// exists, or the batch will create it).
+fn plan_item(source: &Path, destination: &Path) -> Result<RelocatePlan, RelocateError> {
+    let kind = source_kind(source)?;
+    // The source side is the tree rules only: a hidden or timestamped name the
+    // user named explicitly is a legitimate source (issue #22).
+    if is_out_of_bounds_source(&canonical_text(source)) {
+        return Err(RelocateError::SourceExcluded(source.to_path_buf()));
     }
     check_not_inside_itself(source, destination, kind)?;
     let file_name = source
@@ -233,39 +368,153 @@ fn same_directory(left: &Path, right: &Path) -> bool {
 
 /// Dry run: verify the plan still holds and report it.
 pub fn dry_run(plan: &RelocatePlan) -> Result<RelocateOutcome, RelocateError> {
-    verify_preconditions(plan)?;
+    verify_preconditions(plan, false)?;
     Ok(RelocateOutcome::WouldMove)
 }
 
-/// Execute the move, journaling it before the mutation.
-///
-/// Order matches every other mutation in this tool (`operations::mover`):
-/// verify, record, transfer, mark. The journal row carries `kind`, and the
-/// selection columns stay NULL exactly like a `--to` move, so `undo` and
-/// `doctor` read it the same way.
+/// Dry run for a batch: verify every planned item, create nothing (issue #25).
+pub fn dry_run_batch(batch: &MoveBatch) -> Result<(), RelocateError> {
+    let may_create = !batch.missing_directories.is_empty();
+    for plan in batch.planned() {
+        verify_preconditions(plan, may_create)?;
+    }
+    Ok(())
+}
+
+/// Execute one move, journaling it before the mutation.
 pub fn execute_relocate(
     plan: &RelocatePlan,
     history: &OperationHistory,
 ) -> Result<RelocateOutcome, RelocateError> {
-    verify_preconditions(plan)?;
-    let operation_id = history
-        .record_pending_kind(
-            "move",
-            &plan.source,
-            &plan.destination_path,
-            None,
-            None,
-            None,
-            plan.kind.as_str(),
-        )
-        .map_err(|error| RelocateError::History(error.to_string()))?;
+    let operation_id = execute_one(plan, history, None)?;
+    Ok(RelocateOutcome::Moved { operation_id })
+}
 
+/// Execute a planned batch (issue #25): create what is missing, move every
+/// planned path, and leave no empty directory behind.
+///
+/// Order matches every other mutation in this tool: journal, mutate, mark. The
+/// creation is journaled per level so `undo` can remove exactly what this run
+/// made; a run where nothing could be moved removes the directories it created
+/// instead of leaving an empty folder.
+pub fn execute_batch(
+    batch: &MoveBatch,
+    history: &OperationHistory,
+) -> Result<BatchOutcome, RelocateError> {
+    let batch_id = crate::storage::history::new_batch_id();
+    let creations = create_missing_directories(batch, history, &batch_id)?;
+
+    let mut items = Vec::with_capacity(batch.items.len());
+    for item in &batch.items {
+        let outcome = match &item.plan {
+            Err(error) => ItemOutcome {
+                operation_id: None,
+                error: Some(error.clone()),
+            },
+            Ok(plan) => match execute_one(plan, history, Some(&batch_id)) {
+                Ok(operation_id) => ItemOutcome {
+                    operation_id: Some(operation_id),
+                    error: None,
+                },
+                Err(error) => ItemOutcome {
+                    operation_id: None,
+                    error: Some(error),
+                },
+            },
+        };
+        items.push(outcome);
+    }
+
+    // A directory this run created must not survive empty (issue #25): when no
+    // path made it in, the journal rows are retired with it.
+    if items.iter().all(|item| !item.moved()) {
+        retire_created_directories(history, &creations, &batch.missing_directories);
+    }
+
+    let created_directories = batch
+        .missing_directories
+        .iter()
+        .filter(|directory| directory.is_dir())
+        .cloned()
+        .collect();
+    Ok(BatchOutcome {
+        batch_id,
+        items,
+        created_directories,
+    })
+}
+
+/// Journal and create every missing level, returning the rows to reconcile.
+///
+/// The rows are written before the mutation (like any other operation) so an
+/// interrupted run leaves a record instead of an unexplained directory.
+fn create_missing_directories(
+    batch: &MoveBatch,
+    history: &OperationHistory,
+    batch_id: &str,
+) -> Result<Vec<(String, PathBuf)>, RelocateError> {
+    let mut creations = Vec::with_capacity(batch.missing_directories.len());
+    for directory in &batch.missing_directories {
+        let row = history
+            .record_directory_creation(directory, Some(batch_id))
+            .map_err(|error| RelocateError::History(error.to_string()))?;
+        creations.push((row, directory.clone()));
+    }
+    let Some(leaf) = batch.missing_directories.last() else {
+        return Ok(creations);
+    };
+    if let Err(error) = std::fs::create_dir_all(leaf) {
+        for (row, _) in &creations {
+            let _ = history.mark_failure(row, &error.to_string());
+        }
+        remove_empty_directories(&batch.missing_directories);
+        return Err(RelocateError::Io(error.to_string()));
+    }
+    for (row, _) in &creations {
+        let _ = history.mark_success(row);
+    }
+    Ok(creations)
+}
+
+/// Remove the directories this run created and retire their journal rows.
+fn retire_created_directories(
+    history: &OperationHistory,
+    creations: &[(String, PathBuf)],
+    levels: &[PathBuf],
+) {
+    let removed = remove_empty_directories(levels);
+    for (row, directory) in creations {
+        if removed.iter().any(|path| path == directory) {
+            let _ = history.mark_failure(row, "removed: nothing was moved into it");
+        }
+    }
+}
+
+/// One journaled move (the shared body of the single and batch paths).
+fn execute_one(
+    plan: &RelocatePlan,
+    history: &OperationHistory,
+    batch_id: Option<&str>,
+) -> Result<String, RelocateError> {
+    verify_preconditions(plan, false)?;
+    let operation_id = history
+        .record_pending_in_batch(PendingRecord {
+            operation: "move",
+            source: &plan.source,
+            destination: &plan.destination_path,
+            candidate_id: None,
+            confidence: None,
+            margin: None,
+            batch_id,
+            kind: Some(plan.kind.as_str()),
+        })
+        .map_err(|error| RelocateError::History(error.to_string()))?;
     match transfer(&plan.source, &plan.destination_path) {
         Ok(()) => {
-            if let Err(error) = history.mark_success(&operation_id) {
-                return Err(RelocateError::History(error.to_string()));
-            }
-            Ok(RelocateOutcome::Moved { operation_id })
+            history
+                .mark_success(&operation_id)
+                .map_err(|error| RelocateError::History(error.to_string()))?;
+            Ok(operation_id)
         }
         Err(error) => {
             let _ = history.mark_failure(&operation_id, &error.to_string());
@@ -274,12 +523,66 @@ pub fn execute_relocate(
     }
 }
 
+/// Remove the directories kaseifu created for one batch, deepest first, and
+/// only while they are empty.
+pub fn remove_created_directories(
+    history: &OperationHistory,
+    batch_id: Option<&str>,
+) -> Vec<PathBuf> {
+    let Some(batch_id) = batch_id else {
+        return Vec::new();
+    };
+    let Ok(rows) = history.created_directories_in_batch(batch_id) else {
+        return Vec::new();
+    };
+    let levels: Vec<PathBuf> = rows
+        .iter()
+        .map(|row| PathBuf::from(&row.destination_path))
+        .collect();
+    let removed = remove_empty_directories(&levels);
+    for row in &rows {
+        if removed
+            .iter()
+            .any(|path| path.to_string_lossy() == row.destination_path)
+        {
+            let _ = history.mark_undone(&row.id);
+        }
+    }
+    removed
+}
+
+/// Remove the given directories, deepest first, only while they are empty.
+///
+/// `remove_dir` refuses a non-empty directory, which is the whole safety rule:
+/// a directory someone started using is left alone.
+fn remove_empty_directories(levels: &[PathBuf]) -> Vec<PathBuf> {
+    let mut ordered: Vec<&PathBuf> = levels.iter().collect();
+    ordered.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    let mut removed = Vec::new();
+    for level in ordered {
+        if !level.is_dir() {
+            continue;
+        }
+        let empty = std::fs::read_dir(level)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(false);
+        if empty && std::fs::remove_dir(level).is_ok() {
+            removed.push(level.clone());
+        }
+    }
+    removed
+}
+
 /// Re-verify the preconditions immediately before the mutation (TOCTOU).
-fn verify_preconditions(plan: &RelocatePlan) -> Result<(), RelocateError> {
+///
+/// `may_create` allows the destination to be missing: a batch creates it
+/// before the first move, so the check runs again with the directory in place.
+fn verify_preconditions(plan: &RelocatePlan, may_create: bool) -> Result<(), RelocateError> {
     if !plan.source.exists() {
         return Err(RelocateError::SourceMissing(plan.source.clone()));
     }
-    if !plan.destination_directory.is_dir() {
+    if !plan.destination_directory.is_dir() && !(may_create && !plan.destination_directory.exists())
+    {
         return Err(RelocateError::DestinationNotADirectory(
             plan.destination_directory.clone(),
         ));

@@ -60,7 +60,7 @@ metadata is not sent to Jev.")]
 struct Cli {
     /// Output format for commands with structured output.
     ///
-    /// `json` applies to inspect, classify, organize, doctor, setup, auth,
+    /// `json` applies to inspect, classify, organize, move, doctor, setup, auth,
     /// config, completions --install, uninstall, undo, scan and skill. `watch`
     /// emits one JSON object per line with --format json.
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Auto)]
@@ -141,20 +141,26 @@ enum Commands {
         roots: Vec<PathBuf>,
     },
 
-    /// Move one path into a directory. No decision, no classifier.
+    /// Move files or folders into a directory. No decision, no classifier.
     ///
     /// A file *or* a folder goes where you say: `organize` decides where a
     /// file belongs and refuses a folder on purpose, so this is the plain move
     /// for the case you already know the answer to. Nothing is classified, no
     /// key is read and no network is used. Dry run by default (`--execute`
-    /// performs it), the move is journaled and `kaseifu undo` reverses it,
-    /// and the never-a-destination rules still refuse `~/Library`, caches and
-    /// system trees.
+    /// performs it), the moves are journaled as one batch and `kaseifu undo`
+    /// reverses them, and the never-a-destination rules still refuse
+    /// `~/Library`, caches and system trees. Several paths go in one run;
+    /// `--create-dir` creates the destination (and any missing parent) first.
     Move {
-        path: PathBuf,
-        /// Directory to move the path into (must already exist).
+        /// Paths to move (one file or folder each).
+        #[arg(required = true, value_name = "PATH", num_args = 1..)]
+        paths: Vec<PathBuf>,
+        /// Directory to move the paths into.
         #[arg(long, value_name = "DIR", required = true)]
         to: PathBuf,
+        /// Create the destination directory (and any missing parent) first.
+        #[arg(long = "create-dir")]
+        create_dir: bool,
         /// Perform the move (default is a dry run; cannot be combined with --dry-run).
         #[arg(long, conflicts_with = "dry_run")]
         execute: bool,
@@ -494,11 +500,12 @@ async fn dispatch(
         Commands::Rename(boxed) => handle_rename(*boxed, format).await,
         Commands::Undo { last, batch } => handle_undo(last, batch.as_deref(), format),
         Commands::Move {
-            path,
+            paths,
             to,
+            create_dir,
             execute,
             dry_run,
-        } => handle_move(&path, &to, execute, dry_run, format),
+        } => handle_move(&paths, &to, create_dir, execute, dry_run, format),
         Commands::Discover {
             file,
             all,
@@ -1266,82 +1273,236 @@ fn execute_manual_move_report(
     }
 }
 
-/// `move`: one path into one directory, no decision involved (issue #22).
+/// `move`: one or more paths into one directory, no decision involved
+/// (issues #22 and #25).
 ///
 /// The command exists because `organize` refuses a folder on purpose (#14) and
 /// the journal, `undo` and the destination rules already handle folders. Dry
 /// run is the default; `--execute` is the only mutation path.
 fn handle_move(
-    path: &Path,
+    paths: &[PathBuf],
     destination: &Path,
+    create_dir: bool,
     execute: bool,
     dry_run: bool,
     format: OutputFormat,
 ) -> Result<()> {
     let actually_move = execute && !dry_run;
-    let planned = relocate::plan_relocate(path, destination)
+    let batch = relocate::plan_batch(paths, destination, create_dir)
         .map_err(|error| anyhow::anyhow!("cannot move this path: {error}"))?;
+    // One path keeps the one-path wording: the reason names that path, not a
+    // batch summary.
+    if let [item] = batch.items.as_slice()
+        && let Err(error) = &item.plan
+    {
+        anyhow::bail!("cannot move this path: {error}");
+    }
 
     if !actually_move {
-        relocate::dry_run(&planned)
+        relocate::dry_run_batch(&batch)
             .map_err(|error| anyhow::anyhow!("cannot move this path: {error}"))?;
-        print_move_report(&planned, Option::None, false, format);
+        print_move_report(&batch, Option::None, false, format);
         return Ok(());
     }
 
     let history = OperationHistory::open(journal_path())?;
-    match relocate::execute_relocate(&planned, &history)
-        .map_err(|error| anyhow::anyhow!("move failed: {error}"))?
+    let outcome = relocate::execute_batch(&batch, &history)
+        .map_err(|error| anyhow::anyhow!("move failed: {error}"))?;
+    if let [item] = outcome.items.as_slice()
+        && let Some(error) = &item.error
     {
-        relocate::RelocateOutcome::Moved { operation_id } => {
-            print_move_report(&planned, Some(&operation_id), true, format);
-            Ok(())
-        }
-        // `execute_relocate` always performs the move; this arm keeps the
-        // outcome match exhaustive.
-        relocate::RelocateOutcome::WouldMove => anyhow::bail!("the move was not performed"),
+        anyhow::bail!("move failed: {error}");
     }
+    print_move_report(&batch, Some(&outcome), true, format);
+
+    // A partial failure is reported per path above; the exit code still says
+    // that something did not happen.
+    let failed = outcome.items.iter().filter(|item| !item.moved()).count();
+    if failed > 0 {
+        anyhow::bail!(
+            "{failed} of {} paths could not be moved",
+            outcome.items.len()
+        );
+    }
+    Ok(())
 }
 
 /// The `move` report: text rows or one `move` JSON document.
 ///
-/// No colour and no box: the report is four facts, and the same words read the
-/// same way in a pipe, an agent transcript and a terminal.
+/// One path keeps the shape it had in issue #22 (`source` / `destination` /
+/// `kind` / `operation_id`); several paths add a numbered line per path and a
+/// `batch` row. Every new JSON key is additive, and the legacy scalar keys are
+/// written whenever there is exactly one path.
 fn print_move_report(
-    plan: &relocate::RelocatePlan,
-    operation_id: Option<&str>,
+    batch: &relocate::MoveBatch,
+    outcome: Option<&relocate::BatchOutcome>,
     executed: bool,
     format: OutputFormat,
 ) {
-    let kind = plan.kind.as_str();
-    let destination = plan.destination_path.to_string_lossy().to_string();
-    let json = serde_json::json!({
-        "move": {
-            "source": plan.source.to_string_lossy(),
-            "destination_directory": plan.destination_directory.to_string_lossy(),
-            "destination_path": destination,
-            "kind": kind,
-            "executed": executed,
-            "operation_id": operation_id,
+    let single = batch.items.len() == 1;
+    let mut lines = Vec::new();
+    if let Some(leaf) = batch.missing_directories.last() {
+        let parents = batch.missing_directories.len() - 1;
+        match parents {
+            0 => lines.push(format!("create directory: {}", leaf.display())),
+            1 => lines.push(format!(
+                "create directory: {} (with 1 parent folder)",
+                leaf.display()
+            )),
+            count => lines.push(format!(
+                "create directory: {} (with {count} parent folders)",
+                leaf.display()
+            )),
         }
-    })
-    .to_string();
-    let mut lines = vec![
-        format!("source: {}", plan.source.display()),
-        format!("destination: {}", plan.destination_path.display()),
-        format!("kind: {kind}"),
-    ];
+    }
+
+    if single {
+        let item = &batch.items[0];
+        match &item.plan {
+            Ok(plan) => {
+                lines.push(format!("source: {}", plan.source.display()));
+                lines.push(format!("destination: {}", plan.destination_path.display()));
+                lines.push(format!("kind: {}", plan.kind.as_str()));
+            }
+            Err(error) => {
+                lines.push(format!("source: {}", item.source.display()));
+                lines.push(format!("error: {error}"));
+            }
+        }
+    } else {
+        lines.push(format!("paths: {}", batch.items.len()));
+        for (index, item) in batch.items.iter().enumerate() {
+            let number = index + 1;
+            match &item.plan {
+                Ok(plan) => lines.push(format!(
+                    "{number}. {} -> {}",
+                    plan.source.display(),
+                    plan.destination_path.display()
+                )),
+                Err(error) => lines.push(format!(
+                    "{number}. {} -> error: {error}",
+                    item.source.display()
+                )),
+            }
+        }
+    }
+
     if executed {
-        lines.push(format!(
-            "operation_id: {}",
-            operation_id.unwrap_or_default()
-        ));
+        let ids: Vec<&str> = outcome
+            .map(|outcome| {
+                outcome
+                    .items
+                    .iter()
+                    .filter_map(|item| item.operation_id.as_deref())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if single {
+            lines.push(format!(
+                "operation_id: {}",
+                ids.first().copied().unwrap_or_default()
+            ));
+        } else if let Some(outcome) = outcome {
+            lines.push(format!("batch: {}", outcome.batch_id));
+            lines.push(format!("operation_id: {}", ids.join(", ")));
+        }
         // Only a performed move can be undone; a dry run must not promise it.
         lines.push("undo reverses the move".to_string());
     } else {
         lines.push("mode: dry-run (nothing moved; pass --execute to move)".to_string());
     }
+
+    let json =
+        serde_json::json!({ "move": move_report_document(batch, outcome, executed) }).to_string();
     emit_report(format, "Move", &lines, &json);
+}
+
+/// The JSON document for one `move` run (additive; see [`print_move_report`]).
+fn move_report_document(
+    batch: &relocate::MoveBatch,
+    outcome: Option<&relocate::BatchOutcome>,
+    executed: bool,
+) -> serde_json::Value {
+    let paths = |paths: &[std::path::PathBuf]| {
+        paths
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+    };
+    let items: Vec<serde_json::Value> = batch
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let item_outcome = outcome.and_then(|outcome| outcome.items.get(index));
+            match &item.plan {
+                Ok(plan) => serde_json::json!({
+                    "source": plan.source.to_string_lossy(),
+                    "destination_path": plan.destination_path.to_string_lossy(),
+                    "kind": plan.kind.as_str(),
+                    "operation_id": item_outcome.and_then(|item| item.operation_id.clone()),
+                    "error": item_outcome.and_then(|item| item.error.as_ref().map(|error| error.to_string())),
+                }),
+                Err(error) => serde_json::json!({
+                    "source": item.source.to_string_lossy(),
+                    "destination_path": serde_json::Value::Null,
+                    "kind": serde_json::Value::Null,
+                    "operation_id": serde_json::Value::Null,
+                    "error": error.to_string(),
+                }),
+            }
+        })
+        .collect();
+
+    let mut document = serde_json::Map::new();
+    document.insert(
+        "destination_directory".to_string(),
+        serde_json::json!(batch.destination_directory.to_string_lossy()),
+    );
+    document.insert("executed".to_string(), serde_json::json!(executed));
+    document.insert(
+        "create_directories".to_string(),
+        serde_json::json!(paths(&batch.missing_directories)),
+    );
+    document.insert("items".to_string(), serde_json::json!(items));
+    if let Some(outcome) = outcome {
+        document.insert("batch_id".to_string(), serde_json::json!(outcome.batch_id));
+        document.insert(
+            "created_directories".to_string(),
+            serde_json::json!(paths(&outcome.created_directories)),
+        );
+    }
+    if let Some(item) = batch.items.first()
+        && batch.items.len() == 1
+    {
+        let item_outcome = outcome.and_then(|outcome| outcome.items.first());
+        match &item.plan {
+            Ok(plan) => {
+                document.insert(
+                    "source".to_string(),
+                    serde_json::json!(plan.source.to_string_lossy()),
+                );
+                document.insert(
+                    "destination_path".to_string(),
+                    serde_json::json!(plan.destination_path.to_string_lossy()),
+                );
+                document.insert("kind".to_string(), serde_json::json!(plan.kind.as_str()));
+            }
+            Err(_) => {
+                document.insert(
+                    "source".to_string(),
+                    serde_json::json!(item.source.to_string_lossy()),
+                );
+                document.insert("destination_path".to_string(), serde_json::Value::Null);
+                document.insert("kind".to_string(), serde_json::Value::Null);
+            }
+        }
+        document.insert(
+            "operation_id".to_string(),
+            serde_json::json!(item_outcome.and_then(|item| item.operation_id.clone())),
+        );
+    }
+    serde_json::Value::Object(document)
 }
 
 /// `watch`: validate roots, then run the debounced FSEvents loop.
@@ -1490,15 +1651,20 @@ fn emit_undo_steps(steps: &[UndoStep], pending_warning: bool, json: bool) {
                 to,
                 undone_move_id,
                 operation_id,
+                removed,
             } => {
                 if json {
                     restored.push(serde_json::json!({
                         "to": to,
                         "undone_move_id": undone_move_id,
                         "operation_id": operation_id,
+                        "removed_directories": removed,
                     }));
                 } else {
                     println!("restored: {to}\n  (undid {undone_move_id})");
+                    for directory in removed {
+                        println!("removed created directory: {directory}");
+                    }
                 }
             }
             UndoStep::NothingLeft => {
@@ -2443,6 +2609,8 @@ enum UndoStep {
         to: String,
         undone_move_id: String,
         operation_id: String,
+        /// Directories kaseifu created and this undo removed (issue #25).
+        removed: Vec<String>,
     },
     NothingLeft,
     Failed {
@@ -2470,6 +2638,11 @@ fn to_step(result: Result<undo::UndoOutcome, undo::UndoError>) -> UndoStep {
             to: outcome.restored_to.display().to_string(),
             undone_move_id: outcome.undone_move_id,
             operation_id: outcome.operation_id,
+            removed: outcome
+                .removed_directories
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
         },
         Err(undo::UndoError::NothingToUndo) => UndoStep::NothingLeft,
         Err(error) => UndoStep::Failed {
