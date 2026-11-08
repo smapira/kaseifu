@@ -5,7 +5,16 @@
 //! [`KeychainStore::with_service`] (a `.test` service id) or [`MemoryStore`]
 //! and never touch the production entry. Error messages never contain the key.
 
+use std::time::Duration;
 use thiserror::Error;
+
+/// How long a Keychain read may take before the answer is "unavailable".
+///
+/// Reading the login Keychain can block behind a GUI prompt that a
+/// non-interactive process (agent, CI, ssh) will never answer, and every
+/// command resolves a key at startup. The wait is therefore bounded: a
+/// command proceeds without a key instead of hanging forever.
+pub const KEYCHAIN_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Keychain service identifier for the Jev API key.
 pub const KEYCHAIN_SERVICE: &str = "com.routeflags.kaseifu.jev";
@@ -71,8 +80,13 @@ impl KeychainStore {
 
 impl SecretStore for KeychainStore {
     fn get(&self) -> Result<String, AuthError> {
-        let entry = self.entry()?;
-        entry.get_password().map_err(map_keyring_error)
+        let service = self.service.clone();
+        let account = self.account.clone();
+        bounded(KEYCHAIN_READ_TIMEOUT, move || {
+            let entry = keyring::Entry::new(&service, &account)
+                .map_err(|error| AuthError::Unavailable(error.to_string()))?;
+            entry.get_password().map_err(map_keyring_error)
+        })
     }
 
     fn set(&self, secret: &str) -> Result<(), AuthError> {
@@ -97,6 +111,29 @@ fn map_keyring_error(error: keyring::Error) -> AuthError {
         keyring::Error::PlatformFailure(_) => AuthError::AccessDenied,
         other => AuthError::Unavailable(other.to_string()),
     }
+}
+
+/// Run one blocking Keychain call, giving up after `timeout`.
+///
+/// The worker thread is detached on purpose: a call waiting on a GUI prompt
+/// cannot be cancelled, and leaking one thread is better than blocking every
+/// command on a machine where nobody can answer the prompt. The process exits
+/// with the leaked thread.
+fn bounded<T: Send + 'static>(
+    timeout: Duration,
+    work: impl FnOnce() -> Result<T, AuthError> + Send + 'static,
+) -> Result<T, AuthError> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(work());
+    });
+    receiver.recv_timeout(timeout).unwrap_or_else(|_| {
+        Err(AuthError::Unavailable(format!(
+            "the Keychain did not answer within {}s (locked, or a prompt is waiting); \
+             set KASEIFU_KEY_SOURCE=env to use JEV_API_KEY instead",
+            timeout.as_secs()
+        )))
+    })
 }
 
 /// In-memory secret store for tests (never touches the real Keychain).
@@ -155,4 +192,34 @@ fn write_secret(slot: &std::sync::Mutex<Option<String>>, secret: &str) -> Result
 
 fn take_secret(slot: &std::sync::Mutex<Option<String>>) -> Option<String> {
     slot.lock().ok()?.take()
+}
+
+#[cfg(test)]
+mod bounded_tests {
+    use super::{AuthError, bounded};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_slow_keychain_read_is_reported_instead_of_blocking() {
+        let started = Instant::now();
+        let error = bounded(Duration::from_millis(50), || {
+            std::thread::sleep(Duration::from_millis(500));
+            Ok("secret".to_string())
+        })
+        .expect_err("must not wait for the slow read");
+
+        assert!(matches!(error, AuthError::Unavailable(_)), "{error:?}");
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "the read was not bounded: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_fast_keychain_read_returns_the_secret() {
+        let secret = bounded(Duration::from_secs(2), || Ok("secret".to_string()))
+            .expect("a fast read succeeds");
+        assert_eq!(secret, "secret");
+    }
 }
