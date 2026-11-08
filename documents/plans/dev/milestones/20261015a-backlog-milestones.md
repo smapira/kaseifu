@@ -10,7 +10,7 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 |---|---:|---|
 | Open | 1 | `../issues/open/` |
 | Waiting for user/external resource | 7 | `../issues/waiting-user/` |
-| Done | 33 | `../issues/done/` |
+| Done | 34 | `../issues/done/` |
 
 ## M1 - Reliability and CLI clarity
 
@@ -59,6 +59,7 @@ Goal: complete workflow affordances and document the exact behavior of multi-ite
 | Done | [`directory-move-command`](../issues/done/20261108-done-directory-move-command.md) | `kaseifu move <path> --to <dir>` files a file or a folder with no decision, journals its `kind`, reverses with `undo`, and `organize` keeps refusing a folder. |
 | Done | [`move-create-dir`](../issues/done/20261108-done-move-create-dir.md) | `move --create-dir` creates the destination and missing parents first, `<PATH>...` moves several paths in one batch with a per-path result, and `undo` removes a created directory once it is empty. |
 | Done | [`cluster-command`](../issues/done/20261108-done-cluster-command.md) | `cluster <dir>` groups a flat folder by type and name tokens, lets the model choose each name among deterministic candidates (offline fallback), files the groups as one batch, and `undo --batch` restores the flat layout. |
+| Done | [`keychain-read-timeout`](../issues/done/20261108-done-keychain-read-timeout.md) | A Keychain read that does not answer within 2s is reported as an unavailable key source (with the next step) instead of hanging every command. |
 
 ## M4 - Measurement and release hygiene
 

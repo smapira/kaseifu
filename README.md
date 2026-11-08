@@ -277,9 +277,10 @@ subdirectories are listed as `directories left alone` and never touched
 place). The model, when a key resolves, only chooses a folder name among
 deterministic candidates; without a key, without a network, or on any
 unexpected answer the type-based name is used. `--execute` creates each folder
-(sanitized name, `name (2)` on a collision) and moves the files as one journal
-batch, so `undo --batch <id>` restores the flat layout and removes the folders
-it created.
+(sanitized name; when a fallback name is already taken, the group's own token
+disambiguates it as `images-screenshot` before a number) and moves the files as
+one journal batch, so `undo --batch <id>` restores the flat layout and removes
+the folders it created.
 
 The text report is line-oriented and stable:
 

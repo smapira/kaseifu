@@ -120,9 +120,10 @@ network (the type-based name is used). Existing subdirectories are listed under
 `directories left alone` and are never moved; `--include-folders` treats the
 direct child folders as members instead, `--recursive` collects files from below
 them while leaving the folders. Only regular files are members. `--execute`
-creates each folder (sanitized, `name (2)` on collision) and moves the files as
-one journal batch; `undo --batch <id>` restores the flat layout and removes the
-folders kaseifu created. The text report is one line per assignment:
+creates each folder (sanitized; a colliding fallback name takes its own token,
+`images-screenshot`, before `name (2)`) and moves the files as one journal
+batch; `undo --batch <id>` restores the flat layout and removes the folders
+kaseifu created. The text report is one line per assignment:
 `cluster: <name> (<count> files, <size>)`, `<n>. <source> -> <name>/<file>`,
 then `ungrouped:` / `directories left alone:` / `naming:` / `mode:` (or `batch:`
 followed by `undo reverses the moves`).

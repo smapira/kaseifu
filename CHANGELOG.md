@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cluster` groups the files directly under one directory by type and name
   tokens (no model in membership), lets the model choose each folder name among
   deterministic candidates, and files them through the #25 journal batch:
-  `--execute` creates the folders (sanitized names, `name (2)` on a collision)
-  and moves the files; `undo --batch` restores the flat layout and removes the
+  `--execute` creates the folders (sanitized names; a colliding fallback name
+  takes its own token, `images-screenshot`, before `name (2)`) and moves the
+  files; `undo --batch` restores the flat layout and removes the
   folders it made. Existing subdirectories are listed and never moved
   (`--include-folders` treats the direct child folders as members instead,
   `--recursive` collects files from below them). Without a key, without a
@@ -108,7 +109,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A held `kaseifu label` proposal names its real cause.** Issue #21: a PNG on
+- **A locked Keychain can no longer hang every command.** Reading the login
+  Keychain can block behind a GUI prompt that an agent, a CI job or an ssh
+  session will never answer, and every command that resolves a key waited
+  indefinitely (measured: `doctor` and `auth status` produced no output after
+  60s). The read now gives up after 2 seconds and reports the source as
+  unavailable with the next step (`KASEIFU_KEY_SOURCE=env`, or unlock the
+  Keychain), so `doctor` answers, `cluster` falls back to type-based names and
+  every other command proceeds. The wait is bounded in
+  `src/auth/keychain.rs` (`bounded`, with tests for the slow and fast paths).
+
+- **A held `label` proposal names its real cause.** Issue #21: a PNG on the
   the Desktop answered `"proposal": null` with `reason: name must not contain a
   path separator`, `perception: null` and `date_source: ""`, which reads as if
   the file's own name were bad and says nothing about what actually happened.

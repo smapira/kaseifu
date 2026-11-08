@@ -69,6 +69,7 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | [`20261108-done-directory-move-command.md`](done/20261108-done-directory-move-command.md) | M3 | `kaseifu move <path> --to <dir>` moves a file or a folder without a decision, journaled with its `kind` and reversible by `undo`; `organize` still refuses a folder. |
 | [`20261108-done-move-create-dir.md`](done/20261108-done-move-create-dir.md) | M3 | `move --create-dir` creates the destination (and missing parents) first and `<PATH>...` moves several paths as one batch; a failure is per path, and `undo` removes a directory kaseifu created once it is empty. |
 | [`20261108-done-cluster-command.md`](done/20261108-done-cluster-command.md) | M3 | `cluster <dir>` groups the flat files of one directory by type and name tokens, names each group from deterministic candidates (the model only chooses), and files them as one batch that `undo --batch` reverses; existing folders stay. |
+| [`20261108-done-keychain-read-timeout.md`](done/20261108-done-keychain-read-timeout.md) | M1 | The Keychain read is bounded (2s) and reported as an unavailable key source, so a locked Keychain cannot hang `doctor`, `auth status`, `cluster` or any command that resolves a key. |
 
 ## Maintenance rules
 

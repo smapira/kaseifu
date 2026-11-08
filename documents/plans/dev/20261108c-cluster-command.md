@@ -67,8 +67,10 @@ so the command always produces a plan; the report says which mode was used
   `naming:` / `mode:` (or `batch:` + `undo reverses the moves`).
 - **`--min` defaults to 2, `--max` to 20.** A single file is not a group; a type
   larger than 20 is split so no directory grows without bound.
-- **Existing folders are never candidates.** No group is named after an existing
-  directory and no existing directory is entered.
+- **A fallback name that collides takes its group's own token**
+  (`images-screenshot`) before a number; a model-chosen name is kept as-is and
+  takes `(2)` only when it is already used. Existing folders are never candidates
+  and no existing directory is entered.
 
 ## Verification (2026-11-08)
 
