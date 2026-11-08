@@ -196,7 +196,7 @@ fn v122_execute_files_only_the_files_and_undo_batch_restores_the_flat_layout() {
 }
 
 #[test]
-fn v122_a_pre_existing_directory_takes_a_sequence_suffix() {
+fn v122_a_pre_existing_directory_is_never_reused() {
     let root = sandbox("collision");
     let home = home_of(&root);
     let dir = fixture(&root);
@@ -215,7 +215,11 @@ fn v122_a_pre_existing_directory_takes_a_sequence_suffix() {
         .iter()
         .map(|group| group["name"].as_str().expect("name").to_string())
         .collect();
-    assert!(names.contains(&"images (2)".to_string()), "{names:?}");
+    assert!(!names.contains(&"images".to_string()), "{names:?}");
+    assert!(
+        names.iter().any(|name| name.starts_with("images-")),
+        "the group takes a distinguishing name instead of the taken one: {names:?}"
+    );
     let left: Vec<String> = json["cluster"]["directories_left_alone"]
         .as_array()
         .expect("left alone")
@@ -227,6 +231,40 @@ fn v122_a_pre_existing_directory_takes_a_sequence_suffix() {
         dir.join("images/own.png").is_file(),
         "the existing folder is untouched"
     );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn v122_two_groups_of_one_type_get_distinguishing_names() {
+    let root = sandbox("same-type");
+    let home = home_of(&root);
+    let dir = root.join("misc");
+    std::fs::create_dir_all(&dir).expect("dir");
+    // Two image groups with different name tokens: same type, different words.
+    std::fs::write(dir.join("12t18-aahub-a.png"), b"a").expect("a");
+    std::fs::write(dir.join("12t18-aahub-b.png"), b"b").expect("b");
+    std::fs::write(dir.join("screenshot-one.png"), b"c").expect("c");
+    std::fs::write(dir.join("screenshot-two.png"), b"d").expect("d");
+
+    let output = run(
+        &home,
+        &["cluster", &dir.to_string_lossy(), "--format", "json"],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("json");
+    let names: Vec<String> = json["cluster"]["groups"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .map(|group| group["name"].as_str().expect("name").to_string())
+        .collect();
+
+    assert!(names.contains(&"images".to_string()), "{names:?}");
+    assert!(
+        names.iter().any(|name| name.starts_with("images-")),
+        "the second group names its own token instead of images (2): {names:?}"
+    );
+    assert!(!names.contains(&"images (2)".to_string()), "{names:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
 

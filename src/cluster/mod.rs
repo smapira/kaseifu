@@ -254,7 +254,12 @@ pub async fn plan(
         } else {
             named.name
         };
-        let name = unique_name(root, &base, &mut taken);
+        let distinguishing = if named.source == NameSource::Fallback {
+            group.shared_tokens.first().map(String::as_str)
+        } else {
+            None
+        };
+        let name = unique_name(root, &base, distinguishing, &mut taken);
         let directory = root.join(&name);
         let sources: Vec<PathBuf> = group
             .members
@@ -310,21 +315,48 @@ fn fallback_names(groups: &[Group]) -> Vec<naming::NamedGroup> {
 }
 
 /// A directory name that does not collide with an existing entry or an earlier
-/// group of this run (`name`, then `name (2)`, ...).
-fn unique_name(root: &Path, base: &str, taken: &mut BTreeSet<String>) -> String {
+/// group of this run.
+///
+/// The plain name wins when it is free. A fallback name that collides first
+/// tries `name-<token>`, so two groups of the same type read as `images` and
+/// `images-screenshot` instead of `images` and `images (2)`; a number is the
+/// last resort (and the only one for a model-chosen name, which is kept as-is).
+fn unique_name(
+    root: &Path,
+    base: &str,
+    token: Option<&str>,
+    taken: &mut BTreeSet<String>,
+) -> String {
     let base = if base.is_empty() {
         "misc".to_string()
     } else {
         base.to_string()
     };
-    let mut candidate = base.clone();
+    if is_free(root, &base, taken) {
+        taken.insert(base.clone());
+        return base;
+    }
+    if let Some(token) = token {
+        let candidate = grouping::sanitize_name(&format!("{base}-{token}"));
+        if !candidate.is_empty() && is_free(root, &candidate, taken) {
+            taken.insert(candidate.clone());
+            return candidate;
+        }
+    }
     let mut suffix = 2;
-    while taken.contains(&candidate) || root.join(&candidate).exists() {
-        candidate = format!("{base} ({suffix})");
+    loop {
+        let candidate = format!("{base} ({suffix})");
+        if is_free(root, &candidate, taken) {
+            taken.insert(candidate.clone());
+            return candidate;
+        }
         suffix += 1;
     }
-    taken.insert(candidate.clone());
-    candidate
+}
+
+/// True when `name` is unused by this run and absent on disk.
+fn is_free(root: &Path, name: &str, taken: &BTreeSet<String>) -> bool {
+    !taken.contains(name) && !root.join(name).exists()
 }
 
 /// Execute a plan as one journal batch (issue #25 machinery).
