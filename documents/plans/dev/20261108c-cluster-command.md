@@ -107,6 +107,24 @@ so the command always produces a plan; the report says which mode was used
   `undo --batch` printed 37 restore/remove lines and returned the directory to
   37 flat files with `sub1` untouched.
 
+## Measured naming (2026-11-08, 37-file Desktop folder, `--by-type --min 1`)
+
+| group | type name | model name |
+|---|---|---|
+| 13 images (mockups, screenshots, photos) | `images` | `japanese` |
+| 13 documents (md / pdf / numbers) | `documents` | `agents` |
+| 4 archives | `archives` | `assets` |
+| 1 csv | `data` | `data` |
+| 5 html pages | `code` | `rakuichi-rakumon` |
+| 1 extensionless file | `misc` | `misc` |
+
+The type names describe the folder's role and stay stable; the model names
+follow the content and drift in abstraction level (a language for images, a
+project name for generic pages). The measured run is why `--name-source`
+exists, and why the default is a product decision: `auto` (the model when a key
+resolves) keeps the behavior issue #26 asked for, while `type` is the
+predictable choice and needs no key or network.
+
 ## Deliberately not in this issue
 
 - Better names: the candidate set is intentionally small and lexical; a richer
