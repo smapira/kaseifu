@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`kaseifu cluster <dir>` files a flat folder into named subfolders.** Issue
+  #26: `organize` answers "one file into one existing place" and `move` asks the
+  human for the destination, so 37 files lying flat on a Desktop had no tool.
+  `cluster` groups the files directly under one directory by type and name
+  tokens (no model in membership), lets the model choose each folder name among
+  deterministic candidates, and files them through the #25 journal batch:
+  `--execute` creates the folders (sanitized names, `name (2)` on a collision)
+  and moves the files; `undo --batch` restores the flat layout and removes the
+  folders it made. Existing subdirectories are listed and never moved
+  (`--include-folders` treats the direct child folders as members instead,
+  `--recursive` collects files from below them). Without a key, without a
+  network, or on an unexpected answer the type-based name is used, so the
+  command always runs. `--format json` prints one `cluster` object;
+  `tests/v122_cluster_test.rs`.
+
 - **`move --create-dir` and several paths in one run.** Issue #25: filing a
   desktop needed a `mkdir` per destination and one `move` per path (13 folders,
   15 paths). `kaseifu move <path>... --to <dir> --create-dir` creates the

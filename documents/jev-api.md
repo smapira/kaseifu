@@ -46,6 +46,28 @@ Configuration:
   5xx → `ServerError`, transport → `TransportError`, schema → `InvalidResponse`
   (with a bounded body snippet). `NONE` is a decision; errors never become it.
 
+## Cluster naming (issue #26)
+
+`kaseifu cluster` uses the same `POST /v1/systemone` envelope with a different
+question. The API's question types are `noul`, `choice`, `score` and `box`
+(OpenAPI 3.1, TypeSafe v0.2.0); **none of them returns free text**, so the
+command does not ask the model to invent a folder name. The names are generated
+deterministically in Rust and the model is asked one `choice` question per
+group:
+
+| kaseifu | TypeSafe `/v1/systemone` |
+|---|---|
+| group index, kind, file count, bytes | `state.groups[].{index, kind, file_count, bytes}` |
+| shared name tokens | `state.groups[].tokens` |
+| up to three member names (never paths) | `state.groups[].examples` |
+| candidate folder names | `questions.group_<n>.criteria` keys |
+| — | `answers.group_<n>.choice` (must be one of the offered names) |
+
+A missing or unexpected answer falls back for that group only; a transport or
+HTTP failure falls back for every group. The fallback is the first candidate,
+which is the type name (`images`, `documents`, ...). The model never supplies a
+path: the directory is `<root>/<name>` built by kaseifu from a name it offered.
+
 ## Verified live run (Phase 4E)
 
 Real file → production Observe/Normalize/Discover → 9 discovered candidates →

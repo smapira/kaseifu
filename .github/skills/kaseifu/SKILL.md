@@ -66,6 +66,8 @@ kaseifu organize <file> --keywords "2026 tax year"          # extra decision mat
 kaseifu move <path> --to <dir>                              # move a file or a folder, no decision
 kaseifu move <path> --to <dir> --execute                    # ... and perform it
 kaseifu move <path>... --to <dir> --create-dir --execute    # several paths, destination created first
+kaseifu cluster <dir>                                       # group a flat folder, no model in membership
+kaseifu cluster <dir> --execute                             # create the named folders and file the files
 kaseifu undo                                                # put the last move back
 kaseifu undo --last 3                                       # the last three moves
 kaseifu undo --batch <id>                                   # exactly one batch, by its printed id
@@ -109,6 +111,21 @@ is non-zero when any path failed. The journal records `kind` (`file` / `dir`) an
 `undo` reverses the moves; a directory kaseifu created is removed once the undo
 leaves it empty. A move across volumes copies, verifies (file count and bytes)
 and then removes the source, so a failure leaves the source whole.
+
+`kaseifu cluster <dir> [--execute]` files the files that sit directly in one
+directory into new subdirectories named after what they are. Membership is
+decided without a model (type and name tokens); the model only picks a folder
+name among deterministic candidates, and the command works with no key and no
+network (the type-based name is used). Existing subdirectories are listed under
+`directories left alone` and are never moved; `--include-folders` treats the
+direct child folders as members instead, `--recursive` collects files from below
+them while leaving the folders. Only regular files are members. `--execute`
+creates each folder (sanitized, `name (2)` on collision) and moves the files as
+one journal batch; `undo --batch <id>` restores the flat layout and removes the
+folders kaseifu created. The text report is one line per assignment:
+`cluster: <name> (<count> files, <size>)`, `<n>. <source> -> <name>/<file>`,
+then `ungrouped:` / `directories left alone:` / `naming:` / `mode:` (or `batch:`
+followed by `undo reverses the moves`).
 
 ## Repository policy (`.kaseifu.toml`)
 

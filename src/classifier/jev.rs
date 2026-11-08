@@ -236,15 +236,25 @@ impl RealJevIntegration {
     /// (`https://api.typesafe.ai/v1/systemone`); both are accepted without
     /// duplicating the path.
     fn request_url(&self) -> String {
-        let base = self.endpoint.trim_end_matches('/');
+        systemone_url(&self.endpoint)
+    }
+}
 
-        if base.ends_with("/systemone") {
-            base.to_string()
-        } else if base.ends_with("/v1") {
-            format!("{base}/systemone")
-        } else {
-            format!("{base}{SYSTEMONE_PATH}")
-        }
+/// The full `/v1/systemone` URL for one configured endpoint.
+///
+/// `JEV_API_URL` may be the API base URL (`https://api.typesafe.ai`) or the
+/// full endpoint (`https://api.typesafe.ai/v1/systemone`); both are accepted
+/// without duplicating the path. Shared with the cluster naming call, which
+/// speaks to the same endpoint.
+pub fn systemone_url(endpoint: &str) -> String {
+    let base = endpoint.trim_end_matches('/');
+
+    if base.ends_with("/systemone") {
+        base.to_string()
+    } else if base.ends_with("/v1") {
+        format!("{base}/systemone")
+    } else {
+        format!("{base}{SYSTEMONE_PATH}")
     }
 }
 

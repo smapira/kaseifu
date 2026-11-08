@@ -258,6 +258,48 @@ issue #22 introduced (`source`, `destination_directory`, `destination_path`,
 `create_directories`, and a run of several paths carries `batch_id` and
 `created_directories` instead of the single-path scalars.
 
+### Group a flat folder into named subfolders
+
+`cluster` takes the files sitting directly in one directory and files them into
+new subdirectories named after what they are:
+
+```bash
+kaseifu cluster ~/Desktop/misc                    # dry run
+kaseifu cluster ~/Desktop/misc --execute          # create the folders and file the files
+kaseifu cluster ~/Desktop/misc --min 3 --max 12   # groups of at least 3, split big types
+```
+
+Membership is decided without a model: a file's type and the tokens of its name.
+Only regular files directly under the directory are members; existing
+subdirectories are listed as `directories left alone` and never touched
+(`--include-folders` treats the direct child folders as members instead;
+`--recursive` collects files from below them while leaving the folders in
+place). The model, when a key resolves, only chooses a folder name among
+deterministic candidates; without a key, without a network, or on any
+unexpected answer the type-based name is used. `--execute` creates each folder
+(sanitized name, `name (2)` on a collision) and moves the files as one journal
+batch, so `undo --batch <id>` restores the flat layout and removes the folders
+it created.
+
+The text report is line-oriented and stable:
+
+```text
+cluster: images (11 files, 1.2 MB)
+  examples: cbd-chart-1.png, cbd-chart-2.png
+1. /Users/me/Desktop/misc/cbd-chart-1.png -> images/cbd-chart-1.png
+ungrouped: 2 files
+  - /Users/me/Desktop/misc/README (left in place)
+directories left alone: 1
+  /Users/me/Desktop/misc/sub1
+naming: fallback (type-based names: no Jev key)
+mode: dry-run (nothing moved; pass --execute to file these groups)
+```
+
+`--format json` prints one `cluster` object: `directory`, `executed`, `groups`
+(`name`, `directory`, `file_count`, `bytes`, `examples`, `candidates`,
+`name_source`, `assignments`), `ungrouped`, `directories_left_alone`, `skipped`,
+`naming` and, after `--execute`, `batch_id`.
+
 ### Choose the destination yourself
 
 Jev's choice is a suggestion; `--select` lets you pick from the candidate

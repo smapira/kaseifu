@@ -6,6 +6,10 @@ use kaseifu::auth::prompt;
 use kaseifu::classifier::jev::{JevError, JevIntegration, JevResponse, RealJevIntegration};
 use kaseifu::classifier::keywords::{KeywordDelivery, KeywordJevIntegration};
 use kaseifu::classifier::pipeline;
+use kaseifu::cluster::{
+    self, ClusterOptions,
+    naming::{GroupNamer, JevNamer, NameSource, TypeNamer},
+};
 use kaseifu::config::loader::validate_endpoint_value;
 use kaseifu::config::{
     ApiKeyOrigin, CliOverrides, KeySourceMode, ResolvedConfig, apply_setting, key_source_setting,
@@ -60,9 +64,9 @@ metadata is not sent to Jev.")]
 struct Cli {
     /// Output format for commands with structured output.
     ///
-    /// `json` applies to inspect, classify, organize, move, doctor, setup, auth,
-    /// config, completions --install, uninstall, undo, scan and skill. `watch`
-    /// emits one JSON object per line with --format json.
+    /// `json` applies to inspect, classify, organize, move, cluster, doctor,
+    /// setup, auth, config, completions --install, uninstall, undo, scan and
+    /// skill. `watch` emits one JSON object per line with --format json.
     #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Auto)]
     format: OutputFormat,
     /// Override the Jev endpoint URL (highest priority).
@@ -162,6 +166,45 @@ enum Commands {
         #[arg(long = "create-dir")]
         create_dir: bool,
         /// Perform the move (default is a dry run; cannot be combined with --dry-run).
+        #[arg(long, conflicts_with = "dry_run")]
+        execute: bool,
+        /// Request a dry run explicitly (the default).
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Group the flat files of a directory into named subdirectories.
+    ///
+    /// Membership is decided without a model (type and file-name tokens); the
+    /// model only chooses a folder name among deterministic candidates, so the
+    /// command also works with no key and no network. Only regular files
+    /// directly under <dir> are members: existing directories are reported and
+    /// left alone (`--include-folders` opts in, `--recursive` walks into them
+    /// instead). Dry run by default; `--execute` creates the directories and
+    /// moves the files as one journal batch, which `undo --batch` reverses.
+    ///
+    /// Text output, one block per group:
+    ///   cluster: <name> (<count> files, <size>)
+    ///     examples: <file>, <file>, <file>
+    ///   <n>. <source> -> <name>/<file name>
+    ///   ungrouped: <count> files
+    ///   directories left alone: <count>
+    Cluster {
+        /// Directory whose files are grouped (it is not moved).
+        dir: PathBuf,
+        /// Smallest group kept (default 2); smaller groups are left in place.
+        #[arg(long, value_name = "N")]
+        min: Option<usize>,
+        /// Largest group (default 20); a bigger type is split into several groups.
+        #[arg(long, value_name = "N")]
+        max: Option<usize>,
+        /// Treat the directory's direct child folders as members too.
+        #[arg(long = "include-folders")]
+        include_folders: bool,
+        /// Collect files from subdirectories as well (the directories stay).
+        #[arg(long)]
+        recursive: bool,
+        /// Create the directories and move the files (default is a dry run).
         #[arg(long, conflicts_with = "dry_run")]
         execute: bool,
         /// Request a dry run explicitly (the default).
@@ -506,6 +549,28 @@ async fn dispatch(
             execute,
             dry_run,
         } => handle_move(&paths, &to, create_dir, execute, dry_run, format),
+        Commands::Cluster {
+            dir,
+            min,
+            max,
+            include_folders,
+            recursive,
+            execute,
+            dry_run,
+        } => {
+            handle_cluster(
+                &dir,
+                min,
+                max,
+                include_folders,
+                recursive,
+                execute,
+                dry_run,
+                format,
+                overrides,
+            )
+            .await
+        }
         Commands::Discover {
             file,
             all,
@@ -1503,6 +1568,329 @@ fn move_report_document(
         );
     }
     serde_json::Value::Object(document)
+}
+
+/// `cluster`: group a directory's flat files into named subdirectories
+/// (issue #26).
+///
+/// The plan is always computed first; `--execute` is the only mutation path.
+/// Naming uses the model when a key resolves, and the deterministic type-based
+/// name otherwise, so the command works offline.
+#[allow(clippy::too_many_arguments)]
+async fn handle_cluster(
+    dir: &Path,
+    min: Option<usize>,
+    max: Option<usize>,
+    include_folders: bool,
+    recursive: bool,
+    execute: bool,
+    dry_run: bool,
+    format: OutputFormat,
+    overrides: &CliOverrides,
+) -> Result<()> {
+    let options = cluster_options(min, max, include_folders, recursive)?;
+    let actually_move = execute && !dry_run;
+    // Resolving is local and never prompts: without a key the deterministic
+    // namer runs, which is the documented offline behavior.
+    let (namer, mut note) = cluster_namer(resolve_for(overrides).ok().as_ref());
+    let plan = cluster::plan(dir, &options, namer.as_ref()).await?;
+    if let Some(reason) = &plan.naming_failure {
+        note = Some(reason.clone());
+    }
+    for group in &plan.groups {
+        relocate::dry_run_batch(&group.batch)
+            .map_err(|error| anyhow::anyhow!("cannot file '{}': {error}", group.name))?;
+    }
+
+    if !actually_move {
+        print_cluster_report(&plan, Option::None, note.as_deref(), false, format);
+        return Ok(());
+    }
+    if plan.groups.is_empty() {
+        anyhow::bail!(
+            "no group reached --min; nothing to file ({} file(s) left in place)",
+            plan.ungrouped.len()
+        );
+    }
+
+    let history = OperationHistory::open(journal_path())?;
+    let outcome = cluster::execute(&plan, &history)?;
+    print_cluster_report(&plan, Some(&outcome), note.as_deref(), true, format);
+    match cluster_failure(&outcome) {
+        Some(message) => anyhow::bail!(message),
+        None => Ok(()),
+    }
+}
+
+/// The validated run options (`--min`/`--max` bounds).
+fn cluster_options(
+    min: Option<usize>,
+    max: Option<usize>,
+    include_folders: bool,
+    recursive: bool,
+) -> Result<ClusterOptions> {
+    let options = ClusterOptions {
+        min: min.unwrap_or(2),
+        max: max.unwrap_or(20),
+        include_folders,
+        recursive,
+    };
+    if options.min == 0 {
+        anyhow::bail!("--min must be at least 1");
+    }
+    if options.max < options.min {
+        anyhow::bail!("--max must not be smaller than --min");
+    }
+    Ok(options)
+}
+
+/// The namer for this run and the reason it is deterministic, when it is.
+fn cluster_namer(resolved: Option<&ResolvedConfig>) -> (Box<dyn GroupNamer>, Option<String>) {
+    match resolved.and_then(JevNamer::from_resolved) {
+        Some(namer) => (Box::new(namer), None),
+        None => (Box::new(TypeNamer), Some("no Jev key".to_string())),
+    }
+}
+
+/// A summary of what an executed run failed to do, if anything.
+fn cluster_failure(outcome: &cluster::ClusterOutcome) -> Option<String> {
+    let groups = outcome
+        .groups
+        .iter()
+        .filter(|group| group.error.is_some())
+        .count();
+    let items: usize = outcome
+        .groups
+        .iter()
+        .map(|group| group.items.iter().filter(|item| !item.moved()).count())
+        .sum();
+    (groups > 0 || items > 0)
+        .then(|| format!("{groups} group(s) and {items} file(s) could not be filed"))
+}
+
+/// The one-line naming summary of a run.
+fn cluster_naming_line(plan: &cluster::ClusterPlan, note: Option<&str>) -> String {
+    let jev = plan
+        .groups
+        .iter()
+        .filter(|group| group.source == NameSource::Jev)
+        .count();
+    let fallback = plan.groups.len() - jev;
+    match (jev, fallback) {
+        (_, 0) => "naming: jev".to_string(),
+        (0, _) => format!(
+            "naming: fallback (type-based names{})",
+            note.map(|note| format!(": {note}")).unwrap_or_default()
+        ),
+        _ => format!("naming: jev {jev} group(s), fallback {fallback} group(s)"),
+    }
+}
+
+/// The `cluster` report: text blocks or one `cluster` JSON document.
+fn print_cluster_report(
+    plan: &cluster::ClusterPlan,
+    outcome: Option<&cluster::ClusterOutcome>,
+    note: Option<&str>,
+    executed: bool,
+    format: OutputFormat,
+) {
+    let mut lines = Vec::new();
+    let mut number = 0;
+    lines.extend(cluster_group_lines(plan, outcome, &mut number));
+    lines.extend(cluster_note_lines(plan));
+    lines.push(cluster_naming_line(plan, note));
+    lines.extend(cluster_tail_lines(outcome, executed));
+
+    let json = serde_json::json!({
+        "cluster": cluster_report_document(plan, outcome, note, executed)
+    })
+    .to_string();
+    // Plain lines, no panel: this report is a list meant to be read in a pipe
+    // and parsed by a script, and a panel wraps long paths mid-word.
+    if format == OutputFormat::Json {
+        println!("{json}");
+    } else {
+        for line in &lines {
+            println!("{line}");
+        }
+    }
+}
+
+/// One block per group: header, examples, numbered assignments, failures.
+fn cluster_group_lines(
+    plan: &cluster::ClusterPlan,
+    outcome: Option<&cluster::ClusterOutcome>,
+    number: &mut usize,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (index, group) in plan.groups.iter().enumerate() {
+        lines.push(format!(
+            "cluster: {} ({} files, {})",
+            group.name,
+            group.members.len(),
+            human_bytes(group.bytes())
+        ));
+        let examples = group.examples();
+        if !examples.is_empty() {
+            lines.push(format!("  examples: {}", examples.join(", ")));
+        }
+        for member in &group.members {
+            *number += 1;
+            lines.push(format!(
+                "{number}. {} -> {}/{}",
+                member.source.display(),
+                group.name,
+                member.name
+            ));
+        }
+        lines.extend(cluster_item_error_lines(outcome, index));
+        if let Some(error) = outcome
+            .and_then(|outcome| outcome.groups.get(index))
+            .and_then(|group| group.error.as_ref())
+        {
+            lines.push(format!("  ! group failed: {error}"));
+        }
+    }
+    lines
+}
+
+/// The `!` lines for a group's failed items.
+fn cluster_item_error_lines(
+    outcome: Option<&cluster::ClusterOutcome>,
+    index: usize,
+) -> Vec<String> {
+    let Some(group) = outcome.and_then(|outcome| outcome.groups.get(index)) else {
+        return Vec::new();
+    };
+    group
+        .items
+        .iter()
+        .filter_map(|item| item.error.as_ref())
+        .map(|error| format!("  ! {error}"))
+        .collect()
+}
+
+/// The ungrouped, left-alone and skipped sections.
+fn cluster_note_lines(plan: &cluster::ClusterPlan) -> Vec<String> {
+    let mut lines = Vec::new();
+    if !plan.ungrouped.is_empty() {
+        lines.push(format!("ungrouped: {} files", plan.ungrouped.len()));
+        for member in &plan.ungrouped {
+            lines.push(format!("  - {} (left in place)", member.source.display()));
+        }
+    }
+    if !plan.directories.is_empty() {
+        lines.push(format!(
+            "directories left alone: {}",
+            plan.directories.len()
+        ));
+        for directory in &plan.directories {
+            lines.push(format!("  {}", directory.display()));
+        }
+    }
+    if !plan.skipped.is_empty() {
+        lines.push(format!("skipped: {}", plan.skipped.len()));
+        for path in &plan.skipped {
+            lines.push(format!("  {}", path.display()));
+        }
+    }
+    lines
+}
+
+/// The closing rows: the batch id and next step, or the dry-run note.
+fn cluster_tail_lines(outcome: Option<&cluster::ClusterOutcome>, executed: bool) -> Vec<String> {
+    if !executed {
+        return vec![
+            "mode: dry-run (nothing moved; pass --execute to file these groups)".to_string(),
+        ];
+    }
+    let mut lines = Vec::new();
+    if let Some(outcome) = outcome {
+        lines.push(format!("batch: {}", outcome.batch_id));
+    }
+    lines.push("undo reverses the moves".to_string());
+    lines
+}
+
+/// The JSON document for one `cluster` run.
+fn cluster_report_document(
+    plan: &cluster::ClusterPlan,
+    outcome: Option<&cluster::ClusterOutcome>,
+    note: Option<&str>,
+    executed: bool,
+) -> serde_json::Value {
+    let paths = |paths: &[PathBuf]| {
+        paths
+            .iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+    };
+    let groups: Vec<serde_json::Value> = plan
+        .groups
+        .iter()
+        .enumerate()
+        .map(|(index, group)| {
+            let group_outcome = outcome.and_then(|outcome| outcome.groups.get(index));
+            let destination_directory = plan.root.join(&group.name);
+            let assignments: Vec<serde_json::Value> = group
+                .members
+                .iter()
+                .enumerate()
+                .map(|(item_index, member)| {
+                    let item = group_outcome.and_then(|group| group.items.get(item_index));
+                    serde_json::json!({
+                        "source": member.source.to_string_lossy(),
+                        "destination": destination_directory.join(&member.name).to_string_lossy(),
+                        "operation_id": item.and_then(|item| item.operation_id.clone()),
+                        "error": item.and_then(|item| item.error.as_ref().map(|error| error.to_string())),
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "name": group.name,
+                "directory": destination_directory.to_string_lossy(),
+                "file_count": group.members.len(),
+                "bytes": group.bytes(),
+                "examples": group.examples(),
+                "candidates": group.candidates,
+                "name_source": group.source.as_str(),
+                "assignments": assignments,
+                "error": group_outcome.and_then(|group| group.error.clone()),
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "directory": plan.root.to_string_lossy(),
+        "executed": executed,
+        "groups": groups,
+        "ungrouped": plan.ungrouped.iter().map(|member| member.source.to_string_lossy().to_string()).collect::<Vec<_>>(),
+        "directories_left_alone": paths(&plan.directories),
+        "skipped": paths(&plan.skipped),
+        "naming": {
+            "note": note,
+            "jev_groups": plan.groups.iter().filter(|group| group.source == NameSource::Jev).count(),
+            "fallback_groups": plan.groups.iter().filter(|group| group.source == NameSource::Fallback).count(),
+        },
+        "batch_id": outcome.map(|outcome| outcome.batch_id.clone()),
+    })
+}
+
+/// Bytes as a short human-readable string (decimal units; the report is text).
+fn human_bytes(bytes: u64) -> String {
+    const KB: f64 = 1_000.0;
+    const MB: f64 = 1_000_000.0;
+    const GB: f64 = 1_000_000_000.0;
+    let value = bytes as f64;
+    if bytes < 1_000 {
+        format!("{bytes} B")
+    } else if value < MB {
+        format!("{:.1} KB", value / KB)
+    } else if value < GB {
+        format!("{:.1} MB", value / MB)
+    } else {
+        format!("{:.1} GB", value / GB)
+    }
 }
 
 /// `watch`: validate roots, then run the debounced FSEvents loop.

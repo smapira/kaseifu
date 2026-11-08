@@ -402,7 +402,19 @@ pub fn execute_batch(
     history: &OperationHistory,
 ) -> Result<BatchOutcome, RelocateError> {
     let batch_id = crate::storage::history::new_batch_id();
-    let creations = create_missing_directories(batch, history, &batch_id)?;
+    execute_batch_in(batch, history, &batch_id)
+}
+
+/// [`execute_batch`] under a caller-chosen batch id.
+///
+/// A run that files several destinations (a cluster run) shares one id so
+/// `undo --batch` reverses the whole run, including the directories it made.
+pub fn execute_batch_in(
+    batch: &MoveBatch,
+    history: &OperationHistory,
+    batch_id: &str,
+) -> Result<BatchOutcome, RelocateError> {
+    let creations = create_missing_directories(batch, history, batch_id)?;
 
     let mut items = Vec::with_capacity(batch.items.len());
     for item in &batch.items {
@@ -411,7 +423,7 @@ pub fn execute_batch(
                 operation_id: None,
                 error: Some(error.clone()),
             },
-            Ok(plan) => match execute_one(plan, history, Some(&batch_id)) {
+            Ok(plan) => match execute_one(plan, history, Some(batch_id)) {
                 Ok(operation_id) => ItemOutcome {
                     operation_id: Some(operation_id),
                     error: None,
@@ -438,7 +450,7 @@ pub fn execute_batch(
         .cloned()
         .collect();
     Ok(BatchOutcome {
-        batch_id,
+        batch_id: batch_id.to_string(),
         items,
         created_directories,
     })

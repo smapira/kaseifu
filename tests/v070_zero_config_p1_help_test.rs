@@ -238,7 +238,9 @@ fn format_help_states_which_commands_support_json() {
 
     let text = help_output(&dir, &home, &["--help"]);
     assert!(
-        text.contains("`json` applies to inspect, classify, organize, move, doctor, setup, auth"),
+        text.contains(
+            "`json` applies to inspect, classify, organize, move, cluster, doctor, setup, auth"
+        ),
         "got:\n{text}"
     );
     assert!(

@@ -22,6 +22,7 @@ macro_rules! debug {
 pub mod auth;
 pub mod benchmark;
 pub mod classifier;
+pub mod cluster;
 pub mod completion;
 pub mod config;
 pub mod context;
