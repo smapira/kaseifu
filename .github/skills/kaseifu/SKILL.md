@@ -66,9 +66,11 @@ kaseifu organize <file> --keywords "2026 tax year"          # extra decision mat
 kaseifu move <path> --to <dir>                              # move a file or a folder, no decision
 kaseifu move <path> --to <dir> --execute                    # ... and perform it
 kaseifu move <path>... --to <dir> --create-dir --execute    # several paths, destination created first
-kaseifu cluster <dir>                                       # group a flat folder, no model in membership
+kaseifu cluster <dir>                                       # file each kind into its OS folder
 kaseifu cluster <dir> --execute                             # create the named folders and file the files
 kaseifu cluster <dir> --by-type                             # one folder per kind, ignore name tokens
+kaseifu cluster <dir> --to ~/Archive --execute              # every group under one directory
+kaseifu cluster <dir> --in-place --execute                  # folders inside <dir> instead
 kaseifu cluster <dir> --name-source auto                     # let the model pick the names (needs a key)
 kaseifu undo                                                # put the last move back
 kaseifu undo --last 3                                       # the last three moves
@@ -115,10 +117,18 @@ leaves it empty. A move across volumes copies, verifies (file count and bytes)
 and then removes the source, so a failure leaves the source whole.
 
 `kaseifu cluster <dir> [--execute]` files the files that sit directly in one
-directory into new subdirectories named after what they are. Membership is
-decided without a model (type and name tokens); the model only picks a folder
-name among deterministic candidates, and the command works with no key and no
-network (the type-based name is used). Existing subdirectories are listed under
+directory into new subdirectories named after what they are, in the OS folder
+for that kind: `~/Pictures` (images), `~/Documents` (documents), `~/Downloads`
+(archives), `~/Movies` (video), `~/Music` (audio), and `~/Documents` for a kind
+the table does not name. The scanned directory is not a destination: a Desktop
+folder does not become a tree of folders on the Desktop. `--to <base>` files
+every group under one directory instead, `--in-place` creates the folders inside
+<dir> (for a folder being reorganised in place), and the two are exclusive. A
+file already under the destination is left alone and listed as
+`already in the destination`. Membership is decided without a model (type and
+name tokens); the model only picks a folder name among deterministic candidates,
+and the command works with no key and no network (the type-based name is used).
+Existing subdirectories are listed under
 `directories left alone` and are never moved; `--include-folders` treats the
 direct child folders as members instead, `--recursive` collects files from below
 them while leaving the folders. Only regular files are members. `--by-type`
@@ -129,11 +139,13 @@ kind name, no model call, no key) or `auto` / `model` (the model when a key
 resolves, falling back to the type name with the reason). `--execute`
 creates each folder (sanitized; a colliding fallback name takes its own token,
 `images-screenshot`, before `name (2)`) and moves the files as one journal
-batch; `undo --batch <id>` restores the flat layout and removes the folders
-kaseifu created. The text report is one line per assignment:
-`cluster: <name> (<count> files, <size>)`, `<n>. <source> -> <name>/<file>`,
-then `ungrouped:` / `directories left alone:` / `naming:` / `mode:` (or `batch:`
-followed by `undo reverses the moves`).
+batch; `undo --batch <id>` moves the files back and removes the folders and the
+parent levels kaseifu created. The text report is one line per assignment:
+`cluster: <name> (<count> files, <size>)`, then `create directory: <path>` (not
+with `--in-place`), then `<n>. <source> -> <absolute destination>` (relative to
+<dir> with `--in-place`), then `ungrouped:` / `already in the destination:` /
+`directories left alone:` / `naming:` / `mode:` (or `batch:` followed by
+`undo reverses the moves`).
 
 ## Repository policy (`.kaseifu.toml`)
 

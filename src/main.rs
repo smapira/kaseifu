@@ -7,7 +7,7 @@ use kaseifu::classifier::jev::{JevError, JevIntegration, JevResponse, RealJevInt
 use kaseifu::classifier::keywords::{KeywordDelivery, KeywordJevIntegration};
 use kaseifu::classifier::pipeline;
 use kaseifu::cluster::{
-    self, ClusterOptions,
+    self, ClusterOptions, DestinationBase,
     naming::{GroupNamer, JevNamer, NameSource, TypeNamer},
 };
 use kaseifu::config::loader::validate_endpoint_value;
@@ -206,12 +206,24 @@ enum Commands {
     /// Dry run by default; `--execute` creates the directories and moves the
     /// files as one journal batch, which `undo --batch` reverses.
     ///
+    /// Each folder is created in the OS standard directory for its kind
+    /// (~/Pictures for images, ~/Documents for documents, ~/Downloads for
+    /// archives, ~/Movies for video, ~/Music for audio, ~/Documents for
+    /// anything else), so <dir> itself is never turned into a tree. `--to`
+    /// files everything under one directory instead, and `--in-place` creates
+    /// the folders inside <dir>.
+    ///
     /// Text output, one block per group:
     ///   cluster: <name> (<count> files, <size>)
     ///     examples: <file>, <file>, <file>
-    ///   <n>. <source> -> <name>/<file name>
+    ///     create directory: <absolute path>
+    ///   <n>. <source> -> <absolute destination>
     ///   ungrouped: <count> files
+    ///   already in the destination: <count> files
     ///   directories left alone: <count>
+    ///
+    /// With `--in-place` the `create directory:` row is left out and the
+    /// destination is written relative to <dir> (<name>/<file name>).
     Cluster {
         /// Directory whose files are grouped (it is not moved).
         dir: PathBuf,
@@ -234,6 +246,14 @@ enum Commands {
         /// model), auto (model when a key resolves, else the type) or model.
         #[arg(long = "name-source", value_enum, default_value = "type")]
         name_source: ClusterNameSource,
+        /// Create the group folders under this directory instead of the OS
+        /// standard folder for each kind (the parent is created when missing).
+        #[arg(long = "to", value_name = "BASE")]
+        to: Option<PathBuf>,
+        /// Create the group folders inside <dir> instead of in the OS standard
+        /// folders; the folders stay where the files were.
+        #[arg(long = "in-place", conflicts_with = "to")]
+        in_place: bool,
         /// Create the directories and move the files (default is a dry run).
         #[arg(long, conflicts_with = "dry_run")]
         execute: bool,
@@ -587,6 +607,8 @@ async fn dispatch(
             recursive,
             by_type,
             name_source,
+            to,
+            in_place,
             execute,
             dry_run,
         } => {
@@ -598,6 +620,7 @@ async fn dispatch(
                 recursive,
                 by_type,
                 name_source,
+                cluster_destination(to, in_place),
                 execute,
                 dry_run,
                 format,
@@ -1426,6 +1449,26 @@ fn handle_move(
     Ok(())
 }
 
+/// The `create directory:` row for a batch (issue #25): the leaf that will be
+/// made, and how many parent folders come with it.
+///
+/// One row per destination directory, shared by `move` and `cluster` so both
+/// say the same thing about the same creation.
+fn create_directory_line(missing: &[PathBuf]) -> Option<String> {
+    let leaf = missing.last()?;
+    Some(match missing.len() - 1 {
+        0 => format!("create directory: {}", leaf.display()),
+        1 => format!(
+            "create directory: {} (with 1 parent folder)",
+            leaf.display()
+        ),
+        count => format!(
+            "create directory: {} (with {count} parent folders)",
+            leaf.display()
+        ),
+    })
+}
+
 /// The `move` report: text rows or one `move` JSON document.
 ///
 /// One path keeps the shape it had in issue #22 (`source` / `destination` /
@@ -1440,20 +1483,7 @@ fn print_move_report(
 ) {
     let single = batch.items.len() == 1;
     let mut lines = Vec::new();
-    if let Some(leaf) = batch.missing_directories.last() {
-        let parents = batch.missing_directories.len() - 1;
-        match parents {
-            0 => lines.push(format!("create directory: {}", leaf.display())),
-            1 => lines.push(format!(
-                "create directory: {} (with 1 parent folder)",
-                leaf.display()
-            )),
-            count => lines.push(format!(
-                "create directory: {} (with {count} parent folders)",
-                leaf.display()
-            )),
-        }
-    }
+    lines.extend(create_directory_line(&batch.missing_directories));
 
     if single {
         let item = &batch.items[0];
@@ -1619,12 +1649,13 @@ async fn handle_cluster(
     recursive: bool,
     by_type: bool,
     name_source: ClusterNameSource,
+    destination: DestinationBase,
     execute: bool,
     dry_run: bool,
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
-    let options = cluster_options(min, max, include_folders, recursive, by_type)?;
+    let options = cluster_options(min, max, include_folders, recursive, by_type, destination)?;
     let actually_move = execute && !dry_run;
     // Resolving is local and never prompts: without a key the deterministic
     // namer runs, which is the documented offline behavior.
@@ -1650,10 +1681,7 @@ async fn handle_cluster(
         return Ok(());
     }
     if plan.groups.is_empty() {
-        anyhow::bail!(
-            "no group reached --min; nothing to file ({} file(s) left in place)",
-            plan.ungrouped.len()
-        );
+        anyhow::bail!(nothing_to_file(&plan));
     }
 
     let history = OperationHistory::open(journal_path())?;
@@ -1672,6 +1700,32 @@ async fn handle_cluster(
     }
 }
 
+/// Why an executed run has nothing to file.
+///
+/// The reason is named, not summarised: a run that stopped at `--min` and one
+/// whose files are already filed need different next steps.
+fn nothing_to_file(plan: &cluster::ClusterPlan) -> String {
+    match (plan.already_placed.len(), plan.ungrouped.len()) {
+        (0, left) => {
+            format!("no group reached --min; nothing to file ({left} file(s) left in place)")
+        }
+        (placed, 0) => format!("nothing to file: {placed} file(s) are already in the destination"),
+        (placed, left) => format!(
+            "nothing to file: {placed} file(s) are already in the destination, {left} left in place"
+        ),
+    }
+}
+
+/// Where a run creates its folders (issue #27): the OS standard folder for
+/// each kind unless `--to` or `--in-place` says otherwise.
+fn cluster_destination(to: Option<PathBuf>, in_place: bool) -> DestinationBase {
+    match (to, in_place) {
+        (Some(base), _) => DestinationBase::Directory(base),
+        (None, true) => DestinationBase::InPlace,
+        (None, false) => DestinationBase::DefaultDirs,
+    }
+}
+
 /// The validated run options (`--min`/`--max` bounds).
 fn cluster_options(
     min: Option<usize>,
@@ -1679,6 +1733,7 @@ fn cluster_options(
     include_folders: bool,
     recursive: bool,
     by_type: bool,
+    destination: DestinationBase,
 ) -> Result<ClusterOptions> {
     let options = ClusterOptions {
         min: min.unwrap_or(2),
@@ -1686,6 +1741,7 @@ fn cluster_options(
         include_folders,
         recursive,
         by_type,
+        destination,
     };
     if options.min == 0 {
         anyhow::bail!("--min must be at least 1");
@@ -1731,6 +1787,9 @@ fn cluster_failure(outcome: &cluster::ClusterOutcome) -> Option<String> {
 
 /// The one-line naming summary of a run.
 fn cluster_naming_line(plan: &cluster::ClusterPlan, note: Option<&str>) -> String {
+    if plan.groups.is_empty() {
+        return "naming: none (no group to name)".to_string();
+    }
     let jev = plan
         .groups
         .iter()
@@ -1779,6 +1838,12 @@ fn print_cluster_report(
 }
 
 /// One block per group: header, examples, numbered assignments, failures.
+///
+/// In the default layout the destination is the group name, because the folder
+/// is inside the scanned directory (`images/a.png`). A group filed into a base
+/// names its destination in full, since the folder is no longer there to
+/// explain the short form - `--to` is why the block also carries the
+/// `create directory:` row that `move` prints (issue #27).
 fn cluster_group_lines(
     plan: &cluster::ClusterPlan,
     outcome: Option<&cluster::ClusterOutcome>,
@@ -1796,13 +1861,20 @@ fn cluster_group_lines(
         if !examples.is_empty() {
             lines.push(format!("  examples: {}", examples.join(", ")));
         }
+        let in_place = group.base == plan.root;
+        if !in_place && let Some(line) = create_directory_line(&group.batch.missing_directories) {
+            lines.push(format!("  {line}"));
+        }
         for member in &group.members {
             *number += 1;
+            let destination = if in_place {
+                format!("{}/{}", group.name, member.name)
+            } else {
+                group.directory().join(&member.name).display().to_string()
+            };
             lines.push(format!(
-                "{number}. {} -> {}/{}",
-                member.source.display(),
-                group.name,
-                member.name
+                "{number}. {} -> {destination}",
+                member.source.display()
             ));
         }
         lines.extend(cluster_item_error_lines(outcome, index));
@@ -1832,12 +1904,21 @@ fn cluster_item_error_lines(
         .collect()
 }
 
-/// The ungrouped, left-alone and skipped sections.
+/// The ungrouped, already-placed, left-alone and skipped sections.
 fn cluster_note_lines(plan: &cluster::ClusterPlan) -> Vec<String> {
     let mut lines = Vec::new();
     if !plan.ungrouped.is_empty() {
         lines.push(format!("ungrouped: {} files", plan.ungrouped.len()));
         for member in &plan.ungrouped {
+            lines.push(format!("  - {} (left in place)", member.source.display()));
+        }
+    }
+    if !plan.already_placed.is_empty() {
+        lines.push(format!(
+            "already in the destination: {} files",
+            plan.already_placed.len()
+        ));
+        for member in &plan.already_placed {
             lines.push(format!("  - {} (left in place)", member.source.display()));
         }
     }
@@ -1894,7 +1975,7 @@ fn cluster_report_document(
         .enumerate()
         .map(|(index, group)| {
             let group_outcome = outcome.and_then(|outcome| outcome.groups.get(index));
-            let destination_directory = plan.root.join(&group.name);
+            let destination_directory = group.directory();
             let assignments: Vec<serde_json::Value> = group
                 .members
                 .iter()
@@ -1912,6 +1993,8 @@ fn cluster_report_document(
             serde_json::json!({
                 "name": group.name,
                 "directory": destination_directory.to_string_lossy(),
+                "destination_base": group.base.to_string_lossy(),
+                "create_directories": paths(&group.batch.missing_directories),
                 "file_count": group.members.len(),
                 "bytes": group.bytes(),
                 "examples": group.examples(),
@@ -1925,9 +2008,15 @@ fn cluster_report_document(
 
     serde_json::json!({
         "directory": plan.root.to_string_lossy(),
+        "destination_mode": plan.destination.as_str(),
+        "destination_base": match &plan.destination {
+            DestinationBase::Directory(base) => serde_json::json!(base.to_string_lossy()),
+            DestinationBase::DefaultDirs | DestinationBase::InPlace => serde_json::Value::Null,
+        },
         "executed": executed,
         "groups": groups,
         "ungrouped": plan.ungrouped.iter().map(|member| member.source.to_string_lossy().to_string()).collect::<Vec<_>>(),
+        "already_in_destination": plan.already_placed.iter().map(|member| member.source.to_string_lossy().to_string()).collect::<Vec<_>>(),
         "directories_left_alone": paths(&plan.directories),
         "skipped": paths(&plan.skipped),
         "naming": {

@@ -261,14 +261,29 @@ issue #22 introduced (`source`, `destination_directory`, `destination_path`,
 ### Group a flat folder into named subfolders
 
 `cluster` takes the files sitting directly in one directory and files them into
-new subdirectories named after what they are:
+new subdirectories named after what they are, **in the OS folder for that kind**:
 
 ```bash
 kaseifu cluster ~/Desktop/misc                    # dry run
 kaseifu cluster ~/Desktop/misc --execute          # create the folders and file the files
 kaseifu cluster ~/Desktop/misc --min 3 --max 12   # groups of at least 3, split big types
 kaseifu cluster ~/Desktop/misc --by-type           # one folder per kind (images, documents, ...)
+kaseifu cluster ~/Desktop/misc --to ~/Archive      # every group under one directory
+kaseifu cluster ~/Desktop/misc --in-place          # folders inside misc instead
 ```
+
+By default each group folder is created in the standard directory for its kind:
+`~/Pictures` for images, `~/Documents` for documents, `~/Downloads` for
+archives, `~/Movies` for video, `~/Music` for audio, and `~/Documents` for a
+kind the table does not name (csv, a file with no extension, code). The scanned
+directory is never turned into a tree: the point is to return scattered files
+to where they belong, not to keep the clutter one level deeper. A folder the OS
+defines but that does not exist yet is created, and `undo --batch` removes the
+levels it made. `--to <base>` files every group under one directory instead (the
+base and its parents are created when missing), and `--in-place` keeps the
+folders inside the scanned directory for a folder you are reorganising in place;
+the two cannot be combined. A file that already sits under the destination is
+left where it is and listed as `already in the destination`.
 
 `--by-type` skips the token pass and keeps every file of one kind together, which
 is what covers a folder of unrelated one-off images or archives (the default
@@ -303,19 +318,29 @@ The text report is line-oriented and stable:
 ```text
 cluster: images (11 files, 1.2 MB)
   examples: cbd-chart-1.png, cbd-chart-2.png
-1. /Users/me/Desktop/misc/cbd-chart-1.png -> images/cbd-chart-1.png
+  create directory: /Users/me/Pictures/images
+1. /Users/me/Desktop/misc/cbd-chart-1.png -> /Users/me/Pictures/images/cbd-chart-1.png
 ungrouped: 2 files
   - /Users/me/Desktop/misc/README (left in place)
+already in the destination: 1 files
+  - /Users/me/Documents/already-filed.pdf (left in place)
 directories left alone: 1
   /Users/me/Desktop/misc/sub1
 naming: fallback (type-based names: no Jev key)
 mode: dry-run (nothing moved; pass --execute to file these groups)
 ```
 
-`--format json` prints one `cluster` object: `directory`, `executed`, `groups`
-(`name`, `directory`, `file_count`, `bytes`, `examples`, `candidates`,
-`name_source`, `assignments`), `ungrouped`, `directories_left_alone`, `skipped`,
-`naming` and, after `--execute`, `batch_id`.
+`--in-place` writes the destination relative to the scanned directory
+(`cbd-chart-1.png -> images/cbd-chart-1.png`) and leaves the
+`create directory:` row out, because the folder is the one you are looking at.
+
+`--format json` prints one `cluster` object: `directory`, `destination_mode`
+(`default_dirs` / `to` / `in_place`), `destination_base` (the `--to` directory,
+`null` otherwise), `executed`, `groups` (`name`, `directory`,
+`destination_base`, `create_directories`, `file_count`, `bytes`, `examples`,
+`candidates`, `name_source`, `assignments`), `ungrouped`,
+`already_in_destination`, `directories_left_alone`, `skipped`, `naming` and,
+after `--execute`, `batch_id`.
 
 ### Choose the destination yourself
 

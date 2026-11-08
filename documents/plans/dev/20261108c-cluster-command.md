@@ -1,10 +1,16 @@
 # `cluster`: group a flat folder into named subdirectories (#26)
 
-Last updated: 2026-11-08.
+Last updated: 2026-11-09.
 
 Issue: [#26](https://github.com/smapira/kaseifu/issues/26). Reuses the move
 batch of [#25](https://github.com/smapira/kaseifu/issues/25). Implementation:
 `e6c305f`.
+
+> The layout below (folders inside the scanned directory) is no longer the
+> default: [#27](https://github.com/smapira/kaseifu/issues/27) files each kind
+> into its OS standard folder and keeps this layout behind `--in-place`. See
+> `20261109a-cluster-destination.md`; the rest of this document is the #26
+> record.
 
 ## Why
 

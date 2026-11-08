@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`cluster` files each kind into the OS standard folder by default.** Issue
+  #27: creating the group folders inside the scanned directory (the #26 layout)
+  left a Desktop folder as a tree of folders on the Desktop - the clutter moved
+  one level down instead of going away. A group now lands in `~/Pictures`
+  (images), `~/Documents` (documents), `~/Downloads` (archives), `~/Movies`
+  (video), `~/Music` (audio), and `~/Documents` for a kind the table does not
+  name (csv, a file with no extension, code). A standard folder the OS defines
+  but that does not exist yet is created, and `undo --batch` removes the levels
+  it made. The text report names the folder and the absolute destination
+  (`create directory: /Users/me/Pictures/images`,
+  `-> /Users/me/Pictures/images/cbd-chart-1.png`). A file that already sits
+  under the destination is left alone and reported as
+  `already in the destination`. `--format json` keeps every existing key and
+  adds `destination_mode` (`default_dirs` / `to` / `in_place`),
+  `destination_base`, `already_in_destination`, and per group `destination_base`
+  and `create_directories`. `tests/v123_cluster_destination_test.rs`.
+
+### Added
+
+- **`cluster --to <base>` and `cluster --in-place`.** `--to` files every group
+  under one directory (created with its missing parents, each level subject to
+  the never-a-destination rule; an excluded base is refused before anything
+  moves), which is the shape `move` and the journal already understood.
+  `--in-place` keeps the #26 layout (`<dir>/<name>`) for a folder that is being
+  reorganised in place, and is the only mode that writes a destination relative
+  to the scanned directory. The two are mutually exclusive.
+
 ## [0.15.0] - 2026-11-08
 
 ### Added

@@ -131,7 +131,10 @@ pub struct Group {
 }
 
 impl Group {
-    fn new(category: Category, members: Vec<Member>) -> Self {
+    /// A group of members of one kind; the shared tokens are recomputed here so
+    /// a caller that removed members (a destination filter) never carries a
+    /// token no surviving member has.
+    pub fn from_members(category: Category, members: Vec<Member>) -> Self {
         let shared_tokens = shared_tokens(&members);
         Self {
             category,
@@ -308,13 +311,13 @@ const SIMILARITY_THRESHOLD: f64 = 0.33;
 /// Split a bucket into chunks of at most `max`, balanced over the chunks.
 fn split_into_chunks(category: Category, members: Vec<Member>, max: usize) -> Vec<Group> {
     if members.len() <= max {
-        return vec![Group::new(category, members)];
+        return vec![Group::from_members(category, members)];
     }
     let chunks = members.len().div_ceil(max);
     let size = members.len().div_ceil(chunks);
     members
         .chunks(size)
-        .map(|chunk| Group::new(category, chunk.to_vec()))
+        .map(|chunk| Group::from_members(category, chunk.to_vec()))
         .collect()
 }
 
@@ -401,7 +404,7 @@ mod tests {
         assert_eq!(sanitize_name("CBD/Charts: 2026"), "cbd-charts-2026");
         assert_eq!(sanitize_name("..."), "");
         let members = vec![member("cbd-chart-a.png"), member("cbd-charts-b.png")];
-        let group = Group::new(Category::Image, members);
+        let group = Group::from_members(Category::Image, members);
         let names = group.candidate_names();
         assert_eq!(names[0], "images");
         assert!(names.contains(&"cbd".to_string()));

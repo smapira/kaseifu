@@ -203,9 +203,17 @@ fn v122_a_pre_existing_directory_is_never_reused() {
     std::fs::create_dir_all(dir.join("images")).expect("images");
     std::fs::write(dir.join("images/own.png"), b"own").expect("own");
 
+    // `--in-place` is the layout where a folder in the scanned directory is a
+    // destination at all (issue #27 moved the default to the OS folders).
     let output = run(
         &home,
-        &["cluster", &dir.to_string_lossy(), "--format", "json"],
+        &[
+            "cluster",
+            &dir.to_string_lossy(),
+            "--in-place",
+            "--format",
+            "json",
+        ],
     );
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let json: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("json");
