@@ -80,6 +80,28 @@ struct Cli {
     command: Option<Commands>,
 }
 
+/// Where `cluster` takes its folder names from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum ClusterNameSource {
+    /// The model when a key resolves, otherwise the type name.
+    Auto,
+    /// Always the deterministic type name (never calls the model).
+    Type,
+    /// The model when a key resolves; otherwise the type name, with the reason.
+    Model,
+}
+
+impl ClusterNameSource {
+    /// The report word (`auto` / `type` / `model`).
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Type => "type",
+            Self::Model => "model",
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Show what kaseifu observes in a file (read-only).
@@ -207,6 +229,10 @@ enum Commands {
         /// Group by type only (one folder per kind: images, documents, ...).
         #[arg(long = "by-type")]
         by_type: bool,
+        /// Where the folder names come from: auto (model when a key resolves,
+        /// else the type), type, or model.
+        #[arg(long = "name-source", value_enum, default_value = "auto")]
+        name_source: ClusterNameSource,
         /// Create the directories and move the files (default is a dry run).
         #[arg(long, conflicts_with = "dry_run")]
         execute: bool,
@@ -559,6 +585,7 @@ async fn dispatch(
             include_folders,
             recursive,
             by_type,
+            name_source,
             execute,
             dry_run,
         } => {
@@ -569,6 +596,7 @@ async fn dispatch(
                 include_folders,
                 recursive,
                 by_type,
+                name_source,
                 execute,
                 dry_run,
                 format,
@@ -1589,6 +1617,7 @@ async fn handle_cluster(
     include_folders: bool,
     recursive: bool,
     by_type: bool,
+    name_source: ClusterNameSource,
     execute: bool,
     dry_run: bool,
     format: OutputFormat,
@@ -1598,7 +1627,7 @@ async fn handle_cluster(
     let actually_move = execute && !dry_run;
     // Resolving is local and never prompts: without a key the deterministic
     // namer runs, which is the documented offline behavior.
-    let (namer, mut note) = cluster_namer(resolve_for(overrides).ok().as_ref());
+    let (namer, mut note) = cluster_namer(resolve_for(overrides).ok().as_ref(), name_source);
     let plan = cluster::plan(dir, &options, namer.as_ref()).await?;
     if let Some(reason) = &plan.naming_failure {
         note = Some(reason.clone());
@@ -1609,7 +1638,14 @@ async fn handle_cluster(
     }
 
     if !actually_move {
-        print_cluster_report(&plan, Option::None, note.as_deref(), false, format);
+        print_cluster_report(
+            &plan,
+            Option::None,
+            note.as_deref(),
+            false,
+            format,
+            name_source,
+        );
         return Ok(());
     }
     if plan.groups.is_empty() {
@@ -1621,7 +1657,14 @@ async fn handle_cluster(
 
     let history = OperationHistory::open(journal_path())?;
     let outcome = cluster::execute(&plan, &history)?;
-    print_cluster_report(&plan, Some(&outcome), note.as_deref(), true, format);
+    print_cluster_report(
+        &plan,
+        Some(&outcome),
+        note.as_deref(),
+        true,
+        format,
+        name_source,
+    );
     match cluster_failure(&outcome) {
         Some(message) => anyhow::bail!(message),
         None => Ok(()),
@@ -1653,10 +1696,19 @@ fn cluster_options(
 }
 
 /// The namer for this run and the reason it is deterministic, when it is.
-fn cluster_namer(resolved: Option<&ResolvedConfig>) -> (Box<dyn GroupNamer>, Option<String>) {
-    match resolved.and_then(JevNamer::from_resolved) {
-        Some(namer) => (Box::new(namer), None),
-        None => (Box::new(TypeNamer), Some("no Jev key".to_string())),
+fn cluster_namer(
+    resolved: Option<&ResolvedConfig>,
+    mode: ClusterNameSource,
+) -> (Box<dyn GroupNamer>, Option<String>) {
+    let jev = resolved.and_then(JevNamer::from_resolved);
+    match (mode, jev) {
+        // Explicitly deterministic: the model is never called (and never asked
+        // for a key), which is the predictable choice for folder names.
+        (ClusterNameSource::Type, _) => (Box::new(TypeNamer), None),
+        (_, Some(namer)) => (Box::new(namer), None),
+        (ClusterNameSource::Auto | ClusterNameSource::Model, None) => {
+            (Box::new(TypeNamer), Some("no Jev key".to_string()))
+        }
     }
 }
 
@@ -1686,10 +1738,10 @@ fn cluster_naming_line(plan: &cluster::ClusterPlan, note: Option<&str>) -> Strin
     let fallback = plan.groups.len() - jev;
     match (jev, fallback) {
         (_, 0) => "naming: jev".to_string(),
-        (0, _) => format!(
-            "naming: fallback (type-based names{})",
-            note.map(|note| format!(": {note}")).unwrap_or_default()
-        ),
+        (0, _) => match note {
+            Some(note) => format!("naming: fallback (type-based names: {note})"),
+            None => "naming: type-based".to_string(),
+        },
         _ => format!("naming: jev {jev} group(s), fallback {fallback} group(s)"),
     }
 }
@@ -1701,6 +1753,7 @@ fn print_cluster_report(
     note: Option<&str>,
     executed: bool,
     format: OutputFormat,
+    name_source: ClusterNameSource,
 ) {
     let mut lines = Vec::new();
     let mut number = 0;
@@ -1710,7 +1763,7 @@ fn print_cluster_report(
     lines.extend(cluster_tail_lines(outcome, executed));
 
     let json = serde_json::json!({
-        "cluster": cluster_report_document(plan, outcome, note, executed)
+        "cluster": cluster_report_document(plan, outcome, note, executed, name_source)
     })
     .to_string();
     // Plain lines, no panel: this report is a list meant to be read in a pipe
@@ -1826,6 +1879,7 @@ fn cluster_report_document(
     outcome: Option<&cluster::ClusterOutcome>,
     note: Option<&str>,
     executed: bool,
+    name_source: ClusterNameSource,
 ) -> serde_json::Value {
     let paths = |paths: &[PathBuf]| {
         paths
@@ -1876,6 +1930,7 @@ fn cluster_report_document(
         "directories_left_alone": paths(&plan.directories),
         "skipped": paths(&plan.skipped),
         "naming": {
+            "mode": name_source.as_str(),
             "note": note,
             "jev_groups": plan.groups.iter().filter(|group| group.source == NameSource::Jev).count(),
             "fallback_groups": plan.groups.iter().filter(|group| group.source == NameSource::Fallback).count(),

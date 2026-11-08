@@ -71,6 +71,14 @@ so the command always produces a plan; the report says which mode was used
   `images/` and `archives/`. The flag skips the token pass and groups by kind
   only; it is off by default because grouping unrelated files together is a
   choice, not a default.
+- **`--name-source` separates "which words" from "who chose".** The real-index
+  measurement (`~/Desktop/misc`, 37 files) showed the model naming groups
+  `japanese` and `rakuichi-rakumon` where `images` and `code` would describe the
+  folder's role; the type names were stable. `type` never calls the model,
+  `model` requires it (still falling back with the reason), and `auto` keeps the
+  previous behavior. The default stays `auto` because naming with the model was
+  the issue's requested behavior; flipping it is a product decision recorded
+  here rather than a silent change.
 - **`--min` defaults to 2, `--max` to 20.** A single file is not a group; a type
   larger than 20 is split so no directory grows without bound.
 - **A fallback name that collides takes its group's own token**
@@ -80,7 +88,7 @@ so the command always produces a plan; the report says which mode was used
 
 ## Verification (2026-11-08)
 
-- `tests/v122_cluster_test.rs` (new, 11 tests): deterministic dry run on the
+- `tests/v122_cluster_test.rs` (new, 13 tests): deterministic dry run on the
   37-file fixture (same bytes twice, nothing moved), execute + `undo --batch`
   (files back, created folders gone, existing folder untouched), pre-existing
   `images` -> `images (2)`, no-key fallback, a stub for the naming call (the

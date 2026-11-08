@@ -283,6 +283,70 @@ fn v122_by_type_covers_dissimilar_files_of_one_kind() {
 }
 
 #[test]
+fn v122_name_source_type_never_calls_the_model() {
+    let root = sandbox("name-source-type");
+    let home = home_of(&root);
+    let dir = root.join("misc");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(dir.join("cbd-chart-a.png"), b"a").expect("a");
+    std::fs::write(dir.join("cbd-chart-b.png"), b"b").expect("b");
+    // A reachable, answering endpoint: if the command called it, the group
+    // would take the model's choice instead of the type name.
+    let server = JeNamerStub::start();
+
+    let output = run_with_env(
+        &home,
+        &[
+            "cluster",
+            &dir.to_string_lossy(),
+            "--name-source",
+            "type",
+            "--format",
+            "json",
+        ],
+        &[
+            ("JEV_API_URL", &server.endpoint),
+            ("JEV_API_KEY", "test-key"),
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("json");
+    assert_eq!(json["cluster"]["naming"]["mode"], "type");
+    assert_eq!(json["cluster"]["naming"]["jev_groups"], 0);
+    assert_eq!(json["cluster"]["groups"][0]["name"], "images");
+    assert!(server.request().is_empty(), "the model was called");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn v122_name_source_model_reports_the_fallback_reason() {
+    let root = sandbox("name-source-model");
+    let home = home_of(&root);
+    let dir = root.join("misc");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(dir.join("cbd-chart-a.png"), b"a").expect("a");
+    std::fs::write(dir.join("cbd-chart-b.png"), b"b").expect("b");
+
+    let output = run(
+        &home,
+        &[
+            "cluster",
+            &dir.to_string_lossy(),
+            "--name-source",
+            "model",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("json");
+    assert_eq!(json["cluster"]["naming"]["mode"], "model");
+    assert_eq!(json["cluster"]["naming"]["note"], "no Jev key");
+    assert_eq!(json["cluster"]["groups"][0]["name_source"], "fallback");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn v122_two_groups_of_one_type_get_distinguishing_names() {
     let root = sandbox("same-type");
     let home = home_of(&root);
