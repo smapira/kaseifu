@@ -267,7 +267,13 @@ new subdirectories named after what they are:
 kaseifu cluster ~/Desktop/misc                    # dry run
 kaseifu cluster ~/Desktop/misc --execute          # create the folders and file the files
 kaseifu cluster ~/Desktop/misc --min 3 --max 12   # groups of at least 3, split big types
+kaseifu cluster ~/Desktop/misc --by-type           # one folder per kind (images, documents, ...)
 ```
+
+`--by-type` skips the token pass and keeps every file of one kind together, which
+is what covers a folder of unrelated one-off images or archives (the default
+splits them by shared name tokens, and files with no shared token fall into
+`ungrouped`). It composes with `--min`/`--max` as usual.
 
 Membership is decided without a model: a file's type and the tokens of its name.
 Only regular files directly under the directory are members; existing

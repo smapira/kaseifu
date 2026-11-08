@@ -65,6 +65,12 @@ so the command always produces a plan; the report says which mode was used
   and `--help`: `cluster: <name> (<count> files, <size>)`, `<n>. <source> ->
   <name>/<file>`, then `ungrouped:` / `directories left alone:` / `skipped:` /
   `naming:` / `mode:` (or `batch:` + `undo reverses the moves`).
+- **`--by-type` is the escape hatch for unrelated names.** Real data showed 14
+  files that shared no token (six unrelated mockups, hash-named photos, four
+  archives): the token pass leaves them ungrouped, but the user wants
+  `images/` and `archives/`. The flag skips the token pass and groups by kind
+  only; it is off by default because grouping unrelated files together is a
+  choice, not a default.
 - **`--min` defaults to 2, `--max` to 20.** A single file is not a group; a type
   larger than 20 is split so no directory grows without bound.
 - **A fallback name that collides takes its group's own token**
@@ -74,7 +80,7 @@ so the command always produces a plan; the report says which mode was used
 
 ## Verification (2026-11-08)
 
-- `tests/v122_cluster_test.rs` (new, 9 tests): deterministic dry run on the
+- `tests/v122_cluster_test.rs` (new, 11 tests): deterministic dry run on the
   37-file fixture (same bytes twice, nothing moved), execute + `undo --batch`
   (files back, created folders gone, existing folder untouched), pre-existing
   `images` -> `images (2)`, no-key fallback, a stub for the naming call (the
@@ -85,6 +91,8 @@ so the command always produces a plan; the report says which mode was used
   split/ungrouped, sanitization and candidate order.
 - `bash scripts/quality_check.sh`: OVERALL PASS (1067 tests, rustfmt 0, clippy 0,
   CC >= 16 = 0, max CC 15, coverage 85.04%).
+- `--by-type` covers the real 14 ungrouped files (mockups, hash-named photos,
+  archives) by kind; the default plan is unchanged.
 - Real binary, isolated HOME, 37-file fixture: dry run planned 5 groups
   (11 images, 2 images, 10 documents, 4 archives, 5 code), 4 ungrouped, 1
   directory left alone; `--execute` created the 5 folders and moved 32 files;

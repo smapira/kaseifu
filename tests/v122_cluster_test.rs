@@ -235,6 +235,54 @@ fn v122_a_pre_existing_directory_is_never_reused() {
 }
 
 #[test]
+fn v122_by_type_covers_dissimilar_files_of_one_kind() {
+    let root = sandbox("by-type");
+    let home = home_of(&root);
+    let dir = root.join("misc");
+    std::fs::create_dir_all(&dir).expect("dir");
+    // No shared tokens: the default plan cannot group these at --min 2.
+    for name in ["alpha.png", "beta.png", "one.md", "two.md"] {
+        std::fs::write(dir.join(name), b"x").expect("file");
+    }
+
+    let default = run(
+        &home,
+        &["cluster", &dir.to_string_lossy(), "--format", "json"],
+    );
+    assert!(default.status.success(), "stderr: {}", stderr(&default));
+    let default_json: serde_json::Value = serde_json::from_str(&stdout(&default)).expect("json");
+    assert_eq!(
+        default_json["cluster"]["groups"]
+            .as_array()
+            .expect("groups")
+            .len(),
+        0,
+        "unrelated names stay ungrouped by default"
+    );
+
+    let by_type = run(
+        &home,
+        &[
+            "cluster",
+            &dir.to_string_lossy(),
+            "--by-type",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(by_type.status.success(), "stderr: {}", stderr(&by_type));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&by_type)).expect("json");
+    let names: Vec<String> = json["cluster"]["groups"]
+        .as_array()
+        .expect("groups")
+        .iter()
+        .map(|group| group["name"].as_str().expect("name").to_string())
+        .collect();
+    assert_eq!(names, vec!["images", "documents"], "{names:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn v122_two_groups_of_one_type_get_distinguishing_names() {
     let root = sandbox("same-type");
     let home = home_of(&root);

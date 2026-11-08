@@ -241,7 +241,12 @@ fn shared_tokens(members: &[Member]) -> Vec<String> {
 ///
 /// A bucket below `min` members is returned as ungrouped; a bucket above `max`
 /// is split into evenly sized groups so no directory grows without bound.
-pub fn group(members: Vec<Member>, min: usize, max: usize) -> (Vec<Group>, Vec<Member>) {
+pub fn group(
+    members: Vec<Member>,
+    min: usize,
+    max: usize,
+    by_type: bool,
+) -> (Vec<Group>, Vec<Member>) {
     let mut by_category: BTreeMap<Category, Vec<Member>> = BTreeMap::new();
     for member in members {
         by_category.entry(member.category).or_default().push(member);
@@ -251,7 +256,13 @@ pub fn group(members: Vec<Member>, min: usize, max: usize) -> (Vec<Group>, Vec<M
     let mut ungrouped = Vec::new();
     for (category, mut members) in by_category {
         members.sort_by(|left, right| left.name.cmp(&right.name));
-        for bucket in buckets(members) {
+        // `--by-type` skips the token pass: every file of one type is one group.
+        let buckets = if by_type {
+            vec![members]
+        } else {
+            buckets(members)
+        };
+        for bucket in buckets {
             if bucket.len() < min.max(1) {
                 ungrouped.extend(bucket);
                 continue;
@@ -359,7 +370,7 @@ mod tests {
             member("cbd-e.md"),
             member("alone.md"),
         ];
-        let (groups, ungrouped) = group(members, 2, 2);
+        let (groups, ungrouped) = group(members, 2, 2, false);
         assert_eq!(ungrouped.len(), 1);
         assert!(groups.iter().all(|group| group.members.len() <= 2));
         assert_eq!(
@@ -370,6 +381,19 @@ mod tests {
                 + 1,
             6
         );
+    }
+
+    #[test]
+    fn by_type_keeps_dissimilar_files_of_one_kind_together() {
+        let members = vec![member("alpha.png"), member("beta.png"), member("gamma.png")];
+        let (by_token, token_ungrouped) = group(members.clone(), 2, 20, false);
+        assert!(by_token.is_empty(), "unrelated names stay ungrouped");
+        assert_eq!(token_ungrouped.len(), 3);
+
+        let (by_type, ungrouped) = group(members, 2, 20, true);
+        assert!(ungrouped.is_empty());
+        assert_eq!(by_type.len(), 1);
+        assert_eq!(by_type[0].members.len(), 3);
     }
 
     #[test]

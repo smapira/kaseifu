@@ -22,8 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`--include-folders` treats the direct child folders as members instead,
   `--recursive` collects files from below them). Without a key, without a
   network, or on an unexpected answer the type-based name is used, so the
-  command always runs. `--format json` prints one `cluster` object;
-  `tests/v122_cluster_test.rs`.
+  command always runs. `--by-type` skips the token pass and keeps every file of
+  one kind together (`images/`, `documents/`, `archives/`), which covers a
+  folder of unrelated one-off files. `--format json` prints one `cluster`
+  object; `tests/v122_cluster_test.rs`.
 
 - **`move --create-dir` and several paths in one run.** Issue #25: filing a
   desktop needed a `mkdir` per destination and one `move` per path (13 folders,

@@ -34,6 +34,8 @@ pub struct ClusterOptions {
     pub include_folders: bool,
     /// Collect files from subdirectories as well (directories stay put).
     pub recursive: bool,
+    /// Group by type only: one group per file kind, ignoring name tokens.
+    pub by_type: bool,
 }
 
 impl Default for ClusterOptions {
@@ -43,6 +45,7 @@ impl Default for ClusterOptions {
             max: 20,
             include_folders: false,
             recursive: false,
+            by_type: false,
         }
     }
 }
@@ -239,7 +242,8 @@ pub async fn plan(
             root.display()
         ));
     }
-    let (groups, ungrouped) = grouping::group(collected.members, options.min, options.max);
+    let (groups, ungrouped) =
+        grouping::group(collected.members, options.min, options.max, options.by_type);
     let (named, naming_failure) = names_for(&groups, namer).await;
 
     let mut taken: BTreeSet<String> = BTreeSet::new();

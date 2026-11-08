@@ -29,6 +29,9 @@ for the destination, so a directory with 37 flat files (the issue's
   and `--recursive` are the opt-ins, and the two are refused together.
 - The whole run is one journal batch (`undo --batch` reverses every group and
   removes the directories kaseifu created, once empty).
+- `--by-type` groups by kind only (`images/`, `documents/`, `archives/`) for the
+  real case of unrelated one-off files that share no name token; it is off by
+  default because merging unrelated files is a choice.
 - Text output is plain, line-oriented and documented in README and `--help`,
   because the output is read by scripts.
 
@@ -53,11 +56,13 @@ for the destination, so a directory with 37 flat files (the issue's
 
 ## Verification (2026-11-08)
 
-- `tests/v122_cluster_test.rs`: 9 passed (deterministic dry run, execute +
+- `tests/v122_cluster_test.rs`: 11 passed (deterministic dry run, execute +
   undo, collision suffix, offline fallback, model choice via a local stub,
-  include-folders, recursive, min, conflicting flags).
+  include-folders, recursive, by-type, min, conflicting flags).
 - `bash scripts/quality_check.sh`: OVERALL PASS (1067 tests, CC >= 16 = 0,
   max CC 15, coverage 85.04%).
 - Isolated HOME, real binary, 37-file fixture: 5 groups / 4 ungrouped / 1
   existing directory left alone; execute moved 32 files and created 5 folders;
-  `undo --batch` restored every file and removed all 5 folders.
+  `undo --batch` restored every file and removed all 5 folders. With
+  `--by-type --min 1` the 14 unrelated files also land by kind
+  (`images`, `archives`, `data`, `misc`).

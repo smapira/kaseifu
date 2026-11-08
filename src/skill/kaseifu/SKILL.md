@@ -68,6 +68,7 @@ kaseifu move <path> --to <dir> --execute                    # ... and perform it
 kaseifu move <path>... --to <dir> --create-dir --execute    # several paths, destination created first
 kaseifu cluster <dir>                                       # group a flat folder, no model in membership
 kaseifu cluster <dir> --execute                             # create the named folders and file the files
+kaseifu cluster <dir> --by-type                             # one folder per kind, ignore name tokens
 kaseifu undo                                                # put the last move back
 kaseifu undo --last 3                                       # the last three moves
 kaseifu undo --batch <id>                                   # exactly one batch, by its printed id
@@ -119,7 +120,9 @@ name among deterministic candidates, and the command works with no key and no
 network (the type-based name is used). Existing subdirectories are listed under
 `directories left alone` and are never moved; `--include-folders` treats the
 direct child folders as members instead, `--recursive` collects files from below
-them while leaving the folders. Only regular files are members. `--execute`
+them while leaving the folders. Only regular files are members. `--by-type`
+skips the token pass and keeps each kind together (`images/`, `documents/`,
+`archives/`), which is what covers a folder of unrelated one-off files. `--execute`
 creates each folder (sanitized; a colliding fallback name takes its own token,
 `images-screenshot`, before `name (2)`) and moves the files as one journal
 batch; `undo --batch <id>` restores the flat layout and removes the folders

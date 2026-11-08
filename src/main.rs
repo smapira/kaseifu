@@ -204,6 +204,9 @@ enum Commands {
         /// Collect files from subdirectories as well (the directories stay).
         #[arg(long)]
         recursive: bool,
+        /// Group by type only (one folder per kind: images, documents, ...).
+        #[arg(long = "by-type")]
+        by_type: bool,
         /// Create the directories and move the files (default is a dry run).
         #[arg(long, conflicts_with = "dry_run")]
         execute: bool,
@@ -555,6 +558,7 @@ async fn dispatch(
             max,
             include_folders,
             recursive,
+            by_type,
             execute,
             dry_run,
         } => {
@@ -564,6 +568,7 @@ async fn dispatch(
                 max,
                 include_folders,
                 recursive,
+                by_type,
                 execute,
                 dry_run,
                 format,
@@ -1583,12 +1588,13 @@ async fn handle_cluster(
     max: Option<usize>,
     include_folders: bool,
     recursive: bool,
+    by_type: bool,
     execute: bool,
     dry_run: bool,
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
-    let options = cluster_options(min, max, include_folders, recursive)?;
+    let options = cluster_options(min, max, include_folders, recursive, by_type)?;
     let actually_move = execute && !dry_run;
     // Resolving is local and never prompts: without a key the deterministic
     // namer runs, which is the documented offline behavior.
@@ -1628,12 +1634,14 @@ fn cluster_options(
     max: Option<usize>,
     include_folders: bool,
     recursive: bool,
+    by_type: bool,
 ) -> Result<ClusterOptions> {
     let options = ClusterOptions {
         min: min.unwrap_or(2),
         max: max.unwrap_or(20),
         include_folders,
         recursive,
+        by_type,
     };
     if options.min == 0 {
         anyhow::bail!("--min must be at least 1");
