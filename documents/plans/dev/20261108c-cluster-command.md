@@ -76,9 +76,10 @@ so the command always produces a plan; the report says which mode was used
   `japanese` and `rakuichi-rakumon` where `images` and `code` would describe the
   folder's role; the type names were stable. `type` never calls the model,
   `model` requires it (still falling back with the reason), and `auto` keeps the
-  previous behavior. The default stays `auto` because naming with the model was
-  the issue's requested behavior; flipping it is a product decision recorded
-  here rather than a silent change.
+  previous behavior. **The default is `type`** (owner decision, 2026-11-08): the
+  measured run showed the type names stable, they need no key or network, and a
+  machine whose Keychain does not answer produces the same plan. `auto` remains
+  the opt-in for content-driven names.
 - **`--min` defaults to 2, `--max` to 20.** A single file is not a group; a type
   larger than 20 is split so no directory grows without bound.
 - **A fallback name that collides takes its group's own token**

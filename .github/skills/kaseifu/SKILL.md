@@ -69,7 +69,7 @@ kaseifu move <path>... --to <dir> --create-dir --execute    # several paths, des
 kaseifu cluster <dir>                                       # group a flat folder, no model in membership
 kaseifu cluster <dir> --execute                             # create the named folders and file the files
 kaseifu cluster <dir> --by-type                             # one folder per kind, ignore name tokens
-kaseifu cluster <dir> --name-source type                    # deterministic type names, never the model
+kaseifu cluster <dir> --name-source auto                     # let the model pick the names (needs a key)
 kaseifu undo                                                # put the last move back
 kaseifu undo --last 3                                       # the last three moves
 kaseifu undo --batch <id>                                   # exactly one batch, by its printed id
@@ -124,9 +124,9 @@ direct child folders as members instead, `--recursive` collects files from below
 them while leaving the folders. Only regular files are members. `--by-type`
 skips the token pass and keeps each kind together (`images/`, `documents/`,
 `archives/`), which is what covers a folder of unrelated one-off files.
-`--name-source type` keeps naming deterministic (the model is never called);
-`--name-source model` requires it and falls back to the type name with the reason
-when no key resolves. The default is `auto` (model when a key resolves). `--execute`
+`--name-source` picks where the names come from: `type` (the default; the
+kind name, no model call, no key) or `auto` / `model` (the model when a key
+resolves, falling back to the type name with the reason). `--execute`
 creates each folder (sanitized; a colliding fallback name takes its own token,
 `images-screenshot`, before `name (2)`) and moves the files as one journal
 batch; `undo --batch <id>` restores the flat layout and removes the folders

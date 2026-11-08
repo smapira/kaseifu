@@ -32,10 +32,12 @@ for the destination, so a directory with 37 flat files (the issue's
 - `--by-type` groups by kind only (`images/`, `documents/`, `archives/`) for the
   real case of unrelated one-off files that share no name token; it is off by
   default because merging unrelated files is a choice.
-- `--name-source auto|type|model` separates the words from their source: `type`
-  never calls the model, `model` requires it (falling back with the reason),
-  and `auto` keeps the previous behavior. The default stays `auto`; the
-  measured trade-off is recorded in the plan.
+- `--name-source type|auto|model` separates the words from their source:
+  `type` (the default) never calls the model, `model` requires it (falling back
+  with the reason), and `auto` keeps the previous behavior. The default was
+  flipped to `type` after the measured run: the type names were stable, need no
+  key or network, and match what a machine with an unresponsive Keychain
+  produces.
 - Text output is plain, line-oriented and documented in README and `--help`,
   because the output is read by scripts.
 

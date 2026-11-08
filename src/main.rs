@@ -83,10 +83,10 @@ struct Cli {
 /// Where `cluster` takes its folder names from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum ClusterNameSource {
-    /// The model when a key resolves, otherwise the type name.
-    Auto,
     /// Always the deterministic type name (never calls the model).
     Type,
+    /// The model when a key resolves, otherwise the type name.
+    Auto,
     /// The model when a key resolves; otherwise the type name, with the reason.
     Model,
 }
@@ -198,12 +198,13 @@ enum Commands {
     /// Group the flat files of a directory into named subdirectories.
     ///
     /// Membership is decided without a model (type and file-name tokens); the
-    /// model only chooses a folder name among deterministic candidates, so the
-    /// command also works with no key and no network. Only regular files
-    /// directly under <dir> are members: existing directories are reported and
-    /// left alone (`--include-folders` opts in, `--recursive` walks into them
-    /// instead). Dry run by default; `--execute` creates the directories and
-    /// moves the files as one journal batch, which `undo --batch` reverses.
+    /// folder names are the type name by default (`--name-source auto` lets the
+    /// model pick among deterministic candidates), so the command works with
+    /// no key and no network. Only regular files directly under <dir> are
+    /// members: existing directories are reported and left alone
+    /// (`--include-folders` opts in, `--recursive` walks into them instead).
+    /// Dry run by default; `--execute` creates the directories and moves the
+    /// files as one journal batch, which `undo --batch` reverses.
     ///
     /// Text output, one block per group:
     ///   cluster: <name> (<count> files, <size>)
@@ -229,9 +230,9 @@ enum Commands {
         /// Group by type only (one folder per kind: images, documents, ...).
         #[arg(long = "by-type")]
         by_type: bool,
-        /// Where the folder names come from: auto (model when a key resolves,
-        /// else the type), type, or model.
-        #[arg(long = "name-source", value_enum, default_value = "auto")]
+        /// Where the folder names come from: type (default; never calls the
+        /// model), auto (model when a key resolves, else the type) or model.
+        #[arg(long = "name-source", value_enum, default_value = "type")]
         name_source: ClusterNameSource,
         /// Create the directories and move the files (default is a dry run).
         #[arg(long, conflicts_with = "dry_run")]

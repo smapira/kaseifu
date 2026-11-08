@@ -9,15 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`cluster --name-source type|model|auto`.** The measured run on a
-  37-file Desktop folder showed the model choosing language or project words
-  (`japanese`, `rakuichi-rakumon`) where the type names (`images`,
-  `documents`, `archives`) were stable and predictable. `--name-source type`
-  never calls the model (and needs no key), `model` requires it and still falls
-  back to the type name with the reason, and `auto` (the default) keeps the
-  previous behavior. `--format json` gains `naming.mode`
-  (`auto` / `type` / `model`) and the text summary prints `naming: type-based`
-  when no model was involved. `tests/v122_cluster_test.rs`.
+- **`cluster --name-source type|auto|model`, with `type` as the default.** The
+  measured run on a 37-file Desktop folder showed the model choosing language or
+  project words (`japanese`, `rakuichi-rakumon`) where the type names
+  (`images`, `documents`, `archives`) were stable and predictable. The default
+  is therefore the deterministic type name: no model call, no key, no network,
+  and the same result on a machine whose Keychain does not answer. `auto` keeps
+  the previous behavior (the model when a key resolves) and `model` requires it,
+  both falling back to the type name with the reason. `--format json` reports
+  `naming.mode` (`type` / `auto` / `model`) and the text summary prints
+  `naming: type-based` when no model was involved. `tests/v122_cluster_test.rs`.
 
 ## [0.14.0] - 2026-11-08
 

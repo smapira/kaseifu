@@ -275,14 +275,15 @@ is what covers a folder of unrelated one-off images or archives (the default
 splits them by shared name tokens, and files with no shared token fall into
 `ungrouped`). It composes with `--min`/`--max` as usual.
 
-`--name-source` decides where the folder names come from: `auto` (the default)
-uses the model when a key resolves and the type name otherwise; `type` never
-calls the model (predictable names such as `images` / `documents`); `model`
-requires the model and still falls back to the type name, with the reason, when
-no key resolves. On a measured 37-file Desktop folder the type names were
-stable while the model choices drifted towards language or project names
-(`japanese`, `rakuichi-rakumon`), so `--name-source type` is the predictable
-choice when the folder name should describe what the files are.
+`--name-source` decides where the folder names come from. The default is
+`type`: the deterministic name of the file kind (`images`, `documents`,
+`archives`), with no model call, no key and no network. `auto` uses the model
+when a key resolves and the type name otherwise; `model` requires the model and
+still falls back to the type name, with the reason, when no key resolves. On a
+measured 37-file Desktop folder the type names were stable while the model
+choices drifted towards language or project names (`japanese`,
+`rakuichi-rakumon`), which is why `type` is the default and `auto` is the
+opt-in.
 
 Membership is decided without a model: a file's type and the tokens of its name.
 Only regular files directly under the directory are members; existing

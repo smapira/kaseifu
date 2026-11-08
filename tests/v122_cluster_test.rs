@@ -283,6 +283,38 @@ fn v122_by_type_covers_dissimilar_files_of_one_kind() {
 }
 
 #[test]
+fn v122_the_default_name_source_is_type() {
+    let root = sandbox("default-name-source");
+    let home = home_of(&root);
+    let dir = root.join("misc");
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(dir.join("cbd-chart-a.png"), b"a").expect("a");
+    std::fs::write(dir.join("cbd-chart-b.png"), b"b").expect("b");
+    // A key and a reachable endpoint are present; the default must still not
+    // ask the model, because folder names are type-based by default.
+    let server = JeNamerStub::start();
+
+    let output = run_with_env(
+        &home,
+        &["cluster", &dir.to_string_lossy(), "--format", "json"],
+        &[
+            ("JEV_API_URL", &server.endpoint),
+            ("JEV_API_KEY", "test-key"),
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("json");
+    assert_eq!(json["cluster"]["naming"]["mode"], "type");
+    assert_eq!(json["cluster"]["naming"]["jev_groups"], 0);
+    assert_eq!(json["cluster"]["groups"][0]["name"], "images");
+    assert!(
+        server.request().is_empty(),
+        "the model was called by default"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn v122_name_source_type_never_calls_the_model() {
     let root = sandbox("name-source-type");
     let home = home_of(&root);
@@ -413,7 +445,14 @@ fn v122_a_jev_answer_chooses_the_group_name() {
 
     let output = run_with_env(
         &home,
-        &["cluster", &dir.to_string_lossy(), "--format", "json"],
+        &[
+            "cluster",
+            &dir.to_string_lossy(),
+            "--name-source",
+            "auto",
+            "--format",
+            "json",
+        ],
         &[
             ("JEV_API_URL", &server.endpoint),
             ("JEV_API_KEY", "test-key"),
