@@ -21,16 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`cluster` files each kind into its OS standard folder and creates nothing.**
   Issues #27 and #28. A run files every file into `~/Pictures` (images),
   `~/Documents` (documents), `~/Downloads` (archives), `~/Movies` (video),
-  `~/Music` (audio). A type the platform table does not name is a document by
-  destination, and **the extension is the type** that says what it is
-  (`documents/html`, `documents/sh`); the `code`, `data` and `misc` folders are
-  gone. The classification is still reported as `kind` (`code` for an html file,
-  `null` when nothing names it) and the folder as `class_folder` (`documents`),
-  so the two are never confused.
-  A type is a chain of folder then extension, and a run with no flags files into
-  the deepest folder of it that already exists (`~/Pictures/images/png`, else
-  `~/Pictures/images`, else `~/Pictures`), so it never turns a Desktop folder
-  into a tree of folders. A standard
+  `~/Music` (audio). **The extension is the type** that says what a file is
+  when the platform table names its kind (`Documents/documents/html`,
+  `Documents/documents/csv`), so the `code`, `data` and `misc` folders are gone.
+  A file the table does not name (`psd`, `ttf`, `webloc`, no extension) gets no
+  folder at all: it is filed flat in its standard folder (`~/Documents/x.ttf`),
+  and no `misc` bucket or `documents` level is invented for it. What a file *is*
+  stays separate from where it goes: `kind` says `code` for an html file and is
+  `null` when nothing names it, `class_folder` says `documents` (and is `null`
+  for a kind with no folder). A chain of folder then extension is what a run
+  with no flags walks, filing into the deepest folder of it that already exists
+  (`~/Pictures/images/png`, else `~/Pictures/images`, else `~/Pictures`), so it
+  never turns a Desktop folder into a tree of folders. A standard
   folder that does not exist is an error naming the path and `--create-dir`,
   with nothing moved; a name already taken at the destination is skipped for
   that file only, reported on its own `!` line, and the exit code says something
@@ -54,7 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`~/Pictures/images/png/at-screenshot`) and its files move in, while a group
   named after its type lands flat in the type folder
   (`~/Movies/videos/mp4/clip.mp4`) instead of adding a folder that repeats the
-  parent. `--to <base>` replaces the standard folder with one directory (every
+  parent. A group nothing types has no type folder to build: a name it can call
+  its own becomes `R/<name>`, and without one its files land flat in the kind
+  root. `--to <base>` replaces the standard folder with one directory (every
   created level still subject to the never-a-destination rule), `--in-place`
   replaces it with the scanned directory, and `--min`, `--max`, `--by-type`,
   `--name-source` and `--in-place` require `--create-dir` because none of them

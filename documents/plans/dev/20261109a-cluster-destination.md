@@ -40,18 +40,23 @@ R is the kind root, T the class, E the extension, S a name chosen for the group.
   (documents), `~/Downloads` (archives), `~/Movies` (video), `~/Music` (audio).
   The scanned directory is never a destination.
 - **T** = the class folder: `images` / `documents` / `archives` / `videos` /
-  `audio`. Kinds without a class of their own are documents by destination, so
-  `T` is `documents` for them.
+  `audio`. A kind the table does not name has no class folder at all - `T` is not
+  invented as `misc`, and the `documents` level is not added for it, so its files
+  go flat in `R` (owner decision, 2026-11-09). With `--create-dir` such a group is
+  built as `R/<name>` when it has a name of its own, and lands flat in `R` when it
+  has none.
 - **E** = the extension (`html`, `sh`, `psd`, `ttf`, `png`, `mp4`, ...). The
   extension *is* the type for a kind the platform table does not name, so the
   `code` / `data` / `misc` folders are gone (owner decision, 2026-11-09). A file
-  with no extension has no E and stays in `R/T`.
+  with no extension has no E and stays in `R/T`; a file with neither a class
+  folder nor an extension is filed flat in `R`.
 - **The classification is not the destination.** `Category::class_name()`
   keeps saying what a file is (`code` for html) and is `None` for a file nothing
-  names; `Category::class_folder()` says where it goes and always answers
-  (`documents`). The report's `kind` is the first, `class_folder` the second.
-  Collapsing them would lose the classification the moment a folder name is
-  reused (`include-folders`, a new type, an extensionless file).
+  names; `Category::class_folder()` says where it goes and is `None` when there is
+  no folder to name (`documents` for html, nothing for `ttf`). The report's `kind`
+  is the first, `class_folder` the second. Collapsing them would lose the
+  classification the moment a folder name is reused (`include-folders`, a new
+  type, an extensionless file).
 - **Nothing is created without `--create-dir`.** A kind root that does not exist
   is an error naming every missing root and the flag that would create it, with
   nothing moved.

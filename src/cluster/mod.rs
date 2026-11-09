@@ -126,8 +126,9 @@ pub struct PlannedGroup {
     /// classifies them.
     pub kind: Option<String>,
     /// The folder under the kind root these files are filed in (`images`,
-    /// `documents`, ...).
-    pub class_folder: String,
+    /// `documents`, ...), or `None` when nothing types them and they go flat
+    /// into the kind root.
+    pub class_folder: Option<String>,
     /// The extension that types this block, or `None` when its files have none.
     pub extension: Option<String>,
     /// The folder this run creates, or `None` when the members go into a
@@ -152,9 +153,13 @@ impl PlannedGroup {
     /// It is the chain of *folders*, not the classification: an html file is
     /// classified `code` and filed under `documents/html`.
     pub fn type_label(&self) -> String {
-        match &self.extension {
-            Some(extension) => format!("{}/{extension}", self.class_folder),
-            None => self.class_folder.clone(),
+        match (&self.class_folder, &self.extension) {
+            (Some(folder), Some(extension)) => format!("{folder}/{extension}"),
+            (Some(folder), None) => folder.clone(),
+            (None, Some(extension)) => extension.clone(),
+            // Nothing types these files: they go flat into the kind root, and the
+            // report says so rather than inventing a name for them.
+            (None, None) => "unclassified".to_string(),
         }
     }
 
@@ -398,7 +403,10 @@ fn plan_into_existing(destination: &DestinationBase, members: Vec<Member>) -> Re
             continue;
         }
         if !base.is_dir() {
-            missing.insert(base, member.category.class_folder());
+            missing.insert(
+                base,
+                member.category.class_folder().unwrap_or("unclassified"),
+            );
             continue;
         }
         let extension = member.extension.clone();
@@ -419,7 +427,7 @@ fn plan_into_existing(destination: &DestinationBase, members: Vec<Member>) -> Re
         let batch = plan_batch_claiming(&members, &directory, false, &mut claimed)?;
         groups.push(PlannedGroup {
             kind: category.class_name().map(str::to_string),
-            class_folder: category.class_folder().to_string(),
+            class_folder: category.class_folder().map(str::to_string),
             extension,
             name: None,
             source: NameSource::Fallback,
@@ -564,41 +572,43 @@ fn plan_folders(
     let mut planned = Vec::with_capacity(prepared.groups.len());
     for ((group, named), base) in prepared.groups.iter().zip(named).zip(&prepared.bases) {
         // The type chain is class folder then extension: `R/images/png`, or
-        // `R/documents` for an html file, whose classification is `code`.
+        // `R/documents` for an html file, whose classification is `code`. A
+        // group nothing types has no chain at all and goes into the root.
         let type_folder = type_folder(group, base);
         let type_word = group.type_name();
         // In place there is no type root to explain the kind, so a semantic
         // name is created directly under the scanned directory (#26); the type
         // folder is only used when the name carries nothing more than the type.
-        let parent = if in_place {
-            base.clone()
-        } else {
-            type_folder.clone()
+        let parent = match (&type_folder, in_place) {
+            (Some(folder), false) => folder.clone(),
+            _ => base.clone(),
         };
         // Two groups in different parents cannot collide with each other, so the
         // names taken this run are tracked per parent.
-        let name = unique_name(
-            &parent,
-            &chosen_name(group, &named),
-            distinguishing_token(group, &named),
-            taken.entry(parent.clone()).or_default(),
-        );
+        let name = chosen_name(group, &named).map(|name| {
+            unique_name(
+                &parent,
+                &name,
+                distinguishing_token(group, &named),
+                taken.entry(parent.clone()).or_default(),
+            )
+        });
         // Rule 5: a folder named after the type says nothing the type root does
         // not, so the members land flat in the type folder instead. In place
         // there is no type root, so the folder is the grouping and is always
-        // created.
-        let creates = in_place || !is_type_name(&name, type_word);
-        let directory = if creates {
-            parent.join(&name)
-        } else {
-            type_folder
+        // created. A group with no name at all lands flat in its kind root.
+        let folder =
+            name.filter(|name| in_place || type_word.is_none_or(|word| !is_type_name(name, word)));
+        let directory = match &folder {
+            Some(name) => parent.join(name),
+            None => type_folder.clone().unwrap_or_else(|| base.clone()),
         };
         let batch = plan_batch_claiming(&group.members, &directory, true, &mut claimed)?;
         planned.push(PlannedGroup {
             kind: group.class_name().map(str::to_string),
-            class_folder: group.class_folder().to_string(),
+            class_folder: group.class_folder().map(str::to_string),
             extension: group.extension.clone(),
-            name: creates.then_some(name),
+            name: folder,
             source: named.source,
             candidates: group.candidate_names(),
             members: group.members.clone(),
@@ -611,26 +621,24 @@ fn plan_folders(
 }
 
 /// The type folder a group's files belong in: the class folder, then the
-/// extension (`R/images/png`, `R/documents/html`, `R/documents`).
-fn type_folder(group: &Group, base: &Path) -> PathBuf {
-    let folder = base.join(group.class_folder());
-    match &group.extension {
+/// extension (`R/images/png`, `R/documents/html`, `R/documents`). `None` when
+/// nothing types the group, which files it flat in the kind root.
+fn type_folder(group: &Group, base: &Path) -> Option<PathBuf> {
+    let folder = base.join(group.class_folder()?);
+    Some(match &group.extension {
         Some(extension) => folder.join(extension),
         None => folder,
-    }
+    })
 }
 
 /// The name a group was given: the namer's, or the group's own first candidate
-/// (the type name) when the namer had nothing to say.
-fn chosen_name(group: &Group, named: &naming::NamedGroup) -> String {
+/// (the type name) when the namer had nothing to say. `None` when neither
+/// offers one, which leaves the group with no folder of its own.
+fn chosen_name(group: &Group, named: &naming::NamedGroup) -> Option<String> {
     if !named.name.is_empty() {
-        return named.name.clone();
+        return Some(named.name.clone());
     }
-    group
-        .candidate_names()
-        .first()
-        .cloned()
-        .unwrap_or_else(|| group.type_name().to_string())
+    group.candidate_names().first().cloned()
 }
 
 /// The token a fallback name may be disambiguated with (`images-screenshot`).
@@ -685,14 +693,23 @@ fn kind_root(destination: &DestinationBase, category: Category) -> Result<PathBu
             Some(path) => absolute(&path),
             None => Err(anyhow!(
                 "no standard folder for {} on this platform; pass --create-dir or --to <base>",
-                category.class_folder()
+                category.class_folder().unwrap_or("unclassified")
             )),
         },
     }
 }
 
 /// Rule 2-3: the deepest type folder that already exists, or the kind root.
-fn existing_destination(base: &Path, class_folder: &str, extension: Option<&str>) -> PathBuf {
+fn existing_destination(
+    base: &Path,
+    class_folder: Option<&str>,
+    extension: Option<&str>,
+) -> PathBuf {
+    let Some(class_folder) = class_folder else {
+        // Nothing types these files, so there is no chain to walk: the kind
+        // root is the destination, and the file goes flat into it.
+        return base.to_path_buf();
+    };
     let class_folder = base.join(class_folder);
     if let Some(extension) = extension {
         let extension_folder = class_folder.join(extension);
@@ -1003,7 +1020,7 @@ mod tests {
         assert_eq!(group.name.as_deref(), Some("at-screenshot"));
         // The type chain is class folder then extension (issue #28).
         assert_eq!(group.kind.as_deref(), Some("images"));
-        assert_eq!(group.class_folder, "images");
+        assert_eq!(group.class_folder.as_deref(), Some("images"));
         assert_eq!(group.extension.as_deref(), Some("png"));
         assert_eq!(group.directory, base.join("images/png/at-screenshot"));
         assert_eq!(

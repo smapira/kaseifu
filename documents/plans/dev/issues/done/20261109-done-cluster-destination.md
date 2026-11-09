@@ -24,16 +24,18 @@ because filing into `~/Pictures/images` repeats the parent every run and queues
   file into the OS standard folder for its type, at the deepest folder of its type
   chain that already exists (`R/<class>/<extension>`, then `R/<class>`, then `R`),
   and never into the scanned directory.
-- **The extension is the type.** A kind the platform table does not name
-  (`html`, `sh`, `psd`, `ttf`, `opml`, `smmx`, `yml`, no extension) is a document
-  by destination, and its extension is the folder under `documents`; the
-  `code` / `data` / `misc` folders were removed. The same chain applies to the
-  kinds the table knows (`images/png`, `videos/mp4`), which is what the owner
-  asked for.
+- **The extension is the type.** For a kind the platform table does not name
+  (`html`, `sh`, `csv`) the extension is the folder under `documents`, and the
+  `code` / `data` / `misc` folders were removed. A kind nothing names at all
+  (`psd`, `ttf`, `webloc`, no extension) gets no folder either: it is not turned
+  into a `misc` bucket and no `documents` level is added, so the file goes flat
+  into the OS standard folder. The same chain applies to the kinds the table
+  knows (`images/png`, `videos/mp4`), which is what the owner asked for.
 - **Classification and destination stay separate.** `class_name()` keeps
   `code` / `data` and is `null` for a file nothing names (reported as `kind`),
-  `class_folder()` gives the folder (`documents`, always); one value would lose
-  the classification as soon as a folder name is reused.
+  `class_folder()` gives the folder (`documents` for html) and is `null` when
+  there is no folder to name; one value would lose the classification as soon as
+  a folder name is reused.
 - A standard folder that does not exist is an error naming every missing root and
   `--create-dir`, with nothing moved.
 - A name already taken at the destination is refused for that file only; the rest

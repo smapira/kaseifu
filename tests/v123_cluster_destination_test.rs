@@ -265,6 +265,63 @@ fn v123_the_type_folder_is_used_when_it_already_exists() {
 }
 
 #[test]
+fn v123_a_kind_nothing_types_is_filed_flat_in_the_standard_folder() {
+    let root = sandbox("unclassified");
+    let home = standard_home(&root);
+    let dir = root.join("misc");
+    std::fs::create_dir_all(&dir).expect("misc");
+    for name in ["noto-a.ttf", "noto-b.ttf", "docs-notes-1", "docs-notes-2"] {
+        std::fs::write(dir.join(name), b"x").expect("file");
+    }
+    // The level an unclassified kind must not be filed into, even though it exists.
+    std::fs::create_dir_all(home.join("Documents/documents")).expect("Documents/documents");
+    let before = directories_under(&home);
+
+    let output = run(
+        &home,
+        &["cluster", &dir.to_string_lossy(), "--format", "json"],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr_of(&output));
+    let json = json_of(&output);
+    let groups = json["cluster"]["groups"].as_array().expect("groups");
+    assert_eq!(groups.len(), 2, "one group per type: {json}");
+    for group in groups {
+        assert!(group["kind"].is_null(), "nothing classifies it: {group}");
+        assert!(
+            group["class_folder"].is_null(),
+            "no `documents` level is invented: {group}"
+        );
+        assert_eq!(
+            directory_of(group),
+            home.join("Documents"),
+            "the kind root is the destination: {group}"
+        );
+    }
+    assert_eq!(
+        directories_under(&home),
+        before,
+        "a dry run created a folder"
+    );
+
+    let text = stdout_of(&run(&home, &["cluster", &dir.to_string_lossy()]));
+    assert!(
+        text.contains(&format!(
+            "ttf -> {} (2 files",
+            home.join("Documents").display()
+        )),
+        "{text}"
+    );
+
+    let execute = run(&home, &["cluster", &dir.to_string_lossy(), "--execute"]);
+    assert!(execute.status.success(), "stderr: {}", stderr_of(&execute));
+    assert!(home.join("Documents/noto-a.ttf").is_file());
+    assert!(home.join("Documents/docs-notes-1").is_file());
+    assert!(!home.join("Documents/documents/noto-a.ttf").exists());
+    assert_eq!(entries(&dir), Vec::<String>::new());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn v123_the_default_execute_and_undo_put_the_files_back() {
     let root = sandbox("defaults-execute");
     let home = standard_home(&root);

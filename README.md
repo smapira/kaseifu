@@ -274,13 +274,16 @@ kaseifu cluster ~/Desktop/misc --create-dir --in-place          # folders inside
 ```
 
 `~/Pictures` for images, `~/Documents` for documents, `~/Downloads` for archives,
-`~/Movies` for video, `~/Music` for audio. A type the table does not name (html,
-sh, psd, ttf, csv, ...) is a document by destination, and **its extension is the
-type** that says what it is - there is no `code` or `misc` folder. (The
-classification still knows an html file is code; that is `kind` in the JSON, and
-it is not the folder.) A kind whose standard folder does not exist is an error
-that names the path and asks for `--create-dir`; nothing moves. A file that
-already sits under its standard folder is left where it is and listed as
+`~/Movies` for video, `~/Music` for audio. A type the table does not name (psd,
+ttf, webloc, an extension I do not know, a file with no extension) is not turned
+into a `misc` bucket or filed under a `documents` level nobody asked for: it has
+no type folder, and the file goes **flat into its standard folder**
+(`~/Documents/noto-a.ttf`). Its extension is still what names a group, and an
+html or sh file is documented by its extension under `documents`
+(`~/Documents/documents/html/instagram`) even though the JSON `kind` calls it
+`code`. A kind whose standard folder does not exist is an error that names the
+path and asks for `--create-dir`; nothing moves. A file that already sits under
+its standard folder is left where it is and listed as
 `already in the destination`.
 
 A type is a chain: the class, then the extension. A run with no flags files into
@@ -295,8 +298,10 @@ and its files move in. A group whose name is the type name lands flat in the
 type folder (`~/Movies/videos/mp4/clip.mp4`) instead, because a folder called
 `mp4` inside `.../mp4` adds nothing - with the default `--name-source type` that
 is every group, so `--name-source auto` is what gives the folders a name of their
-own. Files with no extension have no extension level and stay in their class
-folder (`~/Documents/documents`). `--to <base>` replaces the standard folder with
+own. A folder (`--include-folders`) has no extension level and stays in its class
+folder (`~/Documents/documents`), and a file nothing types at all has no class
+folder either and is filed flat in its standard folder.
+`--to <base>` replaces the standard folder with
 one directory, and `--in-place` replaces it with the scanned directory for a
 folder reorganised in place; the two cannot be combined. Every created level is
 removed again by `undo --batch`.

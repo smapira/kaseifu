@@ -120,10 +120,12 @@ and then removes the source, so a failure leaves the source whole.
 `kaseifu cluster <dir> [--execute]` files the files that sit directly in one
 directory into the OS folder for their type and creates nothing: `~/Pictures`
 (images), `~/Documents` (documents), `~/Downloads` (archives), `~/Movies`
-(video), `~/Music` (audio), with `~/Documents` for a type the table does not
-name - and there the extension is the type (`documents/html`, `documents/sh`),
-not a `code` or `misc` bucket. A type is a chain of folder then extension, and a
-run files into the deepest folder of it that already exists
+(video), `~/Music` (audio). A kind the table does not name (`psd`, `ttf`, no
+extension) gets no folder of its own - not a `misc` bucket and not a `documents`
+level - and goes flat into its standard folder; a kind whose extension says more
+than its class keeps the extension as the type (`documents/html`,
+`documents/sh`), not a `code` bucket. A type is a chain of folder then extension,
+and a run files into the deepest folder of it that already exists
 (`~/Pictures/images/png`, else `~/Pictures/images`, else `~/Pictures`). A
 standard folder that does not exist is an error naming the path and
 `--create-dir`; a name already taken at the destination is skipped for that file
@@ -132,7 +134,8 @@ does not become a tree of folders on the Desktop. `--create-dir` builds the
 folders instead: each group under its type chain
 (`~/Pictures/images/png/at-screenshot`, `~/Documents/documents/html/instagram`),
 or flat in the type folder (`~/Movies/videos/mp4/clip.mp4`) when the name is the
-type name. `--to <base>` replaces the
+type name; a group with no type folder is built as `<standard folder>/<name>`
+when it has a name of its own. `--to <base>` replaces the
 standard folder with one directory, `--in-place` replaces it with <dir>, and
 `--min` / `--max` / `--by-type` / `--name-source` / `--in-place` all require
 `--create-dir`. A leading `~` in <dir> or `--to` means the home directory, so a
