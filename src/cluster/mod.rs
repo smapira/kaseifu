@@ -31,7 +31,7 @@ pub mod naming;
 
 use crate::discovery::is_excluded_destination;
 use crate::operations::relocate;
-use crate::platform::user_dirs::UserDirKind;
+use crate::platform::user_dirs::{UserDirKind, expand_home};
 use crate::storage::history::OperationHistory;
 use anyhow::{Context, Result, anyhow};
 use grouping::{Category, Group, Member};
@@ -70,7 +70,7 @@ impl DestinationBase {
     /// (or the undo) happens to start in.
     fn resolved(&self) -> Result<Self> {
         match self {
-            Self::Directory(base) => Ok(Self::Directory(absolute(base)?)),
+            Self::Directory(base) => Ok(Self::Directory(absolute(&expand_home(base))?)),
             other => Ok(other.clone()),
         }
     }
@@ -317,6 +317,11 @@ pub async fn plan(
     options: &ClusterOptions,
     namer: &dyn GroupNamer,
 ) -> Result<ClusterPlan> {
+    // `~/Archive` and `~/Desktop/misc` are what a human types; a quoted one
+    // arrives unexpanded, so the shorthand is resolved here rather than left
+    // to the shell that did not run.
+    let root = expand_home(root);
+    let root = root.as_path();
     let collected = collect(root, options)?;
     if collected.members.is_empty() {
         return Err(anyhow!(

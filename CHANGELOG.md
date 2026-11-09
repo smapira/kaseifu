@@ -45,6 +45,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `undo --batch` removes the levels the run created, including a standard folder
   that did not exist before.
 
+### Fixed
+
+- **A quoted `~` in a `cluster` path is the home directory.** `cluster "~/Desktop/misc"`
+  and `cluster --to "~/Archive"` reached the process unexpanded when the shell
+  did not expand them (the safe spelling inside a script), so the run either
+  failed on a folder named `~` or planned `./~/Archive/images` - a folder `~`
+  beside the caller. A leading `~` and `~/...` are now resolved to the home
+  directory for `<dir>` and `--to`; every other shape (a relative path, `/tmp/~/x`,
+  `~someone/x`) is taken literally. `move --to` and `organize --to` still take the
+  path as written.
+
 ## [0.15.0] - 2026-11-08
 
 ### Added

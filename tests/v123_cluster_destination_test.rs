@@ -665,6 +665,45 @@ fn v123_an_excluded_base_is_refused_before_anything_moves() {
 }
 
 #[test]
+fn v123_a_quoted_tilde_in_a_path_is_the_home_directory() {
+    let root = sandbox("tilde");
+    let home = standard_home(&root);
+    // The scanned folder has to sit under the home the path is expanded into.
+    let dir = home.join("misc");
+    std::fs::create_dir_all(&dir).expect("misc");
+    for name in ["cbd-chart-1.png", "cbd-chart-2.png"] {
+        std::fs::write(dir.join(name), b"x").expect("file");
+    }
+
+    // The shell expands an unquoted `~`; a script that quotes it is the case
+    // worth pinning, because the path reaches the process as `~/misc`.
+    let output = run(
+        &home,
+        &[
+            "cluster",
+            "~/misc",
+            "--to",
+            "~/Archive",
+            "--create-dir",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr_of(&output));
+    let json = json_of(&output);
+    assert_eq!(
+        json["cluster"]["directory"],
+        serde_json::json!(home.join("misc").to_string_lossy())
+    );
+    assert_eq!(
+        directory_of(group_of(&json, "images")),
+        home.join("Archive/images")
+    );
+    assert!(!home.join("~").exists(), "a folder named `~` was created");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn v123_to_and_in_place_are_mutually_exclusive() {
     let root = sandbox("exclusive");
     let home = standard_home(&root);

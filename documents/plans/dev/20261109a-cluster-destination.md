@@ -100,13 +100,21 @@ JSON adds `creates_directory`, per group `kind` and `destination_base`, and keep
 
 ## Verification
 
-- `tests/v123_cluster_destination_test.rs` (13 tests): the default creates no
+- `tests/v123_cluster_destination_test.rs` (14 tests): the default creates no
   directory and files into the standard folders, the existing type folder wins, a
   missing root names the flag, `--create-dir` builds and `undo` removes, a
   collision leaves one file, `--to` with and without `--create-dir`, `--in-place`,
-  the `requires` flags, an excluded base, and the flag conflict.
+  the `requires` flags, an excluded base, a quoted `~`, and the flag conflict.
 - `src/cluster/mod.rs` unit tests: rules 4 and 5 with a fixed namer, plus the
   kind-root table.
+- `src/platform/user_dirs.rs` unit test: `expand_home` expands only `~` and `~/...`.
 - `tests/v122_cluster_test.rs` keeps the #26 rules under `--create-dir
   --in-place`.
+
+## Paths
+
+A leading `~` in `<dir>` and `--to` is resolved with
+`platform::user_dirs::expand_home` before the plan, because a quoted path in a
+script arrives unexpanded and would otherwise plan `./~/Archive`. Only `~` and
+`~/...` are expanded; `~user` needs an account lookup the shell owns.
 

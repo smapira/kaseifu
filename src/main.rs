@@ -231,7 +231,8 @@ enum Commands {
     /// With `--in-place` the `create directory:` row is left out and the
     /// destination is written relative to <dir> (<name>/<file name>).
     Cluster {
-        /// Directory whose files are grouped (it is not moved).
+        /// Directory whose files are grouped (it is not moved); a leading `~`
+        /// means the home directory, even when the shell did not expand it.
         dir: PathBuf,
         /// Create the named folders and file the files into them. Without it a
         /// run only files into directories that already exist.
@@ -262,7 +263,8 @@ enum Commands {
         )]
         name_source: ClusterNameSource,
         /// File every group under this directory instead of the OS standard
-        /// folder for its kind (the parent is created with --create-dir).
+        /// folder for its kind (the parent is created with --create-dir); a
+        /// leading `~` means the home directory.
         #[arg(long = "to", value_name = "BASE")]
         to: Option<PathBuf>,
         /// Create the folders inside <dir> instead of in the OS standard

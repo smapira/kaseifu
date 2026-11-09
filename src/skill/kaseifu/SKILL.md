@@ -131,7 +131,9 @@ builds the folders instead: each group under the type folder
 (`~/Movies/videos`) when the name is the type name. `--to <base>` replaces the
 standard folder with one directory, `--in-place` replaces it with <dir>, and
 `--min` / `--max` / `--by-type` / `--name-source` / `--in-place` all require
-`--create-dir`. A file already under its standard folder is listed as
+`--create-dir`. A leading `~` in <dir> or `--to` means the home directory, so a
+quoted `--to "~/Archive"` does not create a folder named `~` (`~someone` is
+left to the shell). A file already under its standard folder is listed as
 `already in the destination`. Membership is decided without a model (type and
 name tokens); the model only picks a folder name among deterministic candidates,
 and the command works with no key and no network (the type-based name is used).

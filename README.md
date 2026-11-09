@@ -295,6 +295,10 @@ one directory, and `--in-place` replaces it with the scanned directory for a
 folder reorganised in place; the two cannot be combined. Every created level is
 removed again by `undo --batch`.
 
+A leading `~` in `<dir>` or `--to` means the home directory, so a quoted path in
+a script (`--to "~/Archive"`) does not create a folder named `~` next to you.
+Only `~` and `~/...` are expanded; `~someone/...` is left to the shell.
+
 A name already taken at the destination is skipped for that file only, with the
 reason on its own `!` line: the rest of the run still happens, and the exit code
 says something was left behind.

@@ -10,7 +10,7 @@
 //! Every function here is a pure lookup plus one `exists` call; nothing creates,
 //! moves or inspects a file.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A standard user directory, as the operating system defines it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -90,6 +90,32 @@ pub fn existing_dirs(
         .collect()
 }
 
+/// Expand a leading `~` to the home directory, the way a shell does.
+///
+/// Only the bare `~` and `~/...` forms are expanded. `~user` needs an account
+/// lookup this CLI does not do, and an unquoted `~` never reaches the process
+/// anyway - the shell has already expanded it. Anything else (a relative path,
+/// an absolute path with a `~` deeper down, a platform with no home) is
+/// returned unchanged, so a caller can apply this to every path argument
+/// without changing what the path means.
+///
+/// The expansion exists because a *quoted* path (`--to "~/Archive"`, the safe
+/// spelling inside a script) is otherwise taken literally, and a folder named
+/// `~` appears under the directory the run started in.
+pub fn expand_home(path: &Path) -> PathBuf {
+    let mut components = path.components();
+    let Some(std::path::Component::Normal(first)) = components.next() else {
+        return path.to_path_buf();
+    };
+    if first != "~" {
+        return path.to_path_buf();
+    }
+    let Some(home) = dirs::home_dir() else {
+        return path.to_path_buf();
+    };
+    components.fold(home, |expanded, part| expanded.join(part))
+}
+
 /// The standard directory that answers for one file extension.
 ///
 /// The table is deliberately small and explicit: it maps the types this tool
@@ -147,6 +173,26 @@ mod tests {
         // Files come *from* the Desktop; nothing belongs there by type.
         for extension in ["pdf", "png", "mp4", "mp3", "zip"] {
             assert_ne!(kind_for_extension(extension), Some(UserDirKind::Desktop));
+        }
+    }
+
+    #[test]
+    fn a_leading_tilde_becomes_the_home_directory() {
+        let home = dirs::home_dir().expect("a home to expand into");
+        assert_eq!(expand_home(Path::new("~")), home);
+        assert_eq!(expand_home(Path::new("~/Archive")), home.join("Archive"));
+        assert_eq!(
+            expand_home(Path::new("~/Pictures/images")),
+            home.join("Pictures").join("images")
+        );
+        // Only a leading `~` is the home shorthand; every other shape is a
+        // path that means exactly what it says.
+        for unchanged in ["Archive", "./~/Archive", "/tmp/~/Archive", "~user/Archive"] {
+            assert_eq!(
+                expand_home(Path::new(unchanged)),
+                Path::new(unchanged),
+                "must stay as written: {unchanged}"
+            );
         }
     }
 
