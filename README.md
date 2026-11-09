@@ -275,11 +275,13 @@ kaseifu cluster ~/Desktop/misc --create-dir --in-place          # folders inside
 
 `~/Pictures` for images, `~/Documents` for documents, `~/Downloads` for archives,
 `~/Movies` for video, `~/Music` for audio. A type the table does not name (html,
-sh, psd, ttf, csv, ...) is a document, and **its extension is the type** that
-says what it is - there is no `code` or `misc` bucket. A kind whose standard
-folder does not exist is an error that names the path and asks for
-`--create-dir`; nothing moves. A file that already sits under its standard
-folder is left where it is and listed as `already in the destination`.
+sh, psd, ttf, csv, ...) is a document by destination, and **its extension is the
+type** that says what it is - there is no `code` or `misc` folder. (The
+classification still knows an html file is code; that is `kind` in the JSON, and
+it is not the folder.) A kind whose standard folder does not exist is an error
+that names the path and asks for `--create-dir`; nothing moves. A file that
+already sits under its standard folder is left where it is and listed as
+`already in the destination`.
 
 A type is a chain: the class, then the extension. A run with no flags files into
 the deepest folder of that chain that already exists - `~/Pictures/images/png`,
@@ -369,7 +371,9 @@ cluster: at-screenshot (9 files, 12.4 MB)
 `--format json` prints one `cluster` object: `directory`, `destination_mode`
 (`default_dirs` / `to` / `in_place`), `destination_base` (the `--to` directory,
 `null` otherwise), `creates_directory`, `executed`, `groups` (`name` - `null`
-when no folder is created - `kind`, `extension`, `directory`, `destination_base`,
+when no folder is created - `kind` (what the files are, `null` when nothing
+names them), `class_folder` (the folder under the type root), `extension`,
+`directory`, `destination_base`,
 `create_directories`, `file_count`, `bytes`, `examples`, `candidates`,
 `name_source`, `assignments`), `ungrouped`, `already_in_destination`,
 `directories_left_alone`, `skipped`, `naming` and, after `--execute`, `batch_id`.

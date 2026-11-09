@@ -21,11 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`cluster` files each kind into its OS standard folder and creates nothing.**
   Issues #27 and #28. A run files every file into `~/Pictures` (images),
   `~/Documents` (documents), `~/Downloads` (archives), `~/Movies` (video),
-  `~/Music` (audio). A type the platform table does not name is a document, and
-  **the extension is the type** that says what it is (`documents/html`,
-  `documents/sh`); the `code`, `data` and `misc` pseudo-folders are gone. A type
-  is a chain of class then extension, and a run with no flags files into the
-  deepest folder of it that already exists (`~/Pictures/images/png`, else
+  `~/Music` (audio). A type the platform table does not name is a document by
+  destination, and **the extension is the type** that says what it is
+  (`documents/html`, `documents/sh`); the `code`, `data` and `misc` folders are
+  gone. The classification is still reported as `kind` (`code` for an html file,
+  `null` when nothing names it) and the folder as `class_folder` (`documents`),
+  so the two are never confused.
+  A type is a chain of folder then extension, and a run with no flags files into
+  the deepest folder of it that already exists (`~/Pictures/images/png`, else
   `~/Pictures/images`, else `~/Pictures`), so it never turns a Desktop folder
   into a tree of folders. A standard
   folder that does not exist is an error naming the path and `--create-dir`,
@@ -38,8 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<class>/<extension> -> <absolute folder> (<count> files, <size>)` blocks;
   `--format json` keeps every existing key and adds `creates_directory`,
   `destination_mode` (`default_dirs` / `to` / `in_place`), `destination_base`,
-  per group `name` (`null` when no folder is made), `kind`, `extension`,
-  `destination_base` and `create_directories`, and `already_in_destination`.
+  per group `name` (`null` when no folder is made), `kind`, `class_folder`,
+  `extension`, `destination_base` and `create_directories`, and
+  `already_in_destination`.
   `tests/v123_cluster_destination_test.rs`.
 
 ### Added

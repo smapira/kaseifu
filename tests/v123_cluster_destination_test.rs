@@ -102,19 +102,21 @@ fn entries(dir: &Path) -> Vec<String> {
 }
 
 /// The groups of one report, keyed by the type word.
-/// The group whose type chain is `label` (`images/png`, or `documents` when its
-/// files have no extension).
+/// The group whose folder chain is `label` (`images/png`, `documents/html`, or
+/// `documents` when its files have no extension).
 fn group_of<'a>(json: &'a serde_json::Value, label: &str) -> &'a serde_json::Value {
-    let (kind, extension) = match label.split_once('/') {
-        Some((kind, extension)) => (kind, Some(extension)),
+    let (class_folder, extension) = match label.split_once('/') {
+        Some((class_folder, extension)) => (class_folder, Some(extension)),
         None => (label, None),
     };
     json["cluster"]["groups"]
         .as_array()
         .expect("groups")
         .iter()
-        .find(|group| group["kind"] == kind && group["extension"].as_str() == extension)
-        .unwrap_or_else(|| panic!("no group of type {label}"))
+        .find(|group| {
+            group["class_folder"] == class_folder && group["extension"].as_str() == extension
+        })
+        .unwrap_or_else(|| panic!("no group filed under {label}"))
 }
 
 fn directory_of(group: &serde_json::Value) -> PathBuf {

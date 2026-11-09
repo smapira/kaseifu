@@ -39,12 +39,19 @@ R is the kind root, T the class, E the extension, S a name chosen for the group.
 - **R** = the OS standard folder: `~/Pictures` (images), `~/Documents`
   (documents), `~/Downloads` (archives), `~/Movies` (video), `~/Music` (audio).
   The scanned directory is never a destination.
-- **T** = the class: `images` / `documents` / `archives` / `videos` / `audio`.
-  Kinds without a class of their own are documents, which is also where they go.
+- **T** = the class folder: `images` / `documents` / `archives` / `videos` /
+  `audio`. Kinds without a class of their own are documents by destination, so
+  `T` is `documents` for them.
 - **E** = the extension (`html`, `sh`, `psd`, `ttf`, `png`, `mp4`, ...). The
   extension *is* the type for a kind the platform table does not name, so the
-  `code` / `data` / `misc` pseudo-folders are gone (owner decision, 2026-11-09).
-  A file with no extension has no E and stays in `R/T`.
+  `code` / `data` / `misc` folders are gone (owner decision, 2026-11-09). A file
+  with no extension has no E and stays in `R/T`.
+- **The classification is not the destination.** `Category::class_name()`
+  keeps saying what a file is (`code` for html) and is `None` for a file nothing
+  names; `Category::class_folder()` says where it goes and always answers
+  (`documents`). The report's `kind` is the first, `class_folder` the second.
+  Collapsing them would lose the classification the moment a folder name is
+  reused (`include-folders`, a new type, an extensionless file).
 - **Nothing is created without `--create-dir`.** A kind root that does not exist
   is an error naming every missing root and the flag that would create it, with
   nothing moved.
@@ -104,10 +111,10 @@ images/png -> /Users/me/Pictures (34 files, 25.7 MB)
 documents/html -> /Users/me/Documents/documents/html (11 files, 3.2 MB)
 ```
 
-JSON adds `creates_directory`, per group `kind` and `extension` (and
-`destination_base`), and keeps `name` (now `null` when no folder is created),
-`destination_mode`, `destination_base`, `create_directories` and
-`already_in_destination`.
+JSON adds `creates_directory`, per group `kind` (classification), `class_folder`
+(the folder under the type root) and `extension`, and keeps `name` (now `null`
+when no folder is created), `destination_mode`, `destination_base`,
+`create_directories` and `already_in_destination`.
 
 ## Verification
 

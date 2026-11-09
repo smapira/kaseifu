@@ -61,20 +61,42 @@ impl Category {
         }
     }
 
-    /// The class a file of this kind belongs to: the folder under the kind root
-    /// (`images`, `documents`, ...).
+    /// The classification of a file of this kind: what it *is* (`images`,
+    /// `code`, ...), and `None` when nothing names it.
     ///
-    /// Kinds without a class of their own are documents by destination -
-    /// `~/Documents` - and their extension is the type that says more than
-    /// `code` or `misc` ever did (issue #28).
-    pub fn class_name(self) -> &'static str {
-        match self {
+    /// This is not the folder a file goes to - see [`Category::class_folder`].
+    /// Keeping the two apart means a report still says "this is code" for an
+    /// html file while the file is filed under `documents` (issue #28).
+    pub fn class_name(self) -> Option<&'static str> {
+        Some(match self {
             Self::Image => "images",
             Self::Document => "documents",
             Self::Archive => "archives",
+            Self::Data => "data",
+            Self::Code => "code",
             Self::Audio => "audio",
             Self::Video => "videos",
-            Self::Data | Self::Code | Self::Folder | Self::Other => "documents",
+            Self::Folder => "folders",
+            // `Other` is the catch-all for a file nothing knows. Inventing a
+            // word for it would put a bucket nobody asked for in the report.
+            Self::Other => return None,
+        })
+    }
+
+    /// The folder under the kind root that holds this kind (`images`,
+    /// `documents`, ...).
+    ///
+    /// Every kind has one: the destination does not depend on knowing what a
+    /// file is. Kinds without a class of their own go to `~/Documents`, and their
+    /// extension is the type that says more about them than `code` or `misc`
+    /// ever did (issue #28).
+    pub fn class_folder(self) -> &'static str {
+        match self {
+            Self::Image => "images",
+            Self::Archive => "archives",
+            Self::Audio => "audio",
+            Self::Video => "videos",
+            Self::Document | Self::Data | Self::Code | Self::Folder | Self::Other => "documents",
         }
     }
 }
@@ -163,19 +185,24 @@ impl Group {
         }
     }
 
-    /// The class this group belongs to (`images`, `documents`, ...).
-    pub fn class_name(&self) -> &'static str {
+    /// The classification of this group (`images`, `code`, ...), and `None`
+    /// when nothing names it.
+    pub fn class_name(&self) -> Option<&'static str> {
         self.category.class_name()
     }
 
-    /// The word this group's type is named by: its extension, or the class when
-    /// its files have none. This is the first candidate name and the folder the
-    /// group is filed flat into when nothing better is chosen (rule 5 of issue
-    /// #28).
+    /// The folder this group's files are filed under, inside the kind root
+    /// (`images`, `documents`, ...).
+    pub fn class_folder(&self) -> &'static str {
+        self.category.class_folder()
+    }
+
+    /// The word this group's type is named by: its extension, or the class
+    /// folder when its files have none.
     pub fn type_name(&self) -> &str {
         match &self.extension {
             Some(extension) => extension,
-            None => self.class_name(),
+            None => self.class_folder(),
         }
     }
 
@@ -466,15 +493,21 @@ mod tests {
     fn an_extension_and_a_class_are_separate_types() {
         let members = vec![member("cbd-a.html"), member("cbd-b.html")];
         let (groups, _) = group(members, 2, 20, false);
-        assert_eq!(groups[0].class_name(), "documents");
+        // The classification says what the files are; the folder says where they
+        // go. They are different questions (issue #28).
+        assert_eq!(groups[0].class_name(), Some("code"));
+        assert_eq!(groups[0].class_folder(), "documents");
         assert_eq!(groups[0].type_name(), "html");
     }
 
     #[test]
-    fn files_without_an_extension_are_named_by_their_class() {
+    fn files_without_an_extension_are_named_by_their_folder() {
         let members = vec![member("cbd-a"), member("cbd-b")];
         let (groups, _) = group(members, 2, 20, false);
+        // Nothing classifies them, and they still have a folder to go to.
+        assert_eq!(groups[0].class_name(), None);
         assert_eq!(groups[0].extension, None);
+        assert_eq!(groups[0].class_folder(), "documents");
         assert_eq!(groups[0].type_name(), "documents");
     }
 }

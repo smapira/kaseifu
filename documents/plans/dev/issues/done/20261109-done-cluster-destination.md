@@ -25,10 +25,15 @@ because filing into `~/Pictures/images` repeats the parent every run and queues
   chain that already exists (`R/<class>/<extension>`, then `R/<class>`, then `R`),
   and never into the scanned directory.
 - **The extension is the type.** A kind the platform table does not name
-  (`html`, `sh`, `psd`, `ttf`, `opml`, `smmx`, `yml`, no extension) is a document,
-  and its extension is the folder under `documents`; the `code` / `data` / `misc`
-  pseudo-folders were removed. The same chain applies to the kinds the table knows
-  (`images/png`, `videos/mp4`), which is what the owner asked for.
+  (`html`, `sh`, `psd`, `ttf`, `opml`, `smmx`, `yml`, no extension) is a document
+  by destination, and its extension is the folder under `documents`; the
+  `code` / `data` / `misc` folders were removed. The same chain applies to the
+  kinds the table knows (`images/png`, `videos/mp4`), which is what the owner
+  asked for.
+- **Classification and destination stay separate.** `class_name()` keeps
+  `code` / `data` and is `null` for a file nothing names (reported as `kind`),
+  `class_folder()` gives the folder (`documents`, always); one value would lose
+  the classification as soon as a folder name is reused.
 - A standard folder that does not exist is an error naming every missing root and
   `--create-dir`, with nothing moved.
 - A name already taken at the destination is refused for that file only; the rest

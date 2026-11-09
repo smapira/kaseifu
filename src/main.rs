@@ -1699,12 +1699,8 @@ async fn handle_cluster(
         note = Some(reason.clone());
     }
     for group in &plan.groups {
-        relocate::dry_run_batch(&group.batch).map_err(|error| {
-            anyhow::anyhow!(
-                "cannot file '{}': {error}",
-                group.name.as_deref().unwrap_or(&group.kind)
-            )
-        })?;
+        relocate::dry_run_batch(&group.batch)
+            .map_err(|error| anyhow::anyhow!("cannot file '{}': {error}", group.type_label()))?;
     }
 
     if !actually_move {
@@ -2074,6 +2070,7 @@ fn cluster_report_document(
             serde_json::json!({
                 "name": group.name,
                 "kind": group.kind,
+                "class_folder": group.class_folder,
                 "extension": group.extension,
                 "directory": destination_directory.to_string_lossy(),
                 "destination_base": group.base.to_string_lossy(),
