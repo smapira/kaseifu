@@ -118,3 +118,7 @@ A leading `~` in `<dir>` and `--to` is resolved with
 script arrives unexpanded and would otherwise plan `./~/Archive`. Only `~` and
 `~/...` are expanded; `~user` needs an account lookup the shell owns.
 
+`move --to` and `organize --to` keep taking the path as written: expanding it
+there would change what an existing script's argument means, so the two commands
+are a follow-up rather than a silent part of this change.
+

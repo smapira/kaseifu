@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Breaking for `cluster`.** Up to v0.15.0 a run created `<dir>/<name>/`
+> folders inside the scanned directory; it now files each file into the OS
+> standard folder for its type and creates nothing. Scripts that read the plan
+> or relied on those folders must pass `--create-dir --in-place` (the old shape)
+> or `--create-dir` (named folders under `~/Pictures/<type>/`). The text report,
+> the destinations and the JSON `groups[].name` (`null` when no folder is made)
+> change with it, and `--min`, `--max`, `--by-type`, `--name-source` and
+> `--in-place` are now refused without `--create-dir`.
+
 ### Changed
 
 - **`cluster` files each kind into its OS standard folder and creates nothing.**
@@ -54,7 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   beside the caller. A leading `~` and `~/...` are now resolved to the home
   directory for `<dir>` and `--to`; every other shape (a relative path, `/tmp/~/x`,
   `~someone/x`) is taken literally. `move --to` and `organize --to` still take the
-  path as written.
+  path as written, so a quoted `~` is expanded for `cluster` only; the helper is
+  shared, and widening it to those two commands is a follow-up rather than a
+  silent difference in meaning.
 
 ## [0.15.0] - 2026-11-08
 

@@ -297,7 +297,9 @@ removed again by `undo --batch`.
 
 A leading `~` in `<dir>` or `--to` means the home directory, so a quoted path in
 a script (`--to "~/Archive"`) does not create a folder named `~` next to you.
-Only `~` and `~/...` are expanded; `~someone/...` is left to the shell.
+Only `~` and `~/...` are expanded; `~someone/...` is left to the shell. This
+covers `cluster` only - `move --to` and `organize --to` take the path as written,
+because expanding it there would change what an existing script's argument means.
 
 A name already taken at the destination is skipped for that file only, with the
 reason on its own `!` line: the rest of the run still happens, and the exit code
