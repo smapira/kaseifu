@@ -1922,7 +1922,7 @@ fn cluster_group_lines(
             Some(name) => lines.push(format!("cluster: {name} ({counts})")),
             None => lines.push(format!(
                 "{} -> {} ({counts})",
-                group.kind,
+                group.type_label(),
                 group.directory.display()
             )),
         }
@@ -2074,6 +2074,7 @@ fn cluster_report_document(
             serde_json::json!({
                 "name": group.name,
                 "kind": group.kind,
+                "extension": group.extension,
                 "directory": destination_directory.to_string_lossy(),
                 "destination_base": group.base.to_string_lossy(),
                 "create_directories": paths(&group.batch.missing_directories),

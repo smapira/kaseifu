@@ -61,18 +61,20 @@ impl Category {
         }
     }
 
-    /// The type-based directory name used when the model cannot name a group.
-    pub fn default_name(self) -> &'static str {
+    /// The class a file of this kind belongs to: the folder under the kind root
+    /// (`images`, `documents`, ...).
+    ///
+    /// Kinds without a class of their own are documents by destination -
+    /// `~/Documents` - and their extension is the type that says more than
+    /// `code` or `misc` ever did (issue #28).
+    pub fn class_name(self) -> &'static str {
         match self {
             Self::Image => "images",
             Self::Document => "documents",
             Self::Archive => "archives",
-            Self::Data => "data",
-            Self::Code => "code",
             Self::Audio => "audio",
             Self::Video => "videos",
-            Self::Folder => "folders",
-            Self::Other => "misc",
+            Self::Data | Self::Code | Self::Folder | Self::Other => "documents",
         }
     }
 }
@@ -84,6 +86,10 @@ pub struct Member {
     /// The entry name (file name, or folder name).
     pub name: String,
     pub category: Category,
+    /// The extension that types this entry (lowercased), or `None` when the name
+    /// has none. The extension is the type a group is filed under, so `html` and
+    /// `sh` files are separate types instead of one `code` bucket (issue #28).
+    pub extension: Option<String>,
     pub bytes: u64,
     pub tokens: BTreeSet<String>,
 }
@@ -96,15 +102,20 @@ impl Member {
         if metadata.file_type().is_symlink() {
             return None;
         }
+        if !metadata.is_dir() && !metadata.is_file() {
+            return None;
+        }
+        // A folder's dotted name is not an extension, so folders carry none.
+        let extension = metadata.is_file().then(|| {
+            path.extension()
+                .map(|extension| extension.to_string_lossy().to_lowercase())
+                .filter(|extension| !extension.is_empty())
+        });
+        let extension = extension.flatten();
         let category = if metadata.is_dir() {
             Category::Folder
-        } else if metadata.is_file() {
-            let extension = path
-                .extension()
-                .map(|extension| extension.to_string_lossy().to_string());
-            Category::from_extension(extension.as_deref())
         } else {
-            return None;
+            Category::from_extension(extension.as_deref())
         };
         let name = path.file_name()?.to_string_lossy().to_string();
         Some(Self {
@@ -112,6 +123,7 @@ impl Member {
             tokens: tokens_of(path),
             name,
             category,
+            extension,
             bytes: if metadata.is_file() {
                 metadata.len()
             } else {
@@ -125,6 +137,9 @@ impl Member {
 #[derive(Debug, Clone)]
 pub struct Group {
     pub category: Category,
+    /// The extension this group is typed by, or `None` when its members have
+    /// none.
+    pub extension: Option<String>,
     pub members: Vec<Member>,
     /// Tokens shared by at least two members, most common first.
     pub shared_tokens: Vec<String>,
@@ -134,12 +149,33 @@ impl Group {
     /// A group of members of one kind; the shared tokens are recomputed here so
     /// a caller that removed members (a destination filter) never carries a
     /// token no surviving member has.
-    pub fn from_members(category: Category, members: Vec<Member>) -> Self {
+    pub fn from_members(
+        category: Category,
+        extension: Option<String>,
+        members: Vec<Member>,
+    ) -> Self {
         let shared_tokens = shared_tokens(&members);
         Self {
             category,
+            extension,
             members,
             shared_tokens,
+        }
+    }
+
+    /// The class this group belongs to (`images`, `documents`, ...).
+    pub fn class_name(&self) -> &'static str {
+        self.category.class_name()
+    }
+
+    /// The word this group's type is named by: its extension, or the class when
+    /// its files have none. This is the first candidate name and the folder the
+    /// group is filed flat into when nothing better is chosen (rule 5 of issue
+    /// #28).
+    pub fn type_name(&self) -> &str {
+        match &self.extension {
+            Some(extension) => extension,
+            None => self.class_name(),
         }
     }
 
@@ -147,7 +183,8 @@ impl Group {
     /// fallback when no model is available).
     pub fn candidate_names(&self) -> Vec<String> {
         let mut candidates = Vec::new();
-        push_name(&mut candidates, self.category.default_name());
+        let type_name = self.type_name();
+        push_name(&mut candidates, type_name);
         if let Some(token) = self.shared_tokens.first() {
             push_name(&mut candidates, token);
         }
@@ -158,12 +195,9 @@ impl Group {
             );
         }
         if let Some(token) = self.shared_tokens.first()
-            && token != self.category.default_name()
+            && token != type_name
         {
-            push_name(
-                &mut candidates,
-                &format!("{token}-{}", self.category.as_str()),
-            );
+            push_name(&mut candidates, &format!("{token}-{type_name}"));
         }
         candidates
     }
@@ -250,14 +284,19 @@ pub fn group(
     max: usize,
     by_type: bool,
 ) -> (Vec<Group>, Vec<Member>) {
-    let mut by_category: BTreeMap<Category, Vec<Member>> = BTreeMap::new();
+    // One type is one class *and* one extension: `~/Documents/documents/html`
+    // and `.../sh` are different types (issue #28).
+    let mut typed: BTreeMap<(Category, Option<String>), Vec<Member>> = BTreeMap::new();
     for member in members {
-        by_category.entry(member.category).or_default().push(member);
+        typed
+            .entry((member.category, member.extension.clone()))
+            .or_default()
+            .push(member);
     }
 
     let mut groups = Vec::new();
     let mut ungrouped = Vec::new();
-    for (category, mut members) in by_category {
+    for ((category, extension), mut members) in typed {
         members.sort_by(|left, right| left.name.cmp(&right.name));
         // `--by-type` skips the token pass: every file of one type is one group.
         let buckets = if by_type {
@@ -270,7 +309,12 @@ pub fn group(
                 ungrouped.extend(bucket);
                 continue;
             }
-            groups.extend(split_into_chunks(category, bucket, max.max(min.max(1))));
+            groups.extend(split_into_chunks(
+                category,
+                &extension,
+                bucket,
+                max.max(min.max(1)),
+            ));
         }
     }
     (groups, ungrouped)
@@ -309,15 +353,20 @@ fn similar(left: &Member, right: &Member) -> bool {
 const SIMILARITY_THRESHOLD: f64 = 0.33;
 
 /// Split a bucket into chunks of at most `max`, balanced over the chunks.
-fn split_into_chunks(category: Category, members: Vec<Member>, max: usize) -> Vec<Group> {
+fn split_into_chunks(
+    category: Category,
+    extension: &Option<String>,
+    members: Vec<Member>,
+    max: usize,
+) -> Vec<Group> {
     if members.len() <= max {
-        return vec![Group::from_members(category, members)];
+        return vec![Group::from_members(category, extension.clone(), members)];
     }
     let chunks = members.len().div_ceil(max);
     let size = members.len().div_ceil(chunks);
     members
         .chunks(size)
-        .map(|chunk| Group::from_members(category, chunk.to_vec()))
+        .map(|chunk| Group::from_members(category, extension.clone(), chunk.to_vec()))
         .collect()
 }
 
@@ -326,12 +375,14 @@ mod tests {
     use super::*;
 
     fn member(name: &str) -> Member {
+        let extension = name
+            .rsplit_once('.')
+            .map(|(_, extension)| extension.to_lowercase());
         Member {
             source: PathBuf::from(name),
             name: name.to_string(),
-            category: Category::from_extension(
-                name.rsplit_once('.').map(|(_, extension)| extension),
-            ),
+            category: Category::from_extension(extension.as_deref()),
+            extension,
             bytes: 1,
             tokens: tokens_of(Path::new(name)),
         }
@@ -404,9 +455,26 @@ mod tests {
         assert_eq!(sanitize_name("CBD/Charts: 2026"), "cbd-charts-2026");
         assert_eq!(sanitize_name("..."), "");
         let members = vec![member("cbd-chart-a.png"), member("cbd-charts-b.png")];
-        let group = Group::from_members(Category::Image, members);
+        let group = Group::from_members(Category::Image, Some("png".to_string()), members);
         let names = group.candidate_names();
-        assert_eq!(names[0], "images");
+        // The extension is the type, so the type name is `png`, not `images`.
+        assert_eq!(names[0], "png");
         assert!(names.contains(&"cbd".to_string()));
+    }
+
+    #[test]
+    fn an_extension_and_a_class_are_separate_types() {
+        let members = vec![member("cbd-a.html"), member("cbd-b.html")];
+        let (groups, _) = group(members, 2, 20, false);
+        assert_eq!(groups[0].class_name(), "documents");
+        assert_eq!(groups[0].type_name(), "html");
+    }
+
+    #[test]
+    fn files_without_an_extension_are_named_by_their_class() {
+        let members = vec![member("cbd-a"), member("cbd-b")];
+        let (groups, _) = group(members, 2, 20, false);
+        assert_eq!(groups[0].extension, None);
+        assert_eq!(groups[0].type_name(), "documents");
     }
 }

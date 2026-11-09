@@ -118,17 +118,21 @@ leaves it empty. A move across volumes copies, verifies (file count and bytes)
 and then removes the source, so a failure leaves the source whole.
 
 `kaseifu cluster <dir> [--execute]` files the files that sit directly in one
-directory into the OS folder for their type - `~/Pictures` (images),
-`~/Documents` (documents), `~/Downloads` (archives), `~/Movies` (video),
-`~/Music` (audio), and `~/Documents` for a type the table does not name - and
-creates nothing. A type folder that already exists (`~/Pictures/images`) takes
-the files instead; a standard folder that does not exist is an error naming the
-path and `--create-dir`; a name already taken at the destination is skipped for
-that file only and reported. The scanned directory is not a destination: a
-Desktop folder does not become a tree of folders on the Desktop. `--create-dir`
-builds the folders instead: each group under the type folder
-(`~/Pictures/images/at-screenshot`), or flat in the type folder
-(`~/Movies/videos`) when the name is the type name. `--to <base>` replaces the
+directory into the OS folder for their type and creates nothing: `~/Pictures`
+(images), `~/Documents` (documents), `~/Downloads` (archives), `~/Movies`
+(video), `~/Music` (audio), with `~/Documents` for a type the table does not
+name - and there the extension is the type (`documents/html`, `documents/sh`),
+not a `code` or `misc` bucket. A type is a chain of class then extension, and a
+run files into the deepest folder of it that already exists
+(`~/Pictures/images/png`, else `~/Pictures/images`, else `~/Pictures`). A
+standard folder that does not exist is an error naming the path and
+`--create-dir`; a name already taken at the destination is skipped for that file
+only and reported. The scanned directory is not a destination: a Desktop folder
+does not become a tree of folders on the Desktop. `--create-dir` builds the
+folders instead: each group under its type chain
+(`~/Pictures/images/png/at-screenshot`, `~/Documents/documents/html/instagram`),
+or flat in the type folder (`~/Movies/videos/mp4/clip.mp4`) when the name is the
+type name. `--to <base>` replaces the
 standard folder with one directory, `--in-place` replaces it with <dir>, and
 `--min` / `--max` / `--by-type` / `--name-source` / `--in-place` all require
 `--create-dir`. A leading `~` in <dir> or `--to` means the home directory, so a

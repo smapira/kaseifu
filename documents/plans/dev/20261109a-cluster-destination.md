@@ -26,22 +26,25 @@ kaseifu cluster <dir> [--create-dir] [--min N] [--max N] [--include-folders]
                     [--to <base> | --in-place] [--execute]
 ```
 
-R is the kind root, T the type folder, S a name chosen for the group.
+R is the kind root, T the class, E the extension, S a name chosen for the group.
 
 | # | Situation | Destination |
 |---|---|---|
 | 1 | Default, a matching directory under R | not implemented yet (see below) |
-| 2 | Default, the type folder `R/T` exists | `R/T` |
+| 2 | Default, a type folder already exists | the deepest of `R/T/E`, `R/T`, `R` |
 | 3 | Default, neither | `R` directly - **nothing is created** |
-| 4 | `--create-dir`, a semantic name | `R/T/S` |
-| 5 | `--create-dir`, the name is the type name | `R/T` (flat) |
+| 4 | `--create-dir`, a semantic name | `R/T/E/S` |
+| 5 | `--create-dir`, the name is the type name | `R/T/E` (flat) |
 
 - **R** = the OS standard folder: `~/Pictures` (images), `~/Documents`
-  (documents), `~/Downloads` (archives), `~/Movies` (video), `~/Music` (audio),
-  and `~/Documents` for a type the table does not name (csv, no extension, code,
-  folders). The scanned directory is never a destination.
-- **T** = `Category::default_name()`: `images` / `documents` / `archives` /
-  `videos` / `audio` / `code` / `data` / `folders` / `misc`.
+  (documents), `~/Downloads` (archives), `~/Movies` (video), `~/Music` (audio).
+  The scanned directory is never a destination.
+- **T** = the class: `images` / `documents` / `archives` / `videos` / `audio`.
+  Kinds without a class of their own are documents, which is also where they go.
+- **E** = the extension (`html`, `sh`, `psd`, `ttf`, `png`, `mp4`, ...). The
+  extension *is* the type for a kind the platform table does not name, so the
+  `code` / `data` / `misc` pseudo-folders are gone (owner decision, 2026-11-09).
+  A file with no extension has no E and stays in `R/T`.
 - **Nothing is created without `--create-dir`.** A kind root that does not exist
   is an error naming every missing root and the flag that would create it, with
   nothing moved.
@@ -50,16 +53,19 @@ R is the kind root, T the type folder, S a name chosen for the group.
 - **A name already taken at the destination** is refused for that file only and
   reported on its own `!` line; the rest of the batch runs and the exit code
   says something was left behind.
-- **`--create-dir`** groups and names as #26 did, then creates the folder under
-  the type folder. `--min` / `--max` / `--by-type` / `--name-source` /
-  `--in-place` require it (clap `requires`): none of them means anything when
-  nothing is created.
+- **`--create-dir`** groups and names as #26 did - one group per class *and*
+  extension, because that is the type - then creates the folder under the type
+  folder. `--min` / `--max` / `--by-type` / `--name-source` / `--in-place`
+  require it (clap `requires`): none of them means anything when nothing is
+  created.
 - **Parent creation and undo** ride on #25's journal: every created level is a
-  row, so `undo --batch` removes `R`, `R/T` and `R/T/S` once they are empty.
+  row, so `undo --batch` removes `R`, `R/T`, `R/T/E` and `R/T/E/S` once they are
+  empty.
 - **`--to <base>`** replaces R with one directory (rule 2 applies to it too), and
   **`--in-place`** replaces R with the scanned directory; the two are mutually
-exclusive. `--in-place` keeps the #26 shape (`<dir>/S`) because the scanned
-  folder is not a type root, so there is no T layer.
+  exclusive. `--in-place` keeps the #26 shape (`<dir>/<type>`), where the type is
+  the extension or the class: the scanned folder is not a kind root, so there is
+  no class level.
 
 ## Decisions
 
@@ -72,14 +78,17 @@ exclusive. `--in-place` keeps the #26 shape (`<dir>/S`) because the scanned
   settled and do not depend on the answer, so they ship now and rule 1 lands
   when the owner picks the line (recorded recommendation: `R`'s direct children
   only, score >= 0.6, plus an exact-name or same-directory-parent reason).
-- **`~/Documents` for a type the table does not name**, as the issue states. The
-  alternative (leave those files in place with a reason) is recorded as open in
-  #28; if the owner picks it, `default_dir` returns no root for `Data` / `Code` /
-  `Folder` / `Other` and the file is reported instead of filed.
-- **Rule 5 exists so a type name is never a folder.** The measured
-  `Movies/videos` came from a group whose only candidate was the type name;
-  `videos (2)` is the same non-information with a number. In place the type
-  folder is the grouping, so rule 5 does not apply there.
+- **`~/Documents` for a type the table does not name**, with the extension as its
+  type. The owner's decision removed the `code` / `data` / `misc` buckets: a
+  `documents/html` folder says what the files are, and the same structure then
+  applies to the kinds the table does know (`images/png`, `videos/mp4`). Whether
+  those files should be moved at all - or left in place with a reason - is still
+  open in #28; the alternative is `default_dir` returning no root for
+  `Data` / `Code` / `Folder` / `Other`, which reports them instead of filing.
+- **Rule 5 exists so a type name is never a folder.** `Movies/videos` and
+  `Pictures/images/png/at-screenshot` came from a group whose only candidate was
+  the type name; `<type> (2)` is the same non-information with a number. In place
+  the type folder is the grouping, so rule 5 does not apply there.
 - **The default output changed**, so this is a minor release (v0.16.0), not a
   patch: `cluster` no longer creates anything by default.
 
@@ -89,14 +98,16 @@ Text, one block per destination:
 
 ```text
 destination: OS standard folders (no directory is created)
-images -> /Users/me/Pictures (34 files, 25.7 MB)
-1. /Users/me/Desktop/misc/IMG_8478.JPG -> /Users/me/Pictures/IMG_8478.JPG
-  ! refusing to overwrite /Users/me/Pictures/IMG_8479.JPG; nothing was changed
+images/png -> /Users/me/Pictures (34 files, 25.7 MB)
+1. /Users/me/Desktop/misc/IMG_8478.png -> /Users/me/Pictures/IMG_8478.png
+  ! refusing to overwrite /Users/me/Pictures/IMG_8479.png; nothing was changed
+documents/html -> /Users/me/Documents/documents/html (11 files, 3.2 MB)
 ```
 
-JSON adds `creates_directory`, per group `kind` and `destination_base`, and keeps
-`name` (now `null` when no folder is created), `destination_mode`,
-`destination_base`, `create_directories` and `already_in_destination`.
+JSON adds `creates_directory`, per group `kind` and `extension` (and
+`destination_base`), and keeps `name` (now `null` when no folder is created),
+`destination_mode`, `destination_base`, `create_directories` and
+`already_in_destination`.
 
 ## Verification
 

@@ -274,23 +274,27 @@ kaseifu cluster ~/Desktop/misc --create-dir --in-place          # folders inside
 ```
 
 `~/Pictures` for images, `~/Documents` for documents, `~/Downloads` for archives,
-`~/Movies` for video, `~/Music` for audio, and `~/Documents` for a type the table
-does not name (csv, a file with no extension, code). A kind whose standard folder
-does not exist is an error that names the path and asks for `--create-dir`;
-nothing moves. A file that already sits under its standard folder is left where
-it is and listed as `already in the destination`.
+`~/Movies` for video, `~/Music` for audio. A type the table does not name (html,
+sh, psd, ttf, csv, ...) is a document, and **its extension is the type** that
+says what it is - there is no `code` or `misc` bucket. A kind whose standard
+folder does not exist is an error that names the path and asks for
+`--create-dir`; nothing moves. A file that already sits under its standard
+folder is left where it is and listed as `already in the destination`.
 
-When the type folder already exists (`~/Pictures/images`), the files go there
-instead of into `~/Pictures`. Otherwise they land directly in the standard
-folder, so `~/Desktop/misc` never becomes a tree of folders on the Desktop - the
-point is to return scattered files to where they belong.
+A type is a chain: the class, then the extension. A run with no flags files into
+the deepest folder of that chain that already exists - `~/Pictures/images/png`,
+else `~/Pictures/images`, else `~/Pictures` - and creates nothing. So
+`~/Desktop/misc` never becomes a tree of folders on the Desktop, and a folder
+someone already made for those files is used.
 
-`--create-dir` builds the folders: each group is created under the type folder
-(`~/Pictures/images/at-screenshot`) and its files move in. A group whose name is
-the type name lands flat in the type folder (`~/Movies/videos`) instead, because
-a folder called `videos` inside `~/Movies` adds nothing - with the default
-`--name-source type` that is every group, so `--name-source auto` is what gives
-the folders a name of their own. `--to <base>` replaces the standard folder with
+`--create-dir` builds the folders: each group is created under its type chain
+(`~/Pictures/images/png/at-screenshot`, `~/Documents/documents/html/instagram`)
+and its files move in. A group whose name is the type name lands flat in the
+type folder (`~/Movies/videos/mp4/clip.mp4`) instead, because a folder called
+`mp4` inside `.../mp4` adds nothing - with the default `--name-source type` that
+is every group, so `--name-source auto` is what gives the folders a name of their
+own. Files with no extension have no extension level and stay in their class
+folder (`~/Documents/documents`). `--to <base>` replaces the standard folder with
 one directory, and `--in-place` replaces it with the scanned directory for a
 folder reorganised in place; the two cannot be combined. Every created level is
 removed again by `undo --batch`.
@@ -336,10 +340,12 @@ The text report is line-oriented and stable:
 
 ```text
 destination: OS standard folders (no directory is created)
-images -> /Users/me/Pictures (34 files, 25.7 MB)
-  examples: IMG_8478.JPG, IMG_8479.JPG
-1. /Users/me/Desktop/misc/IMG_8478.JPG -> /Users/me/Pictures/IMG_8478.JPG
-  ! refusing to overwrite /Users/me/Pictures/IMG_8479.JPG; nothing was changed
+images/png -> /Users/me/Pictures (34 files, 25.7 MB)
+  examples: IMG_8478.png, IMG_8479.png
+1. /Users/me/Desktop/misc/IMG_8478.png -> /Users/me/Pictures/IMG_8478.png
+  ! refusing to overwrite /Users/me/Pictures/IMG_8479.png; nothing was changed
+documents/html -> /Users/me/Documents/documents/html (11 files, 3.2 MB)
+  examples: instagram-a.html, instagram-b.html
 ungrouped: 2 files
   - /Users/me/Desktop/misc/README (left in place)
 already in the destination: 1 files
@@ -356,14 +362,14 @@ directory:` row `move` also prints:
 ```text
 cluster: at-screenshot (9 files, 12.4 MB)
   examples: at-1.png, at-2.png, at-3.png
-  create directory: /Users/me/Pictures/images/at-screenshot
-1. /Users/me/Desktop/misc/document/at-1.png -> /Users/me/Pictures/images/at-screenshot/at-1.png
+  create directory: /Users/me/Pictures/images/png/at-screenshot
+1. /Users/me/Desktop/misc/document/at-1.png -> /Users/me/Pictures/images/png/at-screenshot/at-1.png
 ```
 
 `--format json` prints one `cluster` object: `directory`, `destination_mode`
 (`default_dirs` / `to` / `in_place`), `destination_base` (the `--to` directory,
 `null` otherwise), `creates_directory`, `executed`, `groups` (`name` - `null`
-when no folder is created - `kind`, `directory`, `destination_base`,
+when no folder is created - `kind`, `extension`, `directory`, `destination_base`,
 `create_directories`, `file_count`, `bytes`, `examples`, `candidates`,
 `name_source`, `assignments`), `ungrouped`, `already_in_destination`,
 `directories_left_alone`, `skipped`, `naming` and, after `--execute`, `batch_id`.

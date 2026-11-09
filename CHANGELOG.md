@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > folders inside the scanned directory; it now files each file into the OS
 > standard folder for its type and creates nothing. Scripts that read the plan
 > or relied on those folders must pass `--create-dir --in-place` (the old shape)
-> or `--create-dir` (named folders under `~/Pictures/<type>/`). The text report,
-> the destinations and the JSON `groups[].name` (`null` when no folder is made)
+> or `--create-dir` (named folders under the type chain). The text report, the
+> destinations and the JSON `groups[].name` (`null` when no folder is made)
 > change with it, and `--min`, `--max`, `--by-type`, `--name-source` and
 > `--in-place` are now refused without `--create-dir`.
 
@@ -21,11 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`cluster` files each kind into its OS standard folder and creates nothing.**
   Issues #27 and #28. A run files every file into `~/Pictures` (images),
   `~/Documents` (documents), `~/Downloads` (archives), `~/Movies` (video),
-  `~/Music` (audio), and `~/Documents` for a type the table does not name (csv, a
-  file with no extension, code). When the type folder already exists
-  (`~/Pictures/images`) the files go there instead, because someone made that
-  folder for them. The scanned directory is never a destination: tidying a
-  Desktop folder no longer leaves a tree of folders on the Desktop. A standard
+  `~/Music` (audio). A type the platform table does not name is a document, and
+  **the extension is the type** that says what it is (`documents/html`,
+  `documents/sh`); the `code`, `data` and `misc` pseudo-folders are gone. A type
+  is a chain of class then extension, and a run with no flags files into the
+  deepest folder of it that already exists (`~/Pictures/images/png`, else
+  `~/Pictures/images`, else `~/Pictures`), so it never turns a Desktop folder
+  into a tree of folders. A standard
   folder that does not exist is an error naming the path and `--create-dir`,
   with nothing moved; a name already taken at the destination is skipped for
   that file only, reported on its own `!` line, and the exit code says something
@@ -33,26 +35,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already sits under its standard folder is listed as
   `already in the destination`. The text report leads with
   `destination: OS standard folders (no directory is created)` and uses
-  `<type> -> <absolute folder> (<count> files, <size>)` blocks; `--format json`
-  keeps every existing key and adds `creates_directory`, `destination_mode`
-  (`default_dirs` / `to` / `in_place`), `destination_base`, per group `name`
-  (`null` when no folder is made), `kind`, `destination_base` and
-  `create_directories`, and `already_in_destination`.
+  `<class>/<extension> -> <absolute folder> (<count> files, <size>)` blocks;
+  `--format json` keeps every existing key and adds `creates_directory`,
+  `destination_mode` (`default_dirs` / `to` / `in_place`), `destination_base`,
+  per group `name` (`null` when no folder is made), `kind`, `extension`,
+  `destination_base` and `create_directories`, and `already_in_destination`.
   `tests/v123_cluster_destination_test.rs`.
 
 ### Added
 
 - **`cluster --create-dir`, `--to <base>` and `--in-place`.** `--create-dir`
-  builds the folders: each group is created under the type folder
-  (`~/Pictures/images/at-screenshot`) and its files move in, while a group named
-  after its type lands flat in the type folder (`~/Movies/videos`) instead of
-  adding a folder that repeats the parent. `--to <base>` replaces the standard
-  folder with one directory (every created level still subject to the
-  never-a-destination rule), `--in-place` replaces it with the scanned directory,
-  and `--min`, `--max`, `--by-type`, `--name-source` and `--in-place` require
-  `--create-dir` because none of them means anything when nothing is created.
-  `undo --batch` removes the levels the run created, including a standard folder
-  that did not exist before.
+  builds the folders: each group is created under its type chain
+  (`~/Pictures/images/png/at-screenshot`) and its files move in, while a group
+  named after its type lands flat in the type folder
+  (`~/Movies/videos/mp4/clip.mp4`) instead of adding a folder that repeats the
+  parent. `--to <base>` replaces the standard folder with one directory (every
+  created level still subject to the never-a-destination rule), `--in-place`
+  replaces it with the scanned directory, and `--min`, `--max`, `--by-type`,
+  `--name-source` and `--in-place` require `--create-dir` because none of them
+  means anything when nothing is created. `undo --batch` removes the levels the
+  run created, including a standard folder that did not exist before.
 
 ### Fixed
 

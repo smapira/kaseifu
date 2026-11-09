@@ -121,8 +121,10 @@ impl Default for ClusterOptions {
 /// One destination directory and the members that go into it.
 #[derive(Debug, Clone)]
 pub struct PlannedGroup {
-    /// The type word this block is grouped by (`images`, `documents`, `code`).
+    /// The class this block belongs to (`images`, `documents`, ...).
     pub kind: String,
+    /// The extension that types this block, or `None` when its files have none.
+    pub extension: Option<String>,
     /// The folder this run creates, or `None` when the members go into a
     /// directory that already exists (rules 2-3) or the name is the type name
     /// itself (rule 5).
@@ -139,6 +141,15 @@ pub struct PlannedGroup {
 }
 
 impl PlannedGroup {
+    /// The type chain this block is filed under, without the root
+    /// (`images/png`, `documents/html`, `documents` when there is no extension).
+    pub fn type_label(&self) -> String {
+        match &self.extension {
+            Some(extension) => format!("{}/{extension}", self.kind),
+            None => self.kind.clone(),
+        }
+    }
+
     /// Bytes over the group's file members.
     pub fn bytes(&self) -> u64 {
         self.members.iter().map(|member| member.bytes).sum()
@@ -362,13 +373,15 @@ struct PlannedRun {
 
 /// Rules 2-3 (issue #28): file into directories that already exist.
 ///
-/// Nothing is grouped and nothing is created - a member goes to the type folder
-/// `<kind root>/<type>` when that folder exists, and to the kind root otherwise.
-/// A single file is worth filing, so `--min` has no say here. A kind root that
-/// does not exist stops the run before anything moves, naming every missing one
-/// so the caller sees the whole picture rather than one kind at a time.
+/// Nothing is grouped and nothing is created - a member goes to the deepest
+/// folder that already exists in its type chain (`R/<class>/<extension>`, then
+/// `R/<class>`, then `R`). A single file is worth filing, so `--min` has no say
+/// here. A kind root that does not exist stops the run before anything moves,
+/// naming every missing one so the caller sees the whole picture rather than one
+/// kind at a time.
 fn plan_into_existing(destination: &DestinationBase, members: Vec<Member>) -> Result<PlannedRun> {
-    let mut buckets: BTreeMap<(PathBuf, &'static str), Vec<Member>> = BTreeMap::new();
+    let mut buckets: BTreeMap<(PathBuf, &'static str, Option<String>), Vec<Member>> =
+        BTreeMap::new();
     let mut already_placed = Vec::new();
     let mut missing: BTreeMap<PathBuf, &'static str> = BTreeMap::new();
     for member in members {
@@ -378,12 +391,13 @@ fn plan_into_existing(destination: &DestinationBase, members: Vec<Member>) -> Re
             continue;
         }
         if !base.is_dir() {
-            missing.insert(base, member.category.default_name());
+            missing.insert(base, member.category.class_name());
             continue;
         }
-        let directory = existing_destination(&base, member.category);
+        let extension = member.extension.clone();
+        let directory = existing_destination(&base, member.category, extension.as_deref());
         buckets
-            .entry((directory, member.category.default_name()))
+            .entry((directory, member.category.class_name(), extension))
             .or_default()
             .push(member);
     }
@@ -393,10 +407,11 @@ fn plan_into_existing(destination: &DestinationBase, members: Vec<Member>) -> Re
 
     let mut claimed = BTreeSet::new();
     let mut groups = Vec::with_capacity(buckets.len());
-    for ((directory, kind), members) in buckets {
+    for ((directory, kind, extension), members) in buckets {
         let batch = plan_batch_claiming(&members, &directory, false, &mut claimed)?;
         groups.push(PlannedGroup {
             kind: kind.to_string(),
+            extension,
             name: None,
             source: NameSource::Fallback,
             candidates: Vec::new(),
@@ -488,7 +503,11 @@ fn prepare_groups(
             ungrouped.extend(members);
             continue;
         }
-        kept.push(Group::from_members(group.category, members));
+        kept.push(Group::from_members(
+            group.category,
+            group.extension,
+            members,
+        ));
         bases.push(base);
     }
     Ok(Prepared {
@@ -535,18 +554,24 @@ fn plan_folders(
     let mut claimed = BTreeSet::new();
     let mut planned = Vec::with_capacity(prepared.groups.len());
     for ((group, named), base) in prepared.groups.iter().zip(named).zip(&prepared.bases) {
-        let type_folder = group.category.default_name();
-        let type_parent = base.join(type_folder);
+        // The type chain is class then extension: `R/images/png`, or `R/documents`
+        // for files without an extension.
+        let class_folder = base.join(group.class_name());
+        let type_folder = match &group.extension {
+            Some(extension) => class_folder.join(extension),
+            None => class_folder,
+        };
+        let type_word = group.type_name();
         // In place there is no type root to explain the kind, so a semantic
         // name is created directly under the scanned directory (#26); the type
         // folder is only used when the name carries nothing more than the type.
-        let parent = if in_place { base } else { &type_parent };
+        let parent = if in_place { base } else { &type_folder };
         let base_name = if named.name.is_empty() {
             group
                 .candidate_names()
                 .first()
                 .cloned()
-                .unwrap_or_else(|| type_folder.to_string())
+                .unwrap_or_else(|| type_word.to_string())
         } else {
             named.name
         };
@@ -567,15 +592,16 @@ fn plan_folders(
         // does not, so the members land flat in the type folder instead. In
         // place there is no type root, so the folder is the grouping and is
         // always created.
-        let creates_folder = in_place || !is_type_name(&name, type_folder);
+        let creates_folder = in_place || !is_type_name(&name, type_word);
         let directory = if creates_folder {
             parent.join(&name)
         } else {
-            type_parent
+            type_folder
         };
         let batch = plan_batch_claiming(&group.members, &directory, true, &mut claimed)?;
         planned.push(PlannedGroup {
-            kind: type_folder.to_string(),
+            kind: group.class_name().to_string(),
+            extension: group.extension.clone(),
             name: creates_folder.then_some(name),
             source: named.source,
             candidates: group.candidate_names(),
@@ -632,17 +658,23 @@ fn kind_root(destination: &DestinationBase, category: Category) -> Result<PathBu
             Some(path) => absolute(&path),
             None => Err(anyhow!(
                 "no standard folder for {} on this platform; pass --create-dir or --to <base>",
-                category.default_name()
+                category.class_name()
             )),
         },
     }
 }
 
-/// Rule 2-3: the type folder when it already exists, the kind root otherwise.
-fn existing_destination(base: &Path, category: Category) -> PathBuf {
-    let type_folder = base.join(category.default_name());
-    if type_folder.is_dir() {
-        type_folder
+/// Rule 2-3: the deepest type folder that already exists, or the kind root.
+fn existing_destination(base: &Path, category: Category, extension: Option<&str>) -> PathBuf {
+    let class_folder = base.join(category.class_name());
+    if let Some(extension) = extension {
+        let extension_folder = class_folder.join(extension);
+        if extension_folder.is_dir() {
+            return extension_folder;
+        }
+    }
+    if class_folder.is_dir() {
+        class_folder
     } else {
         base.to_path_buf()
     }
@@ -942,15 +974,19 @@ mod tests {
             .expect("plan");
         let group = &plan.groups[0];
         assert_eq!(group.name.as_deref(), Some("at-screenshot"));
-        assert_eq!(group.directory, base.join("images/at-screenshot"));
+        // The type chain is class then extension (issue #28).
+        assert_eq!(group.kind, "images");
+        assert_eq!(group.extension.as_deref(), Some("png"));
+        assert_eq!(group.directory, base.join("images/png/at-screenshot"));
         assert_eq!(
             group.batch.missing_directories,
             vec![
                 base.clone(),
                 base.join("images"),
-                base.join("images/at-screenshot")
+                base.join("images/png"),
+                base.join("images/png/at-screenshot")
             ],
-            "the kind root, the type folder and the named folder"
+            "the kind root, the class, the extension and the named folder"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -965,15 +1001,14 @@ mod tests {
             ..ClusterOptions::default()
         };
 
-        let plan = plan(&dir, &options, &FixedName("images"))
-            .await
-            .expect("plan");
+        // `png` is the type name here, so nothing is created under it.
+        let plan = plan(&dir, &options, &FixedName("png")).await.expect("plan");
         let group = &plan.groups[0];
         assert_eq!(
             group.name, None,
             "a folder named after the type is not created"
         );
-        assert_eq!(group.directory, base.join("images"));
+        assert_eq!(group.directory, base.join("images/png"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -981,7 +1016,7 @@ mod tests {
     async fn the_default_files_into_the_existing_type_folder_without_creating() {
         let (root, dir) = creation_sandbox("existing");
         let base = root.join("Pictures");
-        std::fs::create_dir_all(base.join("images")).expect("Pictures/images");
+        std::fs::create_dir_all(base.join("images/png")).expect("Pictures/images/png");
         let options = ClusterOptions {
             destination: DestinationBase::Directory(base.clone()),
             ..ClusterOptions::default()
@@ -992,7 +1027,7 @@ mod tests {
             .expect("plan");
         let group = &plan.groups[0];
         assert_eq!(group.name, None);
-        assert_eq!(group.directory, base.join("images"));
+        assert_eq!(group.directory, base.join("images/png"));
         assert!(group.batch.missing_directories.is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }

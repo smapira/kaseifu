@@ -218,8 +218,10 @@ fn v122_a_pre_existing_directory_is_never_reused() {
     let root = sandbox("collision");
     let home = home_of(&root);
     let dir = fixture(&root);
-    std::fs::create_dir_all(dir.join("images")).expect("images");
-    std::fs::write(dir.join("images/own.png"), b"own").expect("own");
+    // The type of a png file is `png` now, so that is the folder a run would
+    // collide with (issue #28 kept the extension as the type).
+    std::fs::create_dir_all(dir.join("png")).expect("png");
+    std::fs::write(dir.join("png/own.png"), b"own").expect("own");
 
     // `--in-place` (added by `cluster_layout`) is the layout where a folder in
     // the scanned directory is a destination at all (issue #27 moved the default
@@ -236,9 +238,9 @@ fn v122_a_pre_existing_directory_is_never_reused() {
         .iter()
         .map(|group| group["name"].as_str().expect("name").to_string())
         .collect();
-    assert!(!names.contains(&"images".to_string()), "{names:?}");
+    assert!(!names.contains(&"png".to_string()), "{names:?}");
     assert!(
-        names.iter().any(|name| name.starts_with("images-")),
+        names.iter().any(|name| name.starts_with("png-")),
         "the group takes a distinguishing name instead of the taken one: {names:?}"
     );
     let left: Vec<String> = json["cluster"]["directories_left_alone"]
@@ -247,9 +249,9 @@ fn v122_a_pre_existing_directory_is_never_reused() {
         .iter()
         .map(|path| path.as_str().expect("path").to_string())
         .collect();
-    assert!(left.iter().any(|path| path.ends_with("images")), "{left:?}");
+    assert!(left.iter().any(|path| path.ends_with("png")), "{left:?}");
     assert!(
-        dir.join("images/own.png").is_file(),
+        dir.join("png/own.png").is_file(),
         "the existing folder is untouched"
     );
     let _ = std::fs::remove_dir_all(&root);
@@ -299,7 +301,7 @@ fn v122_by_type_covers_dissimilar_files_of_one_kind() {
         .iter()
         .map(|group| group["name"].as_str().expect("name").to_string())
         .collect();
-    assert_eq!(names, vec!["images", "documents"], "{names:?}");
+    assert_eq!(names, vec!["png", "md"], "{names:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -327,7 +329,7 @@ fn v122_the_default_name_source_is_type() {
     let json: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("json");
     assert_eq!(json["cluster"]["naming"]["mode"], "type");
     assert_eq!(json["cluster"]["naming"]["jev_groups"], 0);
-    assert_eq!(json["cluster"]["groups"][0]["name"], "images");
+    assert_eq!(json["cluster"]["groups"][0]["name"], "png");
     assert!(
         server.request().is_empty(),
         "the model was called by default"
@@ -366,7 +368,7 @@ fn v122_name_source_type_never_calls_the_model() {
     let json: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("json");
     assert_eq!(json["cluster"]["naming"]["mode"], "type");
     assert_eq!(json["cluster"]["naming"]["jev_groups"], 0);
-    assert_eq!(json["cluster"]["groups"][0]["name"], "images");
+    assert_eq!(json["cluster"]["groups"][0]["name"], "png");
     assert!(server.request().is_empty(), "the model was called");
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -424,12 +426,12 @@ fn v122_two_groups_of_one_type_get_distinguishing_names() {
         .map(|group| group["name"].as_str().expect("name").to_string())
         .collect();
 
-    assert!(names.contains(&"images".to_string()), "{names:?}");
+    assert!(names.contains(&"png".to_string()), "{names:?}");
     assert!(
-        names.iter().any(|name| name.starts_with("images-")),
-        "the second group names its own token instead of images (2): {names:?}"
+        names.iter().any(|name| name.starts_with("png-")),
+        "the second group names its own token instead of png (2): {names:?}"
     );
-    assert!(!names.contains(&"images (2)".to_string()), "{names:?}");
+    assert!(!names.contains(&"png (2)".to_string()), "{names:?}");
     let _ = std::fs::remove_dir_all(&root);
 }
 

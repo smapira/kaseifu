@@ -21,17 +21,22 @@ because filing into `~/Pictures/images` repeats the parent every run and queues
 ## Decision
 
 - **A run creates nothing unless `--create-dir` is given.** The default files each
-  file into the OS standard folder for its type, or into the type folder
-  (`~/Pictures/images`) when that already exists, and never into the scanned
-  directory.
+  file into the OS standard folder for its type, at the deepest folder of its type
+  chain that already exists (`R/<class>/<extension>`, then `R/<class>`, then `R`),
+  and never into the scanned directory.
+- **The extension is the type.** A kind the platform table does not name
+  (`html`, `sh`, `psd`, `ttf`, `opml`, `smmx`, `yml`, no extension) is a document,
+  and its extension is the folder under `documents`; the `code` / `data` / `misc`
+  pseudo-folders were removed. The same chain applies to the kinds the table knows
+  (`images/png`, `videos/mp4`), which is what the owner asked for.
 - A standard folder that does not exist is an error naming every missing root and
   `--create-dir`, with nothing moved.
 - A name already taken at the destination is refused for that file only; the rest
   of the batch runs and the exit code says something was left behind.
-- `--create-dir` builds the folders under the type folder (`R/T/S`), and a name
-  that is only the type name lands flat in `R/T` (`~/Movies/videos`) - a folder
-  called `videos` inside `~/Movies` adds nothing. In place the type folder is the
-  grouping, so the folder is always created there.
+- `--create-dir` builds the folders under the type chain (`R/T/E/S`), and a name
+  that is only the type name lands flat in `R/T/E` - a folder called `mp4` inside
+  `.../mp4` adds nothing. In place the type folder is the grouping, so the folder
+  is always created there.
 - `--min` / `--max` / `--by-type` / `--name-source` / `--in-place` require
   `--create-dir`: they only describe a folder that is being made.
 - A file already under its kind root is reported as
