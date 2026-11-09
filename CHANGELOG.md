@@ -21,19 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`cluster` files each kind into its OS standard folder and creates nothing.**
   Issues #27 and #28. A run files every file into `~/Pictures` (images),
   `~/Documents` (documents), `~/Downloads` (archives), `~/Movies` (video),
-  `~/Music` (audio). **The extension is the type** that says what a file is
-  when the platform table names its kind (`Documents/documents/html`,
-  `Documents/documents/csv`), so the `code`, `data` and `misc` folders are gone.
-  A file the table does not name (`psd`, `ttf`, `webloc`, no extension) gets no
-  folder at all: it is filed flat in its standard folder (`~/Documents/x.ttf`),
-  and no `misc` bucket or `documents` level is invented for it. `xls` and `xlsx`
-  are documents like the rest of the spreadsheet family, so a workbook is no
-  longer an unknown type. What a file *is*
-  stays separate from where it goes: `kind` says `code` for an html file and is
-  `null` when nothing names it, `class_folder` says `documents` (and is `null`
-  for a kind with no folder). A chain of folder then extension is what a run
-  with no flags walks, filing into the deepest folder of it that already exists
-  (`~/Pictures/images/png`, else `~/Pictures/images`, else `~/Pictures`), so it
+  `~/Music` (audio). **The type folder is the extension** and nothing else
+  (`~/Pictures/png`, `~/Documents/html`, `~/Documents/xlsx`): the standard folder
+  already says what the files are, so the `images` / `documents` / `code` / `data`
+  / `misc` levels are gone. A file the table does not name (`psd`, `ttf`,
+  `webloc`, no extension) gets no folder at all: it is filed flat in its standard
+  folder (`~/Documents/x.ttf`), and no `misc` bucket is invented for it. `xls`
+  and `xlsx` are documents like the rest of the spreadsheet family, so a workbook
+  is no longer an unknown type. What a file *is* stays in `kind` (`code` for an
+  html file, `null` when nothing names it), and it no longer needs a folder of
+  its own. A run with no flags files into the extension folder when it already
+  exists (`~/Pictures/png`), and into the standard folder when it does not, so it
   never turns a Desktop folder into a tree of folders. A standard
   folder that does not exist is an error naming the path and `--create-dir`,
   with nothing moved; a name already taken at the destination is skipped for
@@ -42,22 +40,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already sits under its standard folder is listed as
   `already in the destination`. The text report leads with
   `destination: OS standard folders (no directory is created)` and uses
-  `<folder>/<extension> -> <absolute folder> (<count> files, <size>)` blocks
-  (`documents/html` for the html files above);
+  `<extension> -> <absolute folder> (<count> files, <size>)` blocks
+  (`html` for the html files above);
   `--format json` keeps every existing key and adds `creates_directory`,
   `destination_mode` (`default_dirs` / `to` / `in_place`), `destination_base`,
-  per group `name` (`null` when no folder is made), `kind`, `class_folder`,
-  `extension`, `destination_base` and `create_directories`, and
+  per group `name` (`null` when no folder is made), `kind`, `extension`,
+  `destination_base` and `create_directories`, and
   `already_in_destination`.
   `tests/v123_cluster_destination_test.rs`.
 
 ### Added
 
 - **`cluster --create-dir`, `--to <base>` and `--in-place`.** `--create-dir`
-  builds the folders: each group is created under its type chain
-  (`~/Pictures/images/png/at-screenshot`) and its files move in, while a group
+  builds the folders: each group is created under its type folder
+  (`~/Pictures/png/at-screenshot`) and its files move in, while a group
   named after its type lands flat in the type folder
-  (`~/Movies/videos/mp4/clip.mp4`) instead of adding a folder that repeats the
+  (`~/Movies/mp4/clip.mp4`) instead of adding a folder that repeats the
   parent. A group nothing types has no type folder to build: a name it can call
   its own becomes `R/<name>`, and without one its files land flat in the kind
   root. `--to <base>` replaces the standard folder with one directory (every

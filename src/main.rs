@@ -198,8 +198,8 @@ enum Commands {
     /// File a directory's flat files into the folders they belong in.
     ///
     /// By default nothing is created: every file is filed into an existing
-    /// directory - the type folder `<kind root>/<type>` when it already exists
-    /// (`~/Pictures/images`), and the kind root itself otherwise
+    /// directory - the type folder `<kind root>/<extension>` when it already
+    /// exists (`~/Pictures/png`), and the kind root itself otherwise
     /// (`~/Pictures`). The kind root is the OS standard folder for the type:
     /// `~/Pictures` for images, `~/Documents` for documents, `~/Downloads` for
     /// archives, `~/Movies` for video, `~/Music` for audio, and `~/Documents`
@@ -210,9 +210,9 @@ enum Commands {
     /// and file-name tokens (no model), the name is the type name by default
     /// (`--name-source auto` lets the model pick among deterministic
     /// candidates), and each group is created under the type folder
-    /// (`~/Pictures/images/at-screenshot`). A group whose name is the type name
-    /// lands flat in the type folder (`~/Movies/videos`) - a folder called
-    /// `videos` inside `~/Movies` adds nothing.
+    /// (`~/Pictures/png/at-screenshot`). A group whose name is the type name
+    /// lands flat in the type folder (`~/Movies/mp4`) - a folder called `mp4`
+    /// inside `~/Movies/mp4` adds nothing.
     ///
     /// Only regular files directly under <dir> are members. Existing
     /// directories are reported and left alone (`--include-folders` opts in,
@@ -2070,7 +2070,6 @@ fn cluster_report_document(
             serde_json::json!({
                 "name": group.name,
                 "kind": group.kind,
-                "class_folder": group.class_folder,
                 "extension": group.extension,
                 "directory": destination_directory.to_string_lossy(),
                 "destination_base": group.base.to_string_lossy(),

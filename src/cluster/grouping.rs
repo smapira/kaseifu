@@ -64,9 +64,10 @@ impl Category {
     /// The classification of a file of this kind: what it *is* (`images`,
     /// `code`, ...), and `None` when nothing names it.
     ///
-    /// This is not the folder a file goes to - see [`Category::class_folder`].
-    /// Keeping the two apart means a report still says "this is code" for an
-    /// html file while the file is filed under `documents` (issue #28).
+    /// It picks the kind root - `~/Pictures` for images, `~/Documents` for
+    /// everything a document folder holds - and is not a folder of its own: the
+    /// type folder is the extension, because the root already says what the
+    /// files are (owner decision, 2026-11-09).
     pub fn class_name(self) -> Option<&'static str> {
         Some(match self {
             Self::Image => "images",
@@ -79,23 +80,6 @@ impl Category {
             Self::Folder => "folders",
             // `Other` is the catch-all for a file nothing knows. Inventing a
             // word for it would put a bucket nobody asked for in the report.
-            Self::Other => return None,
-        })
-    }
-
-    /// The folder under the kind root that holds this kind (`images`,
-    /// `documents`, ...), and `None` for a kind whose type nothing decides.
-    ///
-    /// A file the table does not name has no type folder: it is not turned into
-    /// a `misc` bucket or filed under a `documents` level nobody asked for, and
-    /// the plan puts it flat in the kind root (issue #28).
-    pub fn class_folder(self) -> Option<&'static str> {
-        Some(match self {
-            Self::Image => "images",
-            Self::Archive => "archives",
-            Self::Audio => "audio",
-            Self::Video => "videos",
-            Self::Document | Self::Data | Self::Code | Self::Folder => "documents",
             Self::Other => return None,
         })
     }
@@ -192,19 +176,16 @@ impl Group {
     }
 
     /// The folder this group's files are filed under, inside the kind root
-    /// (`images`, `documents`, ...), and `None` when nothing types the group.
-    pub fn class_folder(&self) -> Option<&'static str> {
-        self.category.class_folder()
+    /// (`png`, `html`), or `None` when its files have no extension.
+    pub fn type_folder(&self) -> Option<&str> {
+        self.extension.as_deref()
     }
 
-    /// The word this group's type is named by: its extension, or the class
-    /// folder when its files have none. `None` when neither says what the group
-    /// is, which is the one case with no name of its own (issue #28).
+    /// The word this group's type is named by: its extension, and nothing else.
+    /// `None` when its files have none, which is the one case with no name of its
+    /// own (issue #28).
     pub fn type_name(&self) -> Option<&str> {
-        match &self.extension {
-            Some(extension) => Some(extension),
-            None => self.class_folder(),
-        }
+        self.type_folder()
     }
 
     /// The deterministic candidate names, best first (the first is also the
@@ -504,10 +485,10 @@ mod tests {
     fn an_extension_and_a_class_are_separate_types() {
         let members = vec![member("cbd-a.html"), member("cbd-b.html")];
         let (groups, _) = group(members, 2, 20, false);
-        // The classification says what the files are; the folder says where they
-        // go. They are different questions (issue #28).
+        // The classification says what the files are; the type folder says where
+        // they go, and it is the extension (owner decision, 2026-11-09).
         assert_eq!(groups[0].class_name(), Some("code"));
-        assert_eq!(groups[0].class_folder(), Some("documents"));
+        assert_eq!(groups[0].type_folder(), Some("html"));
         assert_eq!(groups[0].type_name(), Some("html"));
     }
 
@@ -519,7 +500,7 @@ mod tests {
         // `documents` level - the plan files them flat in the kind root.
         assert_eq!(groups[0].class_name(), None);
         assert_eq!(groups[0].extension, None);
-        assert_eq!(groups[0].class_folder(), None);
+        assert_eq!(groups[0].type_folder(), None);
         assert_eq!(groups[0].type_name(), None);
         assert_eq!(groups[0].candidate_names(), vec!["cbd".to_string()]);
     }
@@ -529,7 +510,7 @@ mod tests {
         let members = vec![member("cbd-a.ttf"), member("cbd-b.ttf")];
         let (groups, _) = group(members, 2, 20, false);
         assert_eq!(groups[0].class_name(), None);
-        assert_eq!(groups[0].class_folder(), None);
+        assert_eq!(groups[0].type_folder(), Some("ttf"));
         assert_eq!(groups[0].type_name(), Some("ttf"));
     }
 }

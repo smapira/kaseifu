@@ -21,29 +21,29 @@ because filing into `~/Pictures/images` repeats the parent every run and queues
 ## Decision
 
 - **A run creates nothing unless `--create-dir` is given.** The default files each
-  file into the OS standard folder for its type, at the deepest folder of its type
-  chain that already exists (`R/<class>/<extension>`, then `R/<class>`, then `R`),
-  and never into the scanned directory.
-- **The extension is the type.** For a kind the platform table does not name
-  (`html`, `sh`, `csv`) the extension is the folder under `documents`, and the
-  `code` / `data` / `misc` folders were removed. A kind nothing names at all
-  (`psd`, `ttf`, `webloc`, no extension) gets no folder either: it is not turned
-  into a `misc` bucket and no `documents` level is added, so the file goes flat
-  into the OS standard folder. The same chain applies to the kinds the table
-  knows (`images/png`, `videos/mp4`), which is what the owner asked for.
-- **Classification and destination stay separate.** `class_name()` keeps
-  `code` / `data` and is `null` for a file nothing names (reported as `kind`),
-  `class_folder()` gives the folder (`documents` for html) and is `null` when
-  there is no folder to name; one value would lose the classification as soon as
-  a folder name is reused.
+  file into the OS standard folder for its type, into the extension folder when it
+  already exists (`R/<extension>`), and into `R` otherwise, and never into the
+  scanned directory.
+- **The type folder is the extension, and nothing else.** The standard folder
+  already says what the files are, so the `images` / `documents` / `code` / `data`
+  / `misc` levels are gone (owner decision, 2026-11-09): an html file is
+  `kind: code` and is filed under `~/Documents/html`, a workbook is
+  `kind: documents` and is filed under `~/Documents/xlsx`.
+- **A kind nothing names has no folder.** `psd`, `ttf`, `webloc` and a file with
+  no extension are not turned into a `misc` bucket: they go flat into the OS
+  standard folder (`~/Documents/x.ttf`), and `xls` / `xlsx` stay in the document
+  family with `pdf` / `md` / `numbers` rather than being unknown.
+- **The classification is not a folder.** `class_name()` keeps `code` / `data`
+  and is `null` for a file nothing names; the report carries it as `kind` and the
+  extension is the only folder, so nothing has to be kept in two places.
 - A standard folder that does not exist is an error naming every missing root and
   `--create-dir`, with nothing moved.
 - A name already taken at the destination is refused for that file only; the rest
   of the batch runs and the exit code says something was left behind.
-- `--create-dir` builds the folders under the type chain (`R/T/E/S`), and a name
-  that is only the type name lands flat in `R/T/E` - a folder called `mp4` inside
-  `.../mp4` adds nothing. In place the type folder is the grouping, so the folder
-  is always created there.
+- `--create-dir` builds the folders under the extension folder (`R/E/S`), and a
+  name that is only the type name lands flat in `R/E` - a folder called `mp4`
+  inside `.../mp4` adds nothing. In place the extension folder is the grouping,
+  so the folder is always created there.
 - `--min` / `--max` / `--by-type` / `--name-source` / `--in-place` require
   `--create-dir`: they only describe a folder that is being made. The default
   therefore files a group of one, while the creating mode leaves a group below

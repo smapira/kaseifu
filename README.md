@@ -274,33 +274,33 @@ kaseifu cluster ~/Desktop/misc --create-dir --in-place          # folders inside
 ```
 
 `~/Pictures` for images, `~/Documents` for documents, `~/Downloads` for archives,
-`~/Movies` for video, `~/Music` for audio. A type the table does not name (psd,
-ttf, webloc, an extension I do not know, a file with no extension) is not turned
-into a `misc` bucket or filed under a `documents` level nobody asked for: it has
-no type folder, and the file goes **flat into its standard folder**
-(`~/Documents/noto-a.ttf`). Its extension is still what names a group, and an
-html or sh file is documented by its extension under `documents`
-(`~/Documents/documents/html/instagram`) even though the JSON `kind` calls it
-`code`. A kind whose standard folder does not exist is an error that names the
+`~/Movies` for video, `~/Music` for audio. **The type folder is the extension and
+nothing else** - `~/Pictures/png`, `~/Documents/html` - because the standard
+folder already says what the files are; an `images` or `documents` level would
+repeat it. A type the table does not name (psd, ttf, webloc, an extension I do
+not know, a file with no extension) is not turned into a `misc` bucket: it has no
+type folder, and the file goes **flat into its standard folder**
+(`~/Documents/noto-a.ttf`). Its extension still names the group, so `.xlsx` lands
+in `~/Documents/xlsx/` when that folder exists and in `~/Documents/` when it does
+not. A kind whose standard folder does not exist is an error that names the
 path and asks for `--create-dir`; nothing moves. A file that already sits under
 its standard folder is left where it is and listed as
 `already in the destination`.
 
-A type is a chain: the class, then the extension. A run with no flags files into
-the deepest folder of that chain that already exists - `~/Pictures/images/png`,
-else `~/Pictures/images`, else `~/Pictures` - and creates nothing. So
-`~/Desktop/misc` never becomes a tree of folders on the Desktop, and a folder
-someone already made for those files is used.
+A type is a chain of one folder: the extension under the standard folder. A run
+with no flags files into it when it already exists - `~/Pictures/png` - and into
+`~/Pictures` when it does not, creating nothing. So `~/Desktop/misc` never
+becomes a tree of folders on the Desktop, and a folder someone already made for
+those files is used.
 
-`--create-dir` builds the folders: each group is created under its type chain
-(`~/Pictures/images/png/at-screenshot`, `~/Documents/documents/html/instagram`)
-and its files move in. A group whose name is the type name lands flat in the
-type folder (`~/Movies/videos/mp4/clip.mp4`) instead, because a folder called
-`mp4` inside `.../mp4` adds nothing - with the default `--name-source type` that
+`--create-dir` builds the folders: each group is created under its type folder
+(`~/Pictures/png/at-screenshot`, `~/Documents/html/instagram`) and its files move
+in. A group whose name is the type name lands flat in the type folder
+(`~/Movies/mp4/clip.mp4`) instead, because a folder called `mp4` inside `.../mp4`
+adds nothing - with the default `--name-source type` that
 is every group, so `--name-source auto` is what gives the folders a name of their
-own. A folder (`--include-folders`) has no extension level and stays in its class
-folder (`~/Documents/documents`), and a file nothing types at all has no class
-folder either and is filed flat in its standard folder.
+own. A folder (`--include-folders`) has no extension, so it has no type folder
+and is filed flat in its standard folder, like a file nothing types at all.
 `--to <base>` replaces the standard folder with
 one directory, and `--in-place` replaces it with the scanned directory for a
 folder reorganised in place; the two cannot be combined. Every created level is
@@ -355,11 +355,11 @@ The text report is line-oriented and stable:
 
 ```text
 destination: OS standard folders (no directory is created)
-images/png -> /Users/me/Pictures (34 files, 25.7 MB)
+png -> /Users/me/Pictures (34 files, 25.7 MB)
   examples: IMG_8478.png, IMG_8479.png
 1. /Users/me/Desktop/misc/IMG_8478.png -> /Users/me/Pictures/IMG_8478.png
   ! refusing to overwrite /Users/me/Pictures/IMG_8479.png; nothing was changed
-documents/html -> /Users/me/Documents/documents/html (11 files, 3.2 MB)
+html -> /Users/me/Documents/html (11 files, 3.2 MB)
   examples: instagram-a.html, instagram-b.html
 ungrouped: 2 files
   - /Users/me/Desktop/misc/README (left in place)
@@ -377,16 +377,15 @@ directory:` row `move` also prints:
 ```text
 cluster: at-screenshot (9 files, 12.4 MB)
   examples: at-1.png, at-2.png, at-3.png
-  create directory: /Users/me/Pictures/images/png/at-screenshot
-1. /Users/me/Desktop/misc/document/at-1.png -> /Users/me/Pictures/images/png/at-screenshot/at-1.png
+  create directory: /Users/me/Pictures/png/at-screenshot
+1. /Users/me/Desktop/misc/document/at-1.png -> /Users/me/Pictures/png/at-screenshot/at-1.png
 ```
 
 `--format json` prints one `cluster` object: `directory`, `destination_mode`
 (`default_dirs` / `to` / `in_place`), `destination_base` (the `--to` directory,
 `null` otherwise), `creates_directory`, `executed`, `groups` (`name` - `null`
 when no folder is created - `kind` (what the files are, `null` when nothing
-names them), `class_folder` (the folder under the type root), `extension`,
-`directory`, `destination_base`,
+names them), `extension` (the type folder), `directory`, `destination_base`,
 `create_directories`, `file_count`, `bytes`, `examples`, `candidates`,
 `name_source`, `assignments`), `ungrouped`, `already_in_destination`,
 `directories_left_alone`, `skipped`, `naming` and, after `--execute`, `batch_id`.
