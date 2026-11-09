@@ -904,6 +904,7 @@ mod tests {
         for (extension, expected) in [
             ("png", UserDirKind::Picture),
             ("pdf", UserDirKind::Document),
+            ("xlsx", UserDirKind::Document),
             ("zip", UserDirKind::Download),
             ("mp4", UserDirKind::Video),
             ("mp3", UserDirKind::Audio),

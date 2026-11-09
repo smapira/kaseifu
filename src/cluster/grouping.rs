@@ -33,7 +33,7 @@ impl Category {
                 Self::Image
             }
             "md" | "pdf" | "doc" | "docx" | "txt" | "rtf" | "pages" | "key" | "ppt" | "pptx"
-            | "odt" | "numbers" => Self::Document,
+            | "odt" | "numbers" | "xls" | "xlsx" => Self::Document,
             "zip" | "tar" | "gz" | "bz2" | "7z" | "rar" | "dmg" => Self::Archive,
             "csv" | "tsv" | "json" | "yaml" | "yml" | "toml" | "xml" | "sql" | "db" | "sqlite" => {
                 Self::Data
@@ -425,6 +425,11 @@ mod tests {
     fn the_type_decides_the_category() {
         assert_eq!(Category::from_extension(Some("PNG")), Category::Image);
         assert_eq!(Category::from_extension(Some("md")), Category::Document);
+        // A spreadsheet is a document, not an unknown type (owner decision,
+        // 2026-11-09): the type table answers for it and `cluster` files it
+        // with the rest instead of dropping it flat as `kind: null`.
+        assert_eq!(Category::from_extension(Some("xlsx")), Category::Document);
+        assert_eq!(Category::from_extension(Some("xls")), Category::Document);
         assert_eq!(Category::from_extension(Some("zip")), Category::Archive);
         assert_eq!(Category::from_extension(None), Category::Other);
     }
