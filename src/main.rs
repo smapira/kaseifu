@@ -195,30 +195,36 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Group the flat files of a directory into named subdirectories.
+    /// File a directory's flat files into the folders they belong in.
     ///
-    /// Membership is decided without a model (type and file-name tokens); the
-    /// folder names are the type name by default (`--name-source auto` lets the
-    /// model pick among deterministic candidates), so the command works with
-    /// no key and no network. Only regular files directly under <dir> are
-    /// members: existing directories are reported and left alone
-    /// (`--include-folders` opts in, `--recursive` walks into them instead).
-    /// Dry run by default; `--execute` creates the directories and moves the
-    /// files as one journal batch, which `undo --batch` reverses.
+    /// By default nothing is created: every file is filed into an existing
+    /// directory - the type folder `<kind root>/<type>` when it already exists
+    /// (`~/Pictures/images`), and the kind root itself otherwise
+    /// (`~/Pictures`). The kind root is the OS standard folder for the type:
+    /// `~/Pictures` for images, `~/Documents` for documents, `~/Downloads` for
+    /// archives, `~/Movies` for video, `~/Music` for audio, and `~/Documents`
+    /// for a type the table does not name. A kind root that does not exist is
+    /// an error that asks for `--create-dir`.
     ///
-    /// Each folder is created in the OS standard directory for its kind
-    /// (~/Pictures for images, ~/Documents for documents, ~/Downloads for
-    /// archives, ~/Movies for video, ~/Music for audio, ~/Documents for
-    /// anything else), so <dir> itself is never turned into a tree. `--to`
-    /// files everything under one directory instead, and `--in-place` creates
-    /// the folders inside <dir>.
+    /// `--create-dir` builds the folders instead: membership is grouped by type
+    /// and file-name tokens (no model), the name is the type name by default
+    /// (`--name-source auto` lets the model pick among deterministic
+    /// candidates), and each group is created under the type folder
+    /// (`~/Pictures/images/at-screenshot`). A group whose name is the type name
+    /// lands flat in the type folder (`~/Movies/videos`) - a folder called
+    /// `videos` inside `~/Movies` adds nothing.
     ///
-    /// Text output, one block per group:
-    ///   cluster: <name> (<count> files, <size>)
-    ///     examples: <file>, <file>, <file>
-    ///     create directory: <absolute path>
+    /// Only regular files directly under <dir> are members. Existing
+    /// directories are reported and left alone (`--include-folders` opts in,
+    /// `--recursive` walks into them instead). Dry run by default; `--execute`
+    /// moves the files as one journal batch, which `undo --batch` reverses.
+    ///
+    /// Text output, one block per destination:
+    ///   cluster: <name> (<count> files, <size>)          (with --create-dir)
+    ///   <type> -> <absolute directory> (<count> files, <size>)
+    ///     create directory: <absolute path>              (with --create-dir)
     ///   <n>. <source> -> <absolute destination>
-    ///   ungrouped: <count> files
+    ///   ungrouped: <count> files                          (with --create-dir)
     ///   already in the destination: <count> files
     ///   directories left alone: <count>
     ///
@@ -227,11 +233,15 @@ enum Commands {
     Cluster {
         /// Directory whose files are grouped (it is not moved).
         dir: PathBuf,
+        /// Create the named folders and file the files into them. Without it a
+        /// run only files into directories that already exist.
+        #[arg(long = "create-dir")]
+        create_dir: bool,
         /// Smallest group kept (default 2); smaller groups are left in place.
-        #[arg(long, value_name = "N")]
+        #[arg(long, value_name = "N", requires = "create_dir")]
         min: Option<usize>,
         /// Largest group (default 20); a bigger type is split into several groups.
-        #[arg(long, value_name = "N")]
+        #[arg(long, value_name = "N", requires = "create_dir")]
         max: Option<usize>,
         /// Treat the directory's direct child folders as members too.
         #[arg(long = "include-folders")]
@@ -240,19 +250,24 @@ enum Commands {
         #[arg(long)]
         recursive: bool,
         /// Group by type only (one folder per kind: images, documents, ...).
-        #[arg(long = "by-type")]
+        #[arg(long = "by-type", requires = "create_dir")]
         by_type: bool,
         /// Where the folder names come from: type (default; never calls the
         /// model), auto (model when a key resolves, else the type) or model.
-        #[arg(long = "name-source", value_enum, default_value = "type")]
+        #[arg(
+            long = "name-source",
+            value_enum,
+            default_value = "type",
+            requires = "create_dir"
+        )]
         name_source: ClusterNameSource,
-        /// Create the group folders under this directory instead of the OS
-        /// standard folder for each kind (the parent is created when missing).
+        /// File every group under this directory instead of the OS standard
+        /// folder for its kind (the parent is created with --create-dir).
         #[arg(long = "to", value_name = "BASE")]
         to: Option<PathBuf>,
-        /// Create the group folders inside <dir> instead of in the OS standard
+        /// Create the folders inside <dir> instead of in the OS standard
         /// folders; the folders stay where the files were.
-        #[arg(long = "in-place", conflicts_with = "to")]
+        #[arg(long = "in-place", conflicts_with = "to", requires = "create_dir")]
         in_place: bool,
         /// Create the directories and move the files (default is a dry run).
         #[arg(long, conflicts_with = "dry_run")]
@@ -601,6 +616,7 @@ async fn dispatch(
         } => handle_move(&paths, &to, create_dir, execute, dry_run, format),
         Commands::Cluster {
             dir,
+            create_dir,
             min,
             max,
             include_folders,
@@ -621,6 +637,7 @@ async fn dispatch(
                 by_type,
                 name_source,
                 cluster_destination(to, in_place),
+                create_dir,
                 execute,
                 dry_run,
                 format,
@@ -1634,12 +1651,13 @@ fn move_report_document(
     serde_json::Value::Object(document)
 }
 
-/// `cluster`: group a directory's flat files into named subdirectories
-/// (issue #26).
+/// `cluster`: file a directory's flat files into the folders they belong in
+/// (issues #26, #28).
 ///
 /// The plan is always computed first; `--execute` is the only mutation path.
-/// Naming uses the model when a key resolves, and the deterministic type-based
-/// name otherwise, so the command works offline.
+/// Without `--create-dir` nothing is created and no model is asked anything;
+/// naming uses the model or the deterministic type name only when the run
+/// builds folders.
 #[allow(clippy::too_many_arguments)]
 async fn handle_cluster(
     dir: &Path,
@@ -1650,23 +1668,41 @@ async fn handle_cluster(
     by_type: bool,
     name_source: ClusterNameSource,
     destination: DestinationBase,
+    create_dir: bool,
     execute: bool,
     dry_run: bool,
     format: OutputFormat,
     overrides: &CliOverrides,
 ) -> Result<()> {
-    let options = cluster_options(min, max, include_folders, recursive, by_type, destination)?;
+    let options = cluster_options(
+        min,
+        max,
+        include_folders,
+        recursive,
+        by_type,
+        destination,
+        create_dir,
+    )?;
     let actually_move = execute && !dry_run;
-    // Resolving is local and never prompts: without a key the deterministic
-    // namer runs, which is the documented offline behavior.
-    let (namer, mut note) = cluster_namer(resolve_for(overrides).ok().as_ref(), name_source);
+    // Resolving is local and never prompts. A run that creates nothing never
+    // asks the model, so no key is read for it at all.
+    let namer = if create_dir {
+        resolve_for(overrides).ok()
+    } else {
+        None
+    };
+    let (namer, mut note) = cluster_namer(namer.as_ref(), name_source);
     let plan = cluster::plan(dir, &options, namer.as_ref()).await?;
     if let Some(reason) = &plan.naming_failure {
         note = Some(reason.clone());
     }
     for group in &plan.groups {
-        relocate::dry_run_batch(&group.batch)
-            .map_err(|error| anyhow::anyhow!("cannot file '{}': {error}", group.name))?;
+        relocate::dry_run_batch(&group.batch).map_err(|error| {
+            anyhow::anyhow!(
+                "cannot file '{}': {error}",
+                group.name.as_deref().unwrap_or(&group.kind)
+            )
+        })?;
     }
 
     if !actually_move {
@@ -1734,6 +1770,7 @@ fn cluster_options(
     recursive: bool,
     by_type: bool,
     destination: DestinationBase,
+    create_dir: bool,
 ) -> Result<ClusterOptions> {
     let options = ClusterOptions {
         min: min.unwrap_or(2),
@@ -1742,6 +1779,7 @@ fn cluster_options(
         recursive,
         by_type,
         destination,
+        create_dir,
     };
     if options.min == 0 {
         anyhow::bail!("--min must be at least 1");
@@ -1781,12 +1819,21 @@ fn cluster_failure(outcome: &cluster::ClusterOutcome) -> Option<String> {
         .iter()
         .map(|group| group.items.iter().filter(|item| !item.moved()).count())
         .sum();
-    (groups > 0 || items > 0)
-        .then(|| format!("{groups} group(s) and {items} file(s) could not be filed"))
+    match (groups, items) {
+        (0, 0) => None,
+        (0, items) => Some(format!("{items} file(s) could not be filed")),
+        (groups, 0) => Some(format!("{groups} group(s) could not be filed")),
+        (groups, items) => Some(format!(
+            "{groups} group(s) and {items} file(s) could not be filed"
+        )),
+    }
 }
 
 /// The one-line naming summary of a run.
 fn cluster_naming_line(plan: &cluster::ClusterPlan, note: Option<&str>) -> String {
+    if !plan.creates_directory {
+        return "naming: none (no folder is created)".to_string();
+    }
     if plan.groups.is_empty() {
         return "naming: none (no group to name)".to_string();
     }
@@ -1806,6 +1853,16 @@ fn cluster_naming_line(plan: &cluster::ClusterPlan, note: Option<&str>) -> Strin
     }
 }
 
+/// Where a run that creates nothing files its members.
+fn cluster_destination_line(plan: &cluster::ClusterPlan) -> String {
+    match &plan.destination {
+        DestinationBase::Directory(base) => {
+            format!("destination: {} (no directory is created)", base.display())
+        }
+        _ => "destination: OS standard folders (no directory is created)".to_string(),
+    }
+}
+
 /// The `cluster` report: text blocks or one `cluster` JSON document.
 fn print_cluster_report(
     plan: &cluster::ClusterPlan,
@@ -1816,6 +1873,9 @@ fn print_cluster_report(
     name_source: ClusterNameSource,
 ) {
     let mut lines = Vec::new();
+    if !plan.creates_directory {
+        lines.push(cluster_destination_line(plan));
+    }
     let mut number = 0;
     lines.extend(cluster_group_lines(plan, outcome, &mut number));
     lines.extend(cluster_note_lines(plan));
@@ -1837,13 +1897,13 @@ fn print_cluster_report(
     }
 }
 
-/// One block per group: header, examples, numbered assignments, failures.
+/// One block per destination: header, examples, numbered assignments,
+/// failures.
 ///
-/// In the default layout the destination is the group name, because the folder
-/// is inside the scanned directory (`images/a.png`). A group filed into a base
-/// names its destination in full, since the folder is no longer there to
-/// explain the short form - `--to` is why the block also carries the
-/// `create directory:` row that `move` prints (issue #27).
+/// A run that creates a folder names it (`cluster: <name> (...)`) and announces
+/// it with the `create directory:` row that `move` prints. A run that files into
+/// an existing directory has no name to show, so the header says the type and
+/// where it goes (`images -> /Users/me/Pictures (...)`).
 fn cluster_group_lines(
     plan: &cluster::ClusterPlan,
     outcome: Option<&cluster::ClusterOutcome>,
@@ -1851,33 +1911,35 @@ fn cluster_group_lines(
 ) -> Vec<String> {
     let mut lines = Vec::new();
     for (index, group) in plan.groups.iter().enumerate() {
-        lines.push(format!(
-            "cluster: {} ({} files, {})",
-            group.name,
+        let counts = format!(
+            "{} files, {}",
             group.members.len(),
             human_bytes(group.bytes())
-        ));
+        );
+        match &group.name {
+            Some(name) => lines.push(format!("cluster: {name} ({counts})")),
+            None => lines.push(format!(
+                "{} -> {} ({counts})",
+                group.kind,
+                group.directory.display()
+            )),
+        }
         let examples = group.examples();
         if !examples.is_empty() {
             lines.push(format!("  examples: {}", examples.join(", ")));
         }
-        let in_place = group.base == plan.root;
-        if !in_place && let Some(line) = create_directory_line(&group.batch.missing_directories) {
+        if let Some(line) = create_directory_line(&group.batch.missing_directories) {
             lines.push(format!("  {line}"));
         }
         for member in &group.members {
             *number += 1;
-            let destination = if in_place {
-                format!("{}/{}", group.name, member.name)
-            } else {
-                group.directory().join(&member.name).display().to_string()
-            };
             lines.push(format!(
-                "{number}. {} -> {destination}",
-                member.source.display()
+                "{number}. {} -> {}",
+                member.source.display(),
+                group.directory.join(&member.name).display()
             ));
         }
-        lines.extend(cluster_item_error_lines(outcome, index));
+        lines.extend(cluster_item_error_lines(plan, outcome, index));
         if let Some(error) = outcome
             .and_then(|outcome| outcome.groups.get(index))
             .and_then(|group| group.error.as_ref())
@@ -1889,17 +1951,31 @@ fn cluster_group_lines(
 }
 
 /// The `!` lines for a group's failed items.
+///
+/// A dry run has no outcome to read, so the plan's own refusals (a name already
+/// taken at the destination) are reported from the batch: nothing is moved and
+/// the reason is still visible.
 fn cluster_item_error_lines(
+    plan: &cluster::ClusterPlan,
     outcome: Option<&cluster::ClusterOutcome>,
     index: usize,
 ) -> Vec<String> {
-    let Some(group) = outcome.and_then(|outcome| outcome.groups.get(index)) else {
+    if let Some(group) = outcome.and_then(|outcome| outcome.groups.get(index)) {
+        return group
+            .items
+            .iter()
+            .filter_map(|item| item.error.as_ref())
+            .map(|error| format!("  ! {error}"))
+            .collect();
+    }
+    let Some(group) = plan.groups.get(index) else {
         return Vec::new();
     };
     group
+        .batch
         .items
         .iter()
-        .filter_map(|item| item.error.as_ref())
+        .filter_map(|item| item.plan.as_ref().err())
         .map(|error| format!("  ! {error}"))
         .collect()
 }
@@ -1975,23 +2051,27 @@ fn cluster_report_document(
         .enumerate()
         .map(|(index, group)| {
             let group_outcome = outcome.and_then(|outcome| outcome.groups.get(index));
-            let destination_directory = group.directory();
+            let destination_directory = &group.directory;
             let assignments: Vec<serde_json::Value> = group
                 .members
                 .iter()
                 .enumerate()
                 .map(|(item_index, member)| {
                     let item = group_outcome.and_then(|group| group.items.get(item_index));
+                    let planned = group.batch.items.get(item_index);
                     serde_json::json!({
                         "source": member.source.to_string_lossy(),
                         "destination": destination_directory.join(&member.name).to_string_lossy(),
                         "operation_id": item.and_then(|item| item.operation_id.clone()),
-                        "error": item.and_then(|item| item.error.as_ref().map(|error| error.to_string())),
+                        "error": item
+                            .and_then(|item| item.error.as_ref().map(|error| error.to_string()))
+                            .or_else(|| planned.and_then(|item| item.plan.as_ref().err().map(|error| error.to_string()))),
                     })
                 })
                 .collect();
             serde_json::json!({
                 "name": group.name,
+                "kind": group.kind,
                 "directory": destination_directory.to_string_lossy(),
                 "destination_base": group.base.to_string_lossy(),
                 "create_directories": paths(&group.batch.missing_directories),
@@ -2014,6 +2094,7 @@ fn cluster_report_document(
             DestinationBase::DefaultDirs | DestinationBase::InPlace => serde_json::Value::Null,
         },
         "executed": executed,
+        "creates_directory": plan.creates_directory,
         "groups": groups,
         "ungrouped": plan.ungrouped.iter().map(|member| member.source.to_string_lossy().to_string()).collect::<Vec<_>>(),
         "already_in_destination": plan.already_placed.iter().map(|member| member.source.to_string_lossy().to_string()).collect::<Vec<_>>(),

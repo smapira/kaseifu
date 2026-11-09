@@ -258,37 +258,52 @@ issue #22 introduced (`source`, `destination_directory`, `destination_path`,
 `create_directories`, and a run of several paths carries `batch_id` and
 `created_directories` instead of the single-path scalars.
 
-### Group a flat folder into named subfolders
+### Group a flat folder into the folders its files belong in
 
 `cluster` takes the files sitting directly in one directory and files them into
-new subdirectories named after what they are, **in the OS folder for that kind**:
+the OS folder for their type, **without creating anything**:
 
 ```bash
-kaseifu cluster ~/Desktop/misc                    # dry run
-kaseifu cluster ~/Desktop/misc --execute          # create the folders and file the files
-kaseifu cluster ~/Desktop/misc --min 3 --max 12   # groups of at least 3, split big types
-kaseifu cluster ~/Desktop/misc --by-type           # one folder per kind (images, documents, ...)
-kaseifu cluster ~/Desktop/misc --to ~/Archive      # every group under one directory
-kaseifu cluster ~/Desktop/misc --in-place          # folders inside misc instead
+kaseifu cluster ~/Desktop/misc                    # dry run, nothing is created
+kaseifu cluster ~/Desktop/misc --execute          # file the files
+kaseifu cluster ~/Desktop/misc --create-dir        # build named folders too
+kaseifu cluster ~/Desktop/misc --create-dir --min 3 --max 12   # groups of at least 3, split big types
+kaseifu cluster ~/Desktop/misc --create-dir --by-type           # one folder per kind
+kaseifu cluster ~/Desktop/misc --to ~/Archive      # file everything under one directory
+kaseifu cluster ~/Desktop/misc --create-dir --in-place          # folders inside misc
 ```
 
-By default each group folder is created in the standard directory for its kind:
-`~/Pictures` for images, `~/Documents` for documents, `~/Downloads` for
-archives, `~/Movies` for video, `~/Music` for audio, and `~/Documents` for a
-kind the table does not name (csv, a file with no extension, code). The scanned
-directory is never turned into a tree: the point is to return scattered files
-to where they belong, not to keep the clutter one level deeper. A folder the OS
-defines but that does not exist yet is created, and `undo --batch` removes the
-levels it made. `--to <base>` files every group under one directory instead (the
-base and its parents are created when missing), and `--in-place` keeps the
-folders inside the scanned directory for a folder you are reorganising in place;
-the two cannot be combined. A file that already sits under the destination is
-left where it is and listed as `already in the destination`.
+`~/Pictures` for images, `~/Documents` for documents, `~/Downloads` for archives,
+`~/Movies` for video, `~/Music` for audio, and `~/Documents` for a type the table
+does not name (csv, a file with no extension, code). A kind whose standard folder
+does not exist is an error that names the path and asks for `--create-dir`;
+nothing moves. A file that already sits under its standard folder is left where
+it is and listed as `already in the destination`.
+
+When the type folder already exists (`~/Pictures/images`), the files go there
+instead of into `~/Pictures`. Otherwise they land directly in the standard
+folder, so `~/Desktop/misc` never becomes a tree of folders on the Desktop - the
+point is to return scattered files to where they belong.
+
+`--create-dir` builds the folders: each group is created under the type folder
+(`~/Pictures/images/at-screenshot`) and its files move in. A group whose name is
+the type name lands flat in the type folder (`~/Movies/videos`) instead, because
+a folder called `videos` inside `~/Movies` adds nothing - with the default
+`--name-source type` that is every group, so `--name-source auto` is what gives
+the folders a name of their own. `--to <base>` replaces the standard folder with
+one directory, and `--in-place` replaces it with the scanned directory for a
+folder reorganised in place; the two cannot be combined. Every created level is
+removed again by `undo --batch`.
+
+A name already taken at the destination is skipped for that file only, with the
+reason on its own `!` line: the rest of the run still happens, and the exit code
+says something was left behind.
 
 `--by-type` skips the token pass and keeps every file of one kind together, which
 is what covers a folder of unrelated one-off images or archives (the default
 splits them by shared name tokens, and files with no shared token fall into
-`ungrouped`). It composes with `--min`/`--max` as usual.
+`ungrouped`). It composes with `--min`/`--max` as usual, and like them it needs
+`--create-dir`.
 
 `--name-source` decides where the folder names come from. The default is
 `type`: the deterministic name of the file kind (`images`, `documents`,
@@ -307,40 +322,45 @@ subdirectories are listed as `directories left alone` and never touched
 `--recursive` collects files from below them while leaving the folders in
 place). The model, when a key resolves, only chooses a folder name among
 deterministic candidates; without a key, without a network, or on any
-unexpected answer the type-based name is used. `--execute` creates each folder
-(sanitized name; when a fallback name is already taken, the group's own token
-disambiguates it as `images-screenshot` before a number) and moves the files as
-one journal batch, so `undo --batch <id>` restores the flat layout and removes
-the folders it created.
+unexpected answer the type-based name is used. `--execute` moves the files as
+one journal batch, so `undo --batch <id>` puts them back and removes the folders
+it created.
 
 The text report is line-oriented and stable:
 
 ```text
-cluster: images (11 files, 1.2 MB)
-  examples: cbd-chart-1.png, cbd-chart-2.png
-  create directory: /Users/me/Pictures/images
-1. /Users/me/Desktop/misc/cbd-chart-1.png -> /Users/me/Pictures/images/cbd-chart-1.png
+destination: OS standard folders (no directory is created)
+images -> /Users/me/Pictures (34 files, 25.7 MB)
+  examples: IMG_8478.JPG, IMG_8479.JPG
+1. /Users/me/Desktop/misc/IMG_8478.JPG -> /Users/me/Pictures/IMG_8478.JPG
+  ! refusing to overwrite /Users/me/Pictures/IMG_8479.JPG; nothing was changed
 ungrouped: 2 files
   - /Users/me/Desktop/misc/README (left in place)
 already in the destination: 1 files
   - /Users/me/Documents/already-filed.pdf (left in place)
 directories left alone: 1
   /Users/me/Desktop/misc/sub1
-naming: fallback (type-based names: no Jev key)
-mode: dry-run (nothing moved; pass --execute to file these groups)
+naming: none (no folder is created)
+mode: dry-run (nothing moved; pass --execute to file these)
 ```
 
-`--in-place` writes the destination relative to the scanned directory
-(`cbd-chart-1.png -> images/cbd-chart-1.png`) and leaves the
-`create directory:` row out, because the folder is the one you are looking at.
+With `--create-dir` the block is the folder being made, with the `create
+directory:` row `move` also prints:
+
+```text
+cluster: at-screenshot (9 files, 12.4 MB)
+  examples: at-1.png, at-2.png, at-3.png
+  create directory: /Users/me/Pictures/images/at-screenshot
+1. /Users/me/Desktop/misc/document/at-1.png -> /Users/me/Pictures/images/at-screenshot/at-1.png
+```
 
 `--format json` prints one `cluster` object: `directory`, `destination_mode`
 (`default_dirs` / `to` / `in_place`), `destination_base` (the `--to` directory,
-`null` otherwise), `executed`, `groups` (`name`, `directory`,
-`destination_base`, `create_directories`, `file_count`, `bytes`, `examples`,
-`candidates`, `name_source`, `assignments`), `ungrouped`,
-`already_in_destination`, `directories_left_alone`, `skipped`, `naming` and,
-after `--execute`, `batch_id`.
+`null` otherwise), `creates_directory`, `executed`, `groups` (`name` - `null`
+when no folder is created - `kind`, `directory`, `destination_base`,
+`create_directories`, `file_count`, `bytes`, `examples`, `candidates`,
+`name_source`, `assignments`), `ungrouped`, `already_in_destination`,
+`directories_left_alone`, `skipped`, `naming` and, after `--execute`, `batch_id`.
 
 ### Choose the destination yourself
 

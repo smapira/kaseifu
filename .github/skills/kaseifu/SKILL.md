@@ -67,11 +67,12 @@ kaseifu move <path> --to <dir>                              # move a file or a f
 kaseifu move <path> --to <dir> --execute                    # ... and perform it
 kaseifu move <path>... --to <dir> --create-dir --execute    # several paths, destination created first
 kaseifu cluster <dir>                                       # file each kind into its OS folder
-kaseifu cluster <dir> --execute                             # create the named folders and file the files
-kaseifu cluster <dir> --by-type                             # one folder per kind, ignore name tokens
-kaseifu cluster <dir> --to ~/Archive --execute              # every group under one directory
-kaseifu cluster <dir> --in-place --execute                  # folders inside <dir> instead
-kaseifu cluster <dir> --name-source auto                     # let the model pick the names (needs a key)
+kaseifu cluster <dir> --execute                             # ... and move the files (creates nothing)
+kaseifu cluster <dir> --create-dir --execute                # build the named folders too
+kaseifu cluster <dir> --create-dir --by-type                # one folder per kind, ignore name tokens
+kaseifu cluster <dir> --to ~/Archive --execute              # everything under one directory
+kaseifu cluster <dir> --create-dir --in-place --execute     # folders inside <dir> instead
+kaseifu cluster <dir> --create-dir --name-source auto        # let the model pick the names (needs a key)
 kaseifu undo                                                # put the last move back
 kaseifu undo --last 3                                       # the last three moves
 kaseifu undo --batch <id>                                   # exactly one batch, by its printed id
@@ -117,35 +118,39 @@ leaves it empty. A move across volumes copies, verifies (file count and bytes)
 and then removes the source, so a failure leaves the source whole.
 
 `kaseifu cluster <dir> [--execute]` files the files that sit directly in one
-directory into new subdirectories named after what they are, in the OS folder
-for that kind: `~/Pictures` (images), `~/Documents` (documents), `~/Downloads`
-(archives), `~/Movies` (video), `~/Music` (audio), and `~/Documents` for a kind
-the table does not name. The scanned directory is not a destination: a Desktop
-folder does not become a tree of folders on the Desktop. `--to <base>` files
-every group under one directory instead, `--in-place` creates the folders inside
-<dir> (for a folder being reorganised in place), and the two are exclusive. A
-file already under the destination is left alone and listed as
+directory into the OS folder for their type - `~/Pictures` (images),
+`~/Documents` (documents), `~/Downloads` (archives), `~/Movies` (video),
+`~/Music` (audio), and `~/Documents` for a type the table does not name - and
+creates nothing. A type folder that already exists (`~/Pictures/images`) takes
+the files instead; a standard folder that does not exist is an error naming the
+path and `--create-dir`; a name already taken at the destination is skipped for
+that file only and reported. The scanned directory is not a destination: a
+Desktop folder does not become a tree of folders on the Desktop. `--create-dir`
+builds the folders instead: each group under the type folder
+(`~/Pictures/images/at-screenshot`), or flat in the type folder
+(`~/Movies/videos`) when the name is the type name. `--to <base>` replaces the
+standard folder with one directory, `--in-place` replaces it with <dir>, and
+`--min` / `--max` / `--by-type` / `--name-source` / `--in-place` all require
+`--create-dir`. A file already under its standard folder is listed as
 `already in the destination`. Membership is decided without a model (type and
 name tokens); the model only picks a folder name among deterministic candidates,
 and the command works with no key and no network (the type-based name is used).
-Existing subdirectories are listed under
-`directories left alone` and are never moved; `--include-folders` treats the
-direct child folders as members instead, `--recursive` collects files from below
-them while leaving the folders. Only regular files are members. `--by-type`
-skips the token pass and keeps each kind together (`images/`, `documents/`,
-`archives/`), which is what covers a folder of unrelated one-off files.
-`--name-source` picks where the names come from: `type` (the default; the
-kind name, no model call, no key) or `auto` / `model` (the model when a key
-resolves, falling back to the type name with the reason). `--execute`
-creates each folder (sanitized; a colliding fallback name takes its own token,
-`images-screenshot`, before `name (2)`) and moves the files as one journal
-batch; `undo --batch <id>` moves the files back and removes the folders and the
-parent levels kaseifu created. The text report is one line per assignment:
-`cluster: <name> (<count> files, <size>)`, then `create directory: <path>` (not
-with `--in-place`), then `<n>. <source> -> <absolute destination>` (relative to
-<dir> with `--in-place`), then `ungrouped:` / `already in the destination:` /
-`directories left alone:` / `naming:` / `mode:` (or `batch:` followed by
-`undo reverses the moves`).
+Existing subdirectories are listed under `directories left alone` and are never
+moved; `--include-folders` treats the direct child folders as members instead,
+`--recursive` collects files from below them while leaving the folders. Only
+regular files are members. `--by-type` skips the token pass and keeps each kind
+together (`images/`, `documents/`, `archives/`), which is what covers a folder of
+unrelated one-off files. `--name-source` picks where the names come from: `type`
+(the default; the kind name, no model call, no key) or `auto` / `model` (the
+model when a key resolves, falling back to the type name with the reason).
+`--execute` moves the files as one journal batch; `undo --batch <id>` moves them
+back and removes the folders and parent levels kaseifu created. The text report
+is one line per assignment: `destination: OS standard folders (no directory is
+created)` (without `--create-dir`), then either `<type> -> <folder> (<count>
+files, <size>)` or `cluster: <name> (<count> files, <size>)` plus
+`create directory: <path>`, then `<n>. <source> -> <absolute destination>`, then
+`ungrouped:` / `already in the destination:` / `directories left alone:` /
+`naming:` / `mode:` (or `batch:` followed by `undo reverses the moves`).
 
 ## Repository policy (`.kaseifu.toml`)
 

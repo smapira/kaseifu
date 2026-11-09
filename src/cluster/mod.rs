@@ -1,23 +1,30 @@
-//! `kaseifu cluster` (issue #26): group the flat files of one directory and
-//! file them into abstract-named subdirectories.
+//! `kaseifu cluster` (issue #26): file the flat files of one directory into the
+//! folders they belong in.
 //!
 //! The command exists because `organize` answers a different question (one file
-//! into one existing place) and `move` asks the human for the destination. Here
-//! the destination does not exist yet: membership is decided deterministically
-//! ([`grouping`]), the name is chosen among deterministic candidates
-//! ([`naming`], the only model step), and the move reuses the journaled batch of
-//! issue #25 - including its directory creation and undo.
+//! into one existing place) and `move` asks the human for the destination.
+//!
+//! Two modes, decided by `--create-dir` (issue #28):
+//!
+//! - **Default: create nothing.** A member goes into an existing directory -
+//!   the type folder `<kind root>/<type>` when it exists, the kind root itself
+//!   otherwise - and the move reuses the journaled batch of issue #25. A
+//!   missing kind root is an error that names the path and `--create-dir`.
+//! - **`--create-dir`: build the folders.** Membership is decided
+//!   deterministically ([`grouping`]), the name is chosen among deterministic
+//!   candidates ([`naming`], the only model step), and the folder is created
+//!   under the type folder (`<kind root>/<type>/<name>`); a group whose name is
+//!   the type name lands flat in `<kind root>/<type>` instead, because a folder
+//!   called `images` inside `~/Pictures` says nothing the parent did not.
+//!
+//! The kind roots are the OS standard folders (issue #27): `~/Pictures`,
+//! `~/Documents`, `~/Downloads`, `~/Movies`, `~/Music`, and `~/Documents` for a
+//! kind the platform table does not name. `--to <base>` replaces the kind root
+//! with one directory, and `--in-place` replaces it with the scanned directory
+//! (which needs `--create-dir`, since it exists by definition).
 //!
 //! Only regular files directly under the root are members by default. Existing
-//! directories are discovered, reported and left alone (issue #26 acceptance),
-//! never moved.
-//!
-//! The group folders are created in the OS standard folder for each kind by
-//! default (issue #27): `~/Pictures/images`, `~/Documents/documents`. The
-//! scanned directory is not a destination: filing a Desktop folder into
-//! subfolders of itself only moves the clutter around. `--to <base>` files
-//! everything under one directory, and `--in-place` keeps the #26 layout
-//! (`<root>/<name>`) for a folder that is being reorganised in place.
+//! directories are discovered, reported and left alone, never moved.
 
 pub mod grouping;
 pub mod naming;
@@ -32,20 +39,17 @@ use naming::{GroupNamer, NameFailure, NameSource};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// Where the group directories are created (issue #27).
-///
-/// The scanned directory is never modified; this only decides the *parent* of
-/// each group folder.
+/// Where the folders come from (issues #27, #28).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DestinationBase {
-    /// The OS standard folder for each group's kind (`--to-defaults` is not a
-    /// flag: this is the default), and `~/Documents` for a kind the platform
-    /// table does not name.
+    /// The OS standard folder for each group's kind: `~/Pictures`,
+    /// `~/Documents`, and `~/Documents` for a kind the platform table does not
+    /// name. The default.
     DefaultDirs,
-    /// `<base>/<name>` for every group (`--to`).
+    /// One directory for every group (`--to`).
     Directory(PathBuf),
-    /// `<root>/<name>`: one folder inside the scanned directory (`--in-place`).
-    /// The #26 layout, now the opt-in for reorganising a folder in place.
+    /// The scanned directory (`--in-place`): the #26 layout for reorganising a
+    /// folder in place. Requires `--create-dir`.
     InPlace,
 }
 
@@ -93,8 +97,11 @@ pub struct ClusterOptions {
     pub recursive: bool,
     /// Group by type only: one group per file kind, ignoring name tokens.
     pub by_type: bool,
-    /// Where the group folders go (issue #27).
+    /// Where the kind roots come from (issue #27).
     pub destination: DestinationBase,
+    /// `--create-dir`: build the named folders (issue #28). Without it a run
+    /// only files into directories that already exist.
+    pub create_dir: bool,
 }
 
 impl Default for ClusterOptions {
@@ -106,30 +113,32 @@ impl Default for ClusterOptions {
             recursive: false,
             by_type: false,
             destination: DestinationBase::DefaultDirs,
+            create_dir: false,
         }
     }
 }
 
-/// One group that will become one directory.
+/// One destination directory and the members that go into it.
 #[derive(Debug, Clone)]
 pub struct PlannedGroup {
-    pub name: String,
+    /// The type word this block is grouped by (`images`, `documents`, `code`).
+    pub kind: String,
+    /// The folder this run creates, or `None` when the members go into a
+    /// directory that already exists (rules 2-3) or the name is the type name
+    /// itself (rule 5).
+    pub name: Option<String>,
     pub source: NameSource,
     pub candidates: Vec<String>,
     pub members: Vec<Member>,
-    /// The parent this group's directory is created under: the scanned
-    /// directory itself in the default layout (issue #27).
+    /// The type root this block files under (`~/Pictures`).
     pub base: PathBuf,
+    /// The directory the members are filed into.
+    pub directory: PathBuf,
     /// The validated move of every member into [`Self::directory`] (issue #25).
     pub batch: relocate::MoveBatch,
 }
 
 impl PlannedGroup {
-    /// The directory this group creates and fills.
-    pub fn directory(&self) -> PathBuf {
-        self.base.join(&self.name)
-    }
-
     /// Bytes over the group's file members.
     pub fn bytes(&self) -> u64 {
         self.members.iter().map(|member| member.bytes).sum()
@@ -149,13 +158,15 @@ impl PlannedGroup {
 #[derive(Debug, Clone)]
 pub struct ClusterPlan {
     pub root: PathBuf,
-    /// Where the folders go, resolved (issue #27).
+    /// Where the kind roots come from, resolved (issue #27).
     pub destination: DestinationBase,
+    /// True when the run was asked to build the folders (`--create-dir`).
+    pub creates_directory: bool,
     pub groups: Vec<PlannedGroup>,
+    /// Members below `--min` (only a run that creates folders has a threshold).
     pub ungrouped: Vec<Member>,
-    /// Members already under the destination base, so the folder they would
-    /// be filed into would sit around files that are where they belong. Left
-    /// where they are and reported (issue #27).
+    /// Members already under their kind root, so filing them would only move
+    /// them inside the folder they are in. Left where they are and reported.
     pub already_placed: Vec<Member>,
     /// Direct child directories that were not members and stay where they are.
     pub directories: Vec<PathBuf>,
@@ -177,7 +188,9 @@ impl ClusterPlan {
 /// What one group's execution did.
 #[derive(Debug, Clone)]
 pub struct GroupOutcome {
-    pub name: String,
+    /// The folder this group created, or `None` when it filed into an existing
+    /// directory.
+    pub name: Option<String>,
     /// Why the whole group failed (its directory could not be planned/created).
     pub error: Option<String>,
     pub items: Vec<relocate::ItemOutcome>,
@@ -298,7 +311,7 @@ struct Collected {
     skipped: Vec<PathBuf>,
 }
 
-/// Decide the whole run: membership, names, destinations. No mutation.
+/// Decide the whole run: membership and destinations. No mutation.
 pub async fn plan(
     root: &Path,
     options: &ClusterOptions,
@@ -315,40 +328,142 @@ pub async fn plan(
     if let DestinationBase::Directory(base) = &destination {
         validate_base(base)?;
     }
-    let (groups, ungrouped) =
-        grouping::group(collected.members, options.min, options.max, options.by_type);
-    let prepared = prepare_groups(groups, ungrouped, &destination, root, options.min)?;
-    let (named, naming_failure) = names_for(&prepared.groups, namer).await;
-    let planned = plan_folders(&prepared, named)?;
+    let run = if options.create_dir {
+        plan_created(root, options, &destination, collected.members, namer).await?
+    } else {
+        plan_into_existing(&destination, collected.members)?
+    };
 
     Ok(ClusterPlan {
         root: root.to_path_buf(),
         destination,
-        groups: planned,
-        ungrouped: prepared.ungrouped,
-        already_placed: prepared.already_placed,
+        creates_directory: options.create_dir,
+        groups: run.groups,
+        ungrouped: run.ungrouped,
+        already_placed: run.already_placed,
         directories: collected.directories,
         skipped: collected.skipped,
+        naming_failure: run.naming_failure,
+    })
+}
+
+/// The parts of a plan that the two modes decide differently.
+struct PlannedRun {
+    groups: Vec<PlannedGroup>,
+    ungrouped: Vec<Member>,
+    already_placed: Vec<Member>,
+    naming_failure: Option<String>,
+}
+
+/// Rules 2-3 (issue #28): file into directories that already exist.
+///
+/// Nothing is grouped and nothing is created - a member goes to the type folder
+/// `<kind root>/<type>` when that folder exists, and to the kind root otherwise.
+/// A single file is worth filing, so `--min` has no say here. A kind root that
+/// does not exist stops the run before anything moves, naming every missing one
+/// so the caller sees the whole picture rather than one kind at a time.
+fn plan_into_existing(destination: &DestinationBase, members: Vec<Member>) -> Result<PlannedRun> {
+    let mut buckets: BTreeMap<(PathBuf, &'static str), Vec<Member>> = BTreeMap::new();
+    let mut already_placed = Vec::new();
+    let mut missing: BTreeMap<PathBuf, &'static str> = BTreeMap::new();
+    for member in members {
+        let base = kind_root(destination, member.category)?;
+        if crate::benchmark::is_inside(&base, &member.source) {
+            already_placed.push(member);
+            continue;
+        }
+        if !base.is_dir() {
+            missing.insert(base, member.category.default_name());
+            continue;
+        }
+        let directory = existing_destination(&base, member.category);
+        buckets
+            .entry((directory, member.category.default_name()))
+            .or_default()
+            .push(member);
+    }
+    if !missing.is_empty() {
+        return Err(missing_roots_error(destination, &missing));
+    }
+
+    let mut claimed = BTreeSet::new();
+    let mut groups = Vec::with_capacity(buckets.len());
+    for ((directory, kind), members) in buckets {
+        let batch = plan_batch_claiming(&members, &directory, false, &mut claimed)?;
+        groups.push(PlannedGroup {
+            kind: kind.to_string(),
+            name: None,
+            source: NameSource::Fallback,
+            candidates: Vec::new(),
+            members,
+            base: directory.clone(),
+            directory,
+            batch,
+        });
+    }
+    Ok(PlannedRun {
+        groups,
+        ungrouped: Vec::new(),
+        already_placed,
+        naming_failure: None,
+    })
+}
+
+/// The refusal for kind roots that do not exist (issue #28 acceptance: the run
+/// does not create them, so nothing moves and the message asks for
+/// `--create-dir`).
+fn missing_roots_error(
+    destination: &DestinationBase,
+    missing: &BTreeMap<PathBuf, &'static str>,
+) -> anyhow::Error {
+    if let DestinationBase::Directory(base) = destination {
+        return anyhow!(
+            "--to is not a directory: {} (pass --create-dir to create it)",
+            base.display()
+        );
+    }
+    let listed = missing
+        .iter()
+        .map(|(path, kind)| format!("{kind} ({})", path.display()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let pronoun = if missing.len() == 1 { "it" } else { "them" };
+    anyhow!("no standard folder for {listed}; pass --create-dir to create {pronoun}")
+}
+
+/// Rules 4-5 (issue #28): group, name, and create the folders.
+async fn plan_created(
+    root: &Path,
+    options: &ClusterOptions,
+    destination: &DestinationBase,
+    members: Vec<Member>,
+    namer: &dyn GroupNamer,
+) -> Result<PlannedRun> {
+    let (groups, ungrouped) = grouping::group(members, options.min, options.max, options.by_type);
+    let prepared = prepare_groups(groups, ungrouped, destination, root, options.min)?;
+    let (named, naming_failure) = names_for(&prepared.groups, namer).await;
+    let groups = plan_folders(&prepared, named, destination)?;
+    Ok(PlannedRun {
+        groups,
+        ungrouped: prepared.ungrouped,
+        already_placed: prepared.already_placed,
         naming_failure,
     })
 }
 
-/// The groups a run will file, each with the base it goes to.
+/// The groups a run will file, each with its kind root.
 struct Prepared {
     /// Groups that keep at least `--min` members, with the surviving members
     /// only.
     groups: Vec<Group>,
-    /// The base of each group, in the same order.
+    /// The kind root of each group (R), in the same order.
     bases: Vec<PathBuf>,
     ungrouped: Vec<Member>,
     already_placed: Vec<Member>,
 }
 
-/// Resolve each group's base and leave out the members that are already there.
-///
-/// A member that already sits under the base has nothing to gain from a folder
-/// beside it (issue #27): cluster returns scattered files to where they belong,
-/// and these are there already.
+/// Resolve each group's kind root and leave out the members that are already
+/// there.
 fn prepare_groups(
     groups: Vec<Group>,
     mut ungrouped: Vec<Member>,
@@ -360,7 +475,7 @@ fn prepare_groups(
     let mut kept: Vec<Group> = Vec::with_capacity(groups.len());
     let mut bases: Vec<PathBuf> = Vec::with_capacity(groups.len());
     for group in groups {
-        let base = base_for(destination, root, group.category)?;
+        let base = create_base(destination, root, group.category)?;
         let members = filed_members(group.members, destination, &base, &mut already_placed);
         // The threshold is about the folder that would be made, so it is
         // re-applied after the ones already in place have left the group.
@@ -405,16 +520,28 @@ fn filed_members(
 }
 
 /// Allocate one name and one directory per group, and validate the moves.
-fn plan_folders(prepared: &Prepared, named: Vec<naming::NamedGroup>) -> Result<Vec<PlannedGroup>> {
+fn plan_folders(
+    prepared: &Prepared,
+    named: Vec<naming::NamedGroup>,
+    destination: &DestinationBase,
+) -> Result<Vec<PlannedGroup>> {
+    let in_place = *destination == DestinationBase::InPlace;
     let mut taken: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
+    let mut claimed = BTreeSet::new();
     let mut planned = Vec::with_capacity(prepared.groups.len());
     for ((group, named), base) in prepared.groups.iter().zip(named).zip(&prepared.bases) {
+        let type_folder = group.category.default_name();
+        let type_parent = base.join(type_folder);
+        // In place there is no type root to explain the kind, so a semantic
+        // name is created directly under the scanned directory (#26); the type
+        // folder is only used when the name carries nothing more than the type.
+        let parent = if in_place { base } else { &type_parent };
         let base_name = if named.name.is_empty() {
             group
                 .candidate_names()
                 .first()
                 .cloned()
-                .unwrap_or_else(|| group.category.default_name().to_string())
+                .unwrap_or_else(|| type_folder.to_string())
         } else {
             named.name
         };
@@ -423,50 +550,125 @@ fn plan_folders(prepared: &Prepared, named: Vec<naming::NamedGroup>) -> Result<V
         } else {
             None
         };
-        // Two groups in different bases cannot collide with each other, so the
-        // directory named this run is tracked per base.
+        // Two groups in different parents cannot collide with each other, so
+        // the names taken this run are tracked per parent.
         let name = unique_name(
-            base,
+            parent,
             &base_name,
             distinguishing,
-            taken.entry(base.clone()).or_default(),
+            taken.entry(parent.clone()).or_default(),
         );
-        let directory = base.join(&name);
-        let sources: Vec<PathBuf> = group
-            .members
-            .iter()
-            .map(|member| member.source.clone())
-            .collect();
-        let batch = relocate::plan_batch(&sources, &directory, true)
-            .map_err(|error| anyhow!("cannot file '{}': {error}", name))?;
+        // Rule 5: a folder named after the type says nothing the type root
+        // does not, so the members land flat in the type folder instead. In
+        // place there is no type root, so the folder is the grouping and is
+        // always created.
+        let creates_folder = in_place || !is_type_name(&name, type_folder);
+        let directory = if creates_folder {
+            parent.join(&name)
+        } else {
+            type_parent
+        };
+        let batch = plan_batch_claiming(&group.members, &directory, true, &mut claimed)?;
         planned.push(PlannedGroup {
-            name,
+            kind: type_folder.to_string(),
+            name: creates_folder.then_some(name),
             source: named.source,
             candidates: group.candidate_names(),
             members: group.members.clone(),
             base: base.clone(),
+            directory,
             batch,
         });
     }
     Ok(planned)
 }
 
-/// The parent one group's folder is created under (issue #27).
+/// True when a name carries no more information than the type folder it would
+/// be created in: the type name itself, or the type name with a collision
+/// number (`videos (2)`), which is what a group with no shared token gets.
+fn is_type_name(name: &str, type_folder: &str) -> bool {
+    let Some(rest) = name.strip_prefix(type_folder) else {
+        return false;
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    rest.strip_prefix(" (")
+        .and_then(|tail| tail.strip_suffix(')'))
+        .is_some_and(|number| {
+            !number.is_empty() && number.chars().all(|digit| digit.is_ascii_digit())
+        })
+}
+
+/// The kind root one group files under (issue #27/#28).
 ///
-/// In place, the base stays exactly as the scanned directory was spelled,
-/// because the report renders that layout relative to it. The OS answers keep
+/// In place, the kind root is the scanned directory itself; the OS answers keep
 /// their own absolute path so the report, the journal and `undo` name one
-/// place; a platform that defines no home at all leaves the scanned directory
-/// as the only possible parent.
-fn base_for(destination: &DestinationBase, root: &Path, category: Category) -> Result<PathBuf> {
+/// place.
+fn create_base(destination: &DestinationBase, root: &Path, category: Category) -> Result<PathBuf> {
     Ok(match destination {
-        DestinationBase::InPlace => root.to_path_buf(),
+        DestinationBase::InPlace => absolute(root)?,
         DestinationBase::Directory(base) => base.clone(),
         DestinationBase::DefaultDirs => match default_dir(category).resolve() {
             Some(base) => absolute(&base)?,
             None => root.to_path_buf(),
         },
     })
+}
+
+/// The kind root for a run that creates nothing.
+fn kind_root(destination: &DestinationBase, category: Category) -> Result<PathBuf> {
+    match destination {
+        DestinationBase::InPlace => Err(anyhow!(
+            "--in-place only works with --create-dir: the scanned directory already exists"
+        )),
+        DestinationBase::Directory(base) => Ok(base.clone()),
+        DestinationBase::DefaultDirs => match default_dir(category).resolve() {
+            Some(path) => absolute(&path),
+            None => Err(anyhow!(
+                "no standard folder for {} on this platform; pass --create-dir or --to <base>",
+                category.default_name()
+            )),
+        },
+    }
+}
+
+/// Rule 2-3: the type folder when it already exists, the kind root otherwise.
+fn existing_destination(base: &Path, category: Category) -> PathBuf {
+    let type_folder = base.join(category.default_name());
+    if type_folder.is_dir() {
+        type_folder
+    } else {
+        base.to_path_buf()
+    }
+}
+
+/// Plan one directory's batch, refusing a destination another group already
+/// claimed.
+///
+/// `plan_batch` catches two members of one directory that share a name; two
+/// blocks of the same kind root (`documents` and `data` both under
+/// `~/Documents`) could otherwise plan the same destination twice and let the
+/// second move fail halfway through the batch.
+fn plan_batch_claiming(
+    members: &[Member],
+    directory: &Path,
+    create: bool,
+    claimed: &mut BTreeSet<PathBuf>,
+) -> Result<relocate::MoveBatch> {
+    let sources: Vec<PathBuf> = members.iter().map(|member| member.source.clone()).collect();
+    let mut batch = relocate::plan_batch(&sources, directory, create)
+        .map_err(|error| anyhow!("cannot file into {}: {error}", directory.display()))?;
+    for item in &mut batch.items {
+        let Ok(plan) = &item.plan else {
+            continue;
+        };
+        let destination = plan.destination_path.clone();
+        if !claimed.insert(destination.clone()) {
+            item.plan = Err(relocate::RelocateError::Collision(destination));
+        }
+    }
+    Ok(batch)
 }
 
 /// The OS standard folder a group's kind belongs in (issue #27).
@@ -673,5 +875,120 @@ mod tests {
             DestinationBase::InPlace.resolved().expect("resolved"),
             DestinationBase::InPlace
         );
+    }
+
+    #[test]
+    fn a_name_that_only_repeats_the_type_is_recognised() {
+        assert!(is_type_name("images", "images"));
+        assert!(is_type_name("videos (2)", "videos"));
+        assert!(!is_type_name("at-screenshot", "images"));
+        assert!(!is_type_name("images-old", "images"));
+        assert!(!is_type_name("images (x)", "images"));
+        assert!(!is_type_name("image", "images"));
+    }
+
+    /// A namer that always answers with the same word, so the folder layout can
+    /// be tested without an HTTP stub.
+    struct FixedName(&'static str);
+
+    #[async_trait::async_trait]
+    impl GroupNamer for FixedName {
+        async fn name_groups(
+            &self,
+            groups: &[Group],
+        ) -> Result<Vec<naming::NamedGroup>, NameFailure> {
+            Ok(groups
+                .iter()
+                .map(|_| naming::NamedGroup {
+                    name: self.0.to_string(),
+                    source: NameSource::Jev,
+                })
+                .collect())
+        }
+    }
+
+    /// A scanned folder with two images the deterministic grouping keeps
+    /// together, and a destination base the test owns.
+    fn creation_sandbox(tag: &str) -> (PathBuf, PathBuf) {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-sandboxes")
+            .join(format!("cluster-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("misc");
+        std::fs::create_dir_all(&dir).expect("sandbox");
+        std::fs::write(dir.join("cbd-chart-1.png"), b"x").expect("file");
+        std::fs::write(dir.join("cbd-chart-2.png"), b"x").expect("file");
+        (root, dir)
+    }
+
+    #[tokio::test]
+    async fn a_semantic_name_is_created_under_the_type_folder() {
+        let (root, dir) = creation_sandbox("semantic");
+        let base = root.join("Pictures");
+        let options = ClusterOptions {
+            destination: DestinationBase::Directory(base.clone()),
+            create_dir: true,
+            ..ClusterOptions::default()
+        };
+
+        let plan = plan(&dir, &options, &FixedName("at-screenshot"))
+            .await
+            .expect("plan");
+        let group = &plan.groups[0];
+        assert_eq!(group.name.as_deref(), Some("at-screenshot"));
+        assert_eq!(group.directory, base.join("images/at-screenshot"));
+        assert_eq!(
+            group.batch.missing_directories,
+            vec![
+                base.clone(),
+                base.join("images"),
+                base.join("images/at-screenshot")
+            ],
+            "the kind root, the type folder and the named folder"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_type_name_is_filed_flat_in_the_type_folder() {
+        let (root, dir) = creation_sandbox("type-name");
+        let base = root.join("Movies");
+        let options = ClusterOptions {
+            destination: DestinationBase::Directory(base.clone()),
+            create_dir: true,
+            ..ClusterOptions::default()
+        };
+
+        let plan = plan(&dir, &options, &FixedName("images"))
+            .await
+            .expect("plan");
+        let group = &plan.groups[0];
+        assert_eq!(
+            group.name, None,
+            "a folder named after the type is not created"
+        );
+        assert_eq!(group.directory, base.join("images"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn the_default_files_into_the_existing_type_folder_without_creating() {
+        let (root, dir) = creation_sandbox("existing");
+        let base = root.join("Pictures");
+        std::fs::create_dir_all(base.join("images")).expect("Pictures/images");
+        let options = ClusterOptions {
+            destination: DestinationBase::Directory(base.clone()),
+            ..ClusterOptions::default()
+        };
+
+        let plan = plan(&dir, &options, &FixedName("never-asked"))
+            .await
+            .expect("plan");
+        let group = &plan.groups[0];
+        assert_eq!(group.name, None);
+        assert_eq!(group.directory, base.join("images"));
+        assert!(group.batch.missing_directories.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

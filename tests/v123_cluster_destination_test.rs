@@ -1,11 +1,16 @@
-//! v0.16.0 issue #27: `cluster` files each kind into the OS standard folder.
+//! v0.16.0 issues #27, #28: where `cluster` puts the files, and whether it
+//! creates anything.
 //!
-//! #26 created the group folders inside the scanned directory, which left a
-//! Desktop folder as a tree of folders on the Desktop. The folders now go to
-//! the OS folder for the kind (`~/Pictures`, `~/Documents`, `~/Downloads`,
-//! `~/Movies`, `~/Music`), `~/Documents` for a kind the table does not name,
-//! `--to` files everything under one directory instead, and `--in-place` keeps
-//! the old layout for a folder that is being reorganised in place.
+//! #27 filed every group into the OS standard folder for its kind, but created
+//! a folder for each group there (`~/Pictures/images`) - a name that repeats
+//! the parent and a `documents (2)` queue on every run. #28 settled the rules:
+//! a run creates nothing unless `--create-dir` is given.
+//!
+//! - Default, the type folder exists: file into it (`~/Pictures/images`).
+//! - Default, it does not: file into the kind root (`~/Pictures`), and refuse
+//!   the run when the kind root itself is missing.
+//! - `--create-dir`: create `<kind root>/<type>/<name>`, and land flat in
+//!   `<kind root>/<type>` when the name is the type name.
 //!
 //! Sandboxes live under `target/`, never under the system temp directory:
 //! `is_excluded_destination` refuses anything under `/var`.
@@ -96,72 +101,121 @@ fn entries(dir: &Path) -> Vec<String> {
     names
 }
 
-/// The directory one group would be created in, as the report states it.
-fn group_directory(json: &serde_json::Value, name: &str) -> PathBuf {
-    let groups = json["cluster"]["groups"].as_array().expect("groups");
-    let group = groups
+/// The groups of one report, keyed by the type word.
+fn group_of<'a>(json: &'a serde_json::Value, kind: &str) -> &'a serde_json::Value {
+    json["cluster"]["groups"]
+        .as_array()
+        .expect("groups")
         .iter()
-        .find(|group| group["name"] == name)
-        .unwrap_or_else(|| panic!("no group named {name}"));
+        .find(|group| group["kind"] == kind)
+        .unwrap_or_else(|| panic!("no group of kind {kind}"))
+}
+
+fn directory_of(group: &serde_json::Value) -> PathBuf {
     PathBuf::from(group["directory"].as_str().expect("directory"))
 }
 
+/// Every directory below `home`, so a test can prove that a run created none.
+fn directories_under(home: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut queue = vec![home.to_path_buf()];
+    while let Some(next) = queue.pop() {
+        for entry in std::fs::read_dir(&next).expect("read dir") {
+            let path = entry.expect("entry").path();
+            if !path.is_dir() || path.file_name().is_some_and(|name| name == "Library") {
+                continue;
+            }
+            found.push(path.clone());
+            queue.push(path);
+        }
+    }
+    found.sort();
+    found
+}
+
+/// The home a default run needs: the OS folders for the fixture's kinds, empty.
+fn standard_home(root: &Path) -> PathBuf {
+    let home = home_of(root);
+    for folder in ["Pictures", "Documents", "Downloads", "Movies"] {
+        std::fs::create_dir_all(home.join(folder)).expect("standard folder");
+    }
+    home
+}
+
 #[test]
-fn v123_the_default_files_each_kind_into_its_standard_folder() {
+fn v123_the_default_creates_nothing_and_files_into_the_standard_folder() {
     let root = sandbox("defaults");
-    let home = home_of(&root);
+    let home = standard_home(&root);
     let dir = fixture(&root);
+    let before = directories_under(&home);
 
     let output = run(
         &home,
-        &[
-            "cluster",
-            &dir.to_string_lossy(),
-            "--by-type",
-            "--format",
-            "json",
-        ],
+        &["cluster", &dir.to_string_lossy(), "--format", "json"],
     );
     assert!(output.status.success(), "stderr: {}", stderr_of(&output));
     let json = json_of(&output);
+    assert_eq!(json["cluster"]["creates_directory"], false);
     assert_eq!(json["cluster"]["destination_mode"], "default_dirs");
-    assert!(json["cluster"]["destination_base"].is_null());
+    // No type folder exists yet, so every kind goes into its own standard folder.
     assert_eq!(
-        group_directory(&json, "images"),
-        home.join("Pictures/images")
+        directory_of(group_of(&json, "images")),
+        home.join("Pictures")
     );
     assert_eq!(
-        group_directory(&json, "documents"),
-        home.join("Documents/documents")
+        directory_of(group_of(&json, "documents")),
+        home.join("Documents")
     );
     assert_eq!(
-        group_directory(&json, "archives"),
-        home.join("Downloads/archives")
+        directory_of(group_of(&json, "archives")),
+        home.join("Downloads")
     );
-    assert_eq!(group_directory(&json, "videos"), home.join("Movies/videos"));
-    // A kind the platform table does not name is a document, not a leftover.
-    assert_eq!(group_directory(&json, "data"), home.join("Documents/data"));
-    assert_eq!(group_directory(&json, "code"), home.join("Documents/code"));
-    // A dry run creates nothing, and the scanned directory keeps its files.
-    assert!(!home.join("Pictures").exists());
+    assert_eq!(directory_of(group_of(&json, "videos")), home.join("Movies"));
+    // A kind the platform table does not name is a document.
+    assert_eq!(
+        directory_of(group_of(&json, "data")),
+        home.join("Documents")
+    );
+    assert_eq!(
+        directory_of(group_of(&json, "code")),
+        home.join("Documents")
+    );
+    for group in json["cluster"]["groups"].as_array().expect("groups") {
+        assert!(group["name"].is_null(), "nothing is named: {group}");
+        assert_eq!(
+            group["create_directories"]
+                .as_array()
+                .expect("levels")
+                .len(),
+            0,
+            "nothing is created: {group}"
+        );
+    }
+    assert_eq!(
+        directories_under(&home),
+        before,
+        "a dry run created a folder"
+    );
     assert_eq!(entries(&dir).len(), 12);
 
-    let text = stdout_of(&run(
-        &home,
-        &["cluster", &dir.to_string_lossy(), "--by-type"],
-    ));
+    let text = stdout_of(&run(&home, &["cluster", &dir.to_string_lossy()]));
     assert!(
-        text.contains(&format!(
-            "  create directory: {}",
-            home.join("Pictures/images").display()
-        )),
+        text.starts_with("destination: OS standard folders (no directory is created)"),
         "{text}"
     );
     assert!(
         text.contains(&format!(
+            "images -> {} (2 files",
+            home.join("Pictures").display()
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("create directory:"), "{text}");
+    assert!(
+        text.contains(&format!(
             "1. {} -> {}",
             dir.join("cbd-chart-1.png").display(),
-            home.join("Pictures/images/cbd-chart-1.png").display()
+            home.join("Pictures/cbd-chart-1.png").display()
         )),
         "{text}"
     );
@@ -169,9 +223,100 @@ fn v123_the_default_files_each_kind_into_its_standard_folder() {
 }
 
 #[test]
+fn v123_the_type_folder_is_used_when_it_already_exists() {
+    let root = sandbox("type-folder");
+    let home = standard_home(&root);
+    let dir = fixture(&root);
+    std::fs::create_dir_all(home.join("Pictures/images")).expect("Pictures/images");
+    std::fs::create_dir_all(home.join("Documents/code")).expect("Documents/code");
+
+    let output = run(
+        &home,
+        &["cluster", &dir.to_string_lossy(), "--format", "json"],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr_of(&output));
+    let json = json_of(&output);
+    assert_eq!(
+        directory_of(group_of(&json, "images")),
+        home.join("Pictures/images")
+    );
+    assert_eq!(
+        directory_of(group_of(&json, "code")),
+        home.join("Documents/code")
+    );
+    // The folders that do not exist keep the kind root, which costs nothing.
+    assert_eq!(
+        directory_of(group_of(&json, "documents")),
+        home.join("Documents")
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn v123_the_default_execute_and_undo_put_the_files_back() {
     let root = sandbox("defaults-execute");
+    let home = standard_home(&root);
+    let dir = fixture(&root);
+    let before = directories_under(&home);
+
+    let output = run(
+        &home,
+        &[
+            "cluster",
+            &dir.to_string_lossy(),
+            "--execute",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr_of(&output));
+    let batch = json_of(&output)["cluster"]["batch_id"]
+        .as_str()
+        .expect("batch id")
+        .to_string();
+
+    assert_eq!(entries(&dir), Vec::<String>::new());
+    assert!(home.join("Pictures/cbd-chart-1.png").is_file());
+    assert!(home.join("Documents/cannabis-note-1.md").is_file());
+    assert!(home.join("Downloads/archive-bundle-1.zip").is_file());
+    assert!(home.join("Movies/clip-1.mp4").is_file());
+    assert_eq!(directories_under(&home), before, "a directory was created");
+
+    let undo = run(&home, &["undo", "--batch", &batch]);
+    assert!(undo.status.success(), "stderr: {}", stderr_of(&undo));
+    assert_eq!(entries(&dir).len(), 12, "every file came back");
+    assert!(
+        !stdout_of(&undo).contains("removed created directory"),
+        "this run created nothing to remove"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn v123_a_missing_standard_folder_names_the_flag_that_creates_it() {
+    let root = sandbox("missing-root");
     let home = home_of(&root);
+    std::fs::create_dir_all(home.join("Pictures")).expect("Pictures");
+    std::fs::create_dir_all(home.join("Documents")).expect("Documents");
+    let dir = fixture(&root);
+
+    let output = run(&home, &["cluster", &dir.to_string_lossy()]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = stderr_of(&output);
+    assert!(text.contains("no standard folder for"), "{text}");
+    assert!(
+        text.contains("Downloads"),
+        "the missing folder is named: {text}"
+    );
+    assert!(text.contains("--create-dir"), "{text}");
+    assert_eq!(entries(&dir).len(), 12, "nothing moved");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn v123_create_dir_builds_the_type_folder_and_undo_removes_it() {
+    let root = sandbox("create-dir");
+    let home = standard_home(&root);
     let dir = fixture(&root);
 
     let output = run(
@@ -179,7 +324,7 @@ fn v123_the_default_execute_and_undo_put_the_files_back() {
         &[
             "cluster",
             &dir.to_string_lossy(),
-            "--by-type",
+            "--create-dir",
             "--execute",
             "--format",
             "json",
@@ -191,93 +336,83 @@ fn v123_the_default_execute_and_undo_put_the_files_back() {
         .as_str()
         .expect("batch id")
         .to_string();
-
-    // The files left the scanned directory, and the scanned directory itself
-    // did not become a tree.
-    assert_eq!(entries(&dir), Vec::<String>::new());
+    assert_eq!(json["cluster"]["creates_directory"], true);
+    // The default namer is the type name, so rule 5 applies: flat in the type
+    // folder, no folder called `images` inside `~/Pictures`.
+    let images = group_of(&json, "images");
+    assert!(images["name"].is_null(), "{images}");
+    assert_eq!(directory_of(images), home.join("Pictures/images"));
     assert!(home.join("Pictures/images/cbd-chart-1.png").is_file());
     assert!(
         home.join("Documents/documents/cannabis-note-1.md")
             .is_file()
     );
-    assert!(
-        home.join("Downloads/archives/archive-bundle-1.zip")
-            .is_file()
-    );
-    assert!(home.join("Movies/videos/clip-1.mp4").is_file());
 
     let undo = run(&home, &["undo", "--batch", &batch]);
     assert!(undo.status.success(), "stderr: {}", stderr_of(&undo));
-    assert_eq!(entries(&dir).len(), 12, "every file came back");
-    // The standard folders this run created are gone again; the ones that hold
-    // nothing of this run stay.
-    assert!(!home.join("Pictures").exists(), "Pictures survived undo");
-    assert!(!home.join("Movies").exists(), "Movies survived undo");
+    assert_eq!(entries(&dir).len(), 12);
+    for created in [
+        "Pictures/images",
+        "Documents/documents",
+        "Downloads/archives",
+    ] {
+        assert!(!home.join(created).exists(), "{created} survived undo");
+    }
     let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
-fn v123_in_place_keeps_the_folders_inside_the_scanned_directory() {
-    let root = sandbox("in-place");
-    let home = home_of(&root);
+fn v123_a_collision_leaves_that_file_and_files_the_rest() {
+    let root = sandbox("collision");
+    let home = standard_home(&root);
     let dir = fixture(&root);
+    std::fs::write(home.join("Documents/cannabis-note-1.md"), b"mine").expect("existing");
 
-    let output = run(
+    let dry = run(
         &home,
-        &[
-            "cluster",
-            &dir.to_string_lossy(),
-            "--by-type",
-            "--in-place",
-            "--format",
-            "json",
-        ],
+        &["cluster", &dir.to_string_lossy(), "--format", "json"],
     );
-    assert!(output.status.success(), "stderr: {}", stderr_of(&output));
-    let json = json_of(&output);
-    assert_eq!(json["cluster"]["destination_mode"], "in_place");
-    assert!(json["cluster"]["destination_base"].is_null());
-    assert_eq!(group_directory(&json, "images"), dir.join("images"));
-
-    // The text keeps the #26 shape: the group name is the destination prefix and
-    // no directory is announced, because it is the folder the reader is in.
-    let text = stdout_of(&run(
-        &home,
-        &["cluster", &dir.to_string_lossy(), "--by-type", "--in-place"],
-    ));
-    assert!(!text.contains("create directory:"), "{text}");
+    assert!(dry.status.success(), "stderr: {}", stderr_of(&dry));
+    let json = json_of(&dry);
+    let assignments = group_of(&json, "documents")["assignments"]
+        .as_array()
+        .expect("assignments")
+        .clone();
+    let refused: Vec<&serde_json::Value> = assignments
+        .iter()
+        .filter(|assignment| !assignment["error"].is_null())
+        .collect();
+    assert_eq!(refused.len(), 1, "{assignments:?}");
     assert!(
-        text.contains(&format!(
-            "1. {} -> images/cbd-chart-1.png",
-            dir.join("cbd-chart-1.png").display()
-        )),
-        "{text}"
+        refused[0]["error"]
+            .as_str()
+            .expect("error")
+            .contains("refusing to overwrite"),
+        "{refused:?}"
     );
 
-    let executed = run(
-        &home,
-        &[
-            "cluster",
-            &dir.to_string_lossy(),
-            "--by-type",
-            "--in-place",
-            "--execute",
-            "--format",
-            "json",
-        ],
-    );
+    let output = run(&home, &["cluster", &dir.to_string_lossy(), "--execute"]);
+    assert_eq!(output.status.code(), Some(1), "a leftover is not success");
     assert!(
-        executed.status.success(),
+        stderr_of(&output).contains("1 file(s) could not be filed"),
         "stderr: {}",
-        stderr_of(&executed)
+        stderr_of(&output)
     );
-    assert!(dir.join("images/cbd-chart-1.png").is_file());
-    assert!(!home.join("Pictures").exists(), "the default leaked in");
+    assert_eq!(
+        std::fs::read(home.join("Documents/cannabis-note-1.md")).expect("read"),
+        b"mine",
+        "the existing file was overwritten"
+    );
+    assert!(
+        home.join("Documents/cannabis-note-2.md").is_file(),
+        "the rest moved"
+    );
+    assert_eq!(entries(&dir), vec!["cannabis-note-1.md".to_string()]);
     let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
-fn v123_a_file_already_under_the_base_is_left_alone() {
+fn v123_a_file_already_under_the_kind_root_is_left_alone() {
     let root = sandbox("already-placed");
     let home = home_of(&root);
     let documents = home.join("Documents");
@@ -291,48 +426,69 @@ fn v123_a_file_already_under_the_base_is_left_alone() {
     );
     assert!(output.status.success(), "stderr: {}", stderr_of(&output));
     let json = json_of(&output);
-    let placed = json["cluster"]["already_in_destination"]
-        .as_array()
-        .expect("already_in_destination");
-    assert_eq!(placed.len(), 2, "{json}");
+    assert_eq!(
+        json["cluster"]["already_in_destination"]
+            .as_array()
+            .expect("already_in_destination")
+            .len(),
+        2
+    );
     assert!(
         json["cluster"]["groups"]
             .as_array()
             .expect("groups")
             .is_empty(),
-        "a folder beside files that are already in place is not a plan: {json}"
+        "a file in the folder it belongs in is not a plan: {json}"
     );
 
     let executed = run(
         &home,
-        &[
-            "cluster",
-            &documents.to_string_lossy(),
-            "--execute",
-            "--format",
-            "json",
-        ],
+        &["cluster", &documents.to_string_lossy(), "--execute"],
     );
     assert_eq!(executed.status.code(), Some(1), "a no-op is not success");
     assert!(stderr_of(&executed).contains("already in the destination"));
-    assert_eq!(entries(&documents).len(), 2, "nothing was filed");
-    assert!(!documents.join("documents").exists());
+    assert_eq!(entries(&documents).len(), 2);
     let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
-fn v123_to_files_every_group_under_one_directory_and_undo_removes_it() {
+fn v123_to_files_every_group_under_one_directory() {
     let root = sandbox("to");
-    let home = home_of(&root);
+    let home = standard_home(&root);
     let dir = fixture(&root);
-    let base = root.join("out/deep");
+    let base = root.join("out");
+    std::fs::create_dir_all(base.join("documents")).expect("out/documents");
+
+    let dry = run(
+        &home,
+        &[
+            "cluster",
+            &dir.to_string_lossy(),
+            "--to",
+            &base.to_string_lossy(),
+            "--format",
+            "json",
+        ],
+    );
+    assert!(dry.status.success(), "stderr: {}", stderr_of(&dry));
+    let json = json_of(&dry);
+    assert_eq!(json["cluster"]["destination_mode"], "to");
+    assert_eq!(
+        json["cluster"]["destination_base"],
+        serde_json::json!(base.to_string_lossy())
+    );
+    // Rule 2 applies to a named base too: its type folder wins when it exists.
+    assert_eq!(
+        directory_of(group_of(&json, "documents")),
+        base.join("documents")
+    );
+    assert_eq!(directory_of(group_of(&json, "images")), base);
 
     let output = run(
         &home,
         &[
             "cluster",
             &dir.to_string_lossy(),
-            "--by-type",
             "--to",
             &base.to_string_lossy(),
             "--execute",
@@ -341,36 +497,137 @@ fn v123_to_files_every_group_under_one_directory_and_undo_removes_it() {
         ],
     );
     assert!(output.status.success(), "stderr: {}", stderr_of(&output));
-    let json = json_of(&output);
-    assert_eq!(json["cluster"]["destination_mode"], "to");
-    assert_eq!(
-        json["cluster"]["destination_base"],
-        serde_json::json!(base.to_string_lossy()),
-        "--to is reported as the base"
-    );
-    let batch = json["cluster"]["batch_id"]
+    let batch = json_of(&output)["cluster"]["batch_id"]
         .as_str()
         .expect("batch id")
         .to_string();
-    // Every kind lands under the one base, including the ones the OS would
-    // have taken.
-    assert!(base.join("images/cbd-chart-1.png").is_file());
+    assert!(base.join("cbd-chart-1.png").is_file());
     assert!(base.join("documents/cannabis-note-1.md").is_file());
-    assert!(!home.join("Pictures").exists());
-    assert_eq!(entries(&dir), Vec::<String>::new());
+    assert!(
+        !home
+            .join("Pictures")
+            .read_dir()
+            .expect("Pictures")
+            .any(|e| {
+                e.expect("entry")
+                    .path()
+                    .extension()
+                    .is_some_and(|ext| ext == "png")
+            })
+    );
 
     let undo = run(&home, &["undo", "--batch", &batch]);
     assert!(undo.status.success(), "stderr: {}", stderr_of(&undo));
     assert_eq!(entries(&dir).len(), 12);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn v123_to_with_create_dir_uses_the_type_folder() {
+    let root = sandbox("to-create");
+    let home = standard_home(&root);
+    let dir = fixture(&root);
+    let base = root.join("Archive");
+
+    let output = run(
+        &home,
+        &[
+            "cluster",
+            &dir.to_string_lossy(),
+            "--to",
+            &base.to_string_lossy(),
+            "--create-dir",
+            "--execute",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr_of(&output));
+    let batch = json_of(&output)["cluster"]["batch_id"]
+        .as_str()
+        .expect("batch id")
+        .to_string();
+    assert!(base.join("images/cbd-chart-1.png").is_file());
+    assert!(base.join("documents/cannabis-note-1.md").is_file());
+
+    let undo = run(&home, &["undo", "--batch", &batch]);
+    assert!(undo.status.success(), "stderr: {}", stderr_of(&undo));
     assert!(!base.exists(), "the created base survived undo");
-    assert!(!root.join("out").exists(), "the parents survived undo");
+    assert_eq!(entries(&dir).len(), 12);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn v123_in_place_needs_create_dir_and_keeps_the_folders_inside_the_directory() {
+    let root = sandbox("in-place");
+    let home = home_of(&root);
+    let dir = fixture(&root);
+
+    let refused = run(&home, &["cluster", &dir.to_string_lossy(), "--in-place"]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(
+        stderr_of(&refused).contains("required arguments were not provided"),
+        "stderr: {}",
+        stderr_of(&refused)
+    );
+
+    let output = run(
+        &home,
+        &[
+            "cluster",
+            &dir.to_string_lossy(),
+            "--in-place",
+            "--create-dir",
+            "--execute",
+            "--format",
+            "json",
+        ],
+    );
+    assert!(output.status.success(), "stderr: {}", stderr_of(&output));
+    let json = json_of(&output);
+    assert_eq!(json["cluster"]["destination_mode"], "in_place");
+    // In place there is no type root to explain the kind, so the folder is made.
+    assert_eq!(directory_of(group_of(&json, "images")), dir.join("images"));
+    assert!(dir.join("images/cbd-chart-1.png").is_file());
+    assert!(!home.join("Pictures").exists(), "the default leaked in");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn v123_the_creating_flags_require_create_dir() {
+    let root = sandbox("requires");
+    let home = standard_home(&root);
+    let dir = fixture(&root);
+    let path = dir.to_string_lossy().to_string();
+
+    for flags in [
+        vec!["--min", "3"],
+        vec!["--max", "3"],
+        vec!["--by-type"],
+        vec!["--name-source", "auto"],
+        vec!["--in-place"],
+    ] {
+        let mut args = vec!["cluster", path.as_str()];
+        args.extend(flags.iter().copied());
+        let output = run(&home, &args);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{flags:?} was accepted without --create-dir"
+        );
+        assert!(
+            stderr_of(&output).contains("--create-dir"),
+            "{flags:?}: {}",
+            stderr_of(&output)
+        );
+    }
     let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
 fn v123_an_excluded_base_is_refused_before_anything_moves() {
     let root = sandbox("excluded");
-    let home = home_of(&root);
+    let home = standard_home(&root);
     let dir = fixture(&root);
     let before = entries(&dir);
 
@@ -387,6 +644,7 @@ fn v123_an_excluded_base_is_refused_before_anything_moves() {
                 &dir.to_string_lossy(),
                 "--to",
                 &base.to_string_lossy(),
+                "--create-dir",
             ],
         );
         assert_eq!(
@@ -409,7 +667,7 @@ fn v123_an_excluded_base_is_refused_before_anything_moves() {
 #[test]
 fn v123_to_and_in_place_are_mutually_exclusive() {
     let root = sandbox("exclusive");
-    let home = home_of(&root);
+    let home = standard_home(&root);
     let dir = fixture(&root);
 
     let output = run(
@@ -417,6 +675,7 @@ fn v123_to_and_in_place_are_mutually_exclusive() {
         &[
             "cluster",
             &dir.to_string_lossy(),
+            "--create-dir",
             "--to",
             &root.join("out").to_string_lossy(),
             "--in-place",

@@ -9,32 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`cluster` files each kind into the OS standard folder by default.** Issue
-  #27: creating the group folders inside the scanned directory (the #26 layout)
-  left a Desktop folder as a tree of folders on the Desktop - the clutter moved
-  one level down instead of going away. A group now lands in `~/Pictures`
-  (images), `~/Documents` (documents), `~/Downloads` (archives), `~/Movies`
-  (video), `~/Music` (audio), and `~/Documents` for a kind the table does not
-  name (csv, a file with no extension, code). A standard folder the OS defines
-  but that does not exist yet is created, and `undo --batch` removes the levels
-  it made. The text report names the folder and the absolute destination
-  (`create directory: /Users/me/Pictures/images`,
-  `-> /Users/me/Pictures/images/cbd-chart-1.png`). A file that already sits
-  under the destination is left alone and reported as
-  `already in the destination`. `--format json` keeps every existing key and
-  adds `destination_mode` (`default_dirs` / `to` / `in_place`),
-  `destination_base`, `already_in_destination`, and per group `destination_base`
-  and `create_directories`. `tests/v123_cluster_destination_test.rs`.
+- **`cluster` files each kind into its OS standard folder and creates nothing.**
+  Issues #27 and #28. A run files every file into `~/Pictures` (images),
+  `~/Documents` (documents), `~/Downloads` (archives), `~/Movies` (video),
+  `~/Music` (audio), and `~/Documents` for a type the table does not name (csv, a
+  file with no extension, code). When the type folder already exists
+  (`~/Pictures/images`) the files go there instead, because someone made that
+  folder for them. The scanned directory is never a destination: tidying a
+  Desktop folder no longer leaves a tree of folders on the Desktop. A standard
+  folder that does not exist is an error naming the path and `--create-dir`,
+  with nothing moved; a name already taken at the destination is skipped for
+  that file only, reported on its own `!` line, and the exit code says something
+  was left behind. `--min`/`--max` become create-time concepts, and a file that
+  already sits under its standard folder is listed as
+  `already in the destination`. The text report leads with
+  `destination: OS standard folders (no directory is created)` and uses
+  `<type> -> <absolute folder> (<count> files, <size>)` blocks; `--format json`
+  keeps every existing key and adds `creates_directory`, `destination_mode`
+  (`default_dirs` / `to` / `in_place`), `destination_base`, per group `name`
+  (`null` when no folder is made), `kind`, `destination_base` and
+  `create_directories`, and `already_in_destination`.
+  `tests/v123_cluster_destination_test.rs`.
 
 ### Added
 
-- **`cluster --to <base>` and `cluster --in-place`.** `--to` files every group
-  under one directory (created with its missing parents, each level subject to
-  the never-a-destination rule; an excluded base is refused before anything
-  moves), which is the shape `move` and the journal already understood.
-  `--in-place` keeps the #26 layout (`<dir>/<name>`) for a folder that is being
-  reorganised in place, and is the only mode that writes a destination relative
-  to the scanned directory. The two are mutually exclusive.
+- **`cluster --create-dir`, `--to <base>` and `--in-place`.** `--create-dir`
+  builds the folders: each group is created under the type folder
+  (`~/Pictures/images/at-screenshot`) and its files move in, while a group named
+  after its type lands flat in the type folder (`~/Movies/videos`) instead of
+  adding a folder that repeats the parent. `--to <base>` replaces the standard
+  folder with one directory (every created level still subject to the
+  never-a-destination rule), `--in-place` replaces it with the scanned directory,
+  and `--min`, `--max`, `--by-type`, `--name-source` and `--in-place` require
+  `--create-dir` because none of them means anything when nothing is created.
+  `undo --batch` removes the levels the run created, including a standard folder
+  that did not exist before.
 
 ## [0.15.0] - 2026-11-08
 

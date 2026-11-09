@@ -1,95 +1,112 @@
-# `cluster`: file each kind into its OS standard folder (#27)
+# `cluster`: file each kind into its OS standard folder (#27, #28)
 
 Last updated: 2026-11-09.
 
-Issue: [#27](https://github.com/smapira/kaseifu/issues/27). Reverses the
-in-place layout #26 chose; reuses [#18](https://github.com/smapira/kaseifu/issues/18)'s
-extension table and [#25](https://github.com/smapira/kaseifu/issues/25)'s created
-directory machinery.
+Issues: [#27](https://github.com/smapira/kaseifu/issues/27) (the parent folder),
+[#28](https://github.com/smapira/kaseifu/issues/28) (do not create one). Reuses
+[#18](https://github.com/smapira/kaseifu/issues/18)'s extension table and
+[#25](https://github.com/smapira/kaseifu/issues/25)'s created-directory
+machinery.
 
 ## Why
 
 #26 created the group folders inside the scanned directory (`<dir>/<name>`). The
 owner rejected that layout: tidying `~/Desktop/misc` produced
 `~/Desktop/misc/images/`, so the Desktop still carried the clutter, one level
-down. Tidying means returning scattered files to where they belong, not growing
-a tree inside the folder they were cluttering.
+down. #27 moved the folders to the OS standard directory for the kind, and #28
+went one step further: a run that was asked to tidy must not answer by building
+folders the owner did not ask for (`~/Pictures/images` repeats the parent,
+`documents (2)` queues up on every run).
 
 ## What the command does now
 
 ```text
-kaseifu cluster <dir> [--min N] [--max N] [--include-folders] [--recursive]
-                    [--by-type] [--name-source type|auto|model]
+kaseifu cluster <dir> [--create-dir] [--min N] [--max N] [--include-folders]
+                    [--recursive] [--by-type] [--name-source type|auto|model]
                     [--to <base> | --in-place] [--execute]
 ```
 
-- **Default**: each group folder is created under the OS standard directory for
-the group's kind - `~/Pictures` (images), `~/Documents` (documents),
-  `~/Downloads` (archives), `~/Movies` (video), `~/Music` (audio) - resolved
-  through `dirs` and `src/platform/user_dirs.rs`. The scanned directory is never
-  a destination.
-- **A kind the table does not name** (csv, a file with no extension, code,
-  folders) goes to `~/Documents`. The owner's rule is that the scanned directory
-  is not a destination, so a document folder is a better answer than leaving the
-  clutter where it was; the choice is recorded here rather than in a comment.
-- **`--to <base>`** files every group under one directory instead. The base and
-  its missing parents are created, every created level passes the
-  never-a-destination rule, and a base that rule refuses (`~/Library/**`, caches,
-  system trees) is refused before anything is planned or moved.
-- **`--in-place`** keeps the #26 layout for a folder that is being reorganised in
-  place. `--to` and `--in-place` are mutually exclusive.
-- **Membership, names and the journal are unchanged** from #26: the same
-  deterministic grouping, the same candidate names, one batch id, `undo --batch`
-  reverses the moves and removes the created levels - now including the standard
-  folders the run made (for example a `~/Movies` that did not exist yet).
-- **A file already under the destination is left alone** and listed as
-  `already in the destination`: running `cluster ~/Documents` must not build
-  `~/Documents/documents/` around files that are already filed. In place, the
-  rule does not apply, because a folder inside the scanned directory is the point
-  of the flag.
+R is the kind root, T the type folder, S a name chosen for the group.
 
-## Output
+| # | Situation | Destination |
+|---|---|---|
+| 1 | Default, a matching directory under R | not implemented yet (see below) |
+| 2 | Default, the type folder `R/T` exists | `R/T` |
+| 3 | Default, neither | `R` directly - **nothing is created** |
+| 4 | `--create-dir`, a semantic name | `R/T/S` |
+| 5 | `--create-dir`, the name is the type name | `R/T` (flat) |
 
-Text, one block per group:
-
-```text
-cluster: images (11 files, 1.2 MB)
-  examples: cbd-chart-1.png, cbd-chart-2.png
-  create directory: /Users/me/Pictures/images
-1. /Users/me/Desktop/misc/cbd-chart-1.png -> /Users/me/Pictures/images/cbd-chart-1.png
-```
-
-The `create directory:` row is the one `move` prints (a shared helper), and the
-destination is absolute because the folder is no longer inside the scanned
-directory. `--in-place` keeps the #26 shape (`-> images/cbd-chart-1.png`) and
-leaves the row out.
-
-JSON adds `destination_mode` (`default_dirs` / `to` / `in_place`),
-`destination_base` (the `--to` value, `null` otherwise), per group
-`destination_base` and `create_directories`, and `already_in_destination`. Every
-previously published key keeps its meaning.
+- **R** = the OS standard folder: `~/Pictures` (images), `~/Documents`
+  (documents), `~/Downloads` (archives), `~/Movies` (video), `~/Music` (audio),
+  and `~/Documents` for a type the table does not name (csv, no extension, code,
+  folders). The scanned directory is never a destination.
+- **T** = `Category::default_name()`: `images` / `documents` / `archives` /
+  `videos` / `audio` / `code` / `data` / `folders` / `misc`.
+- **Nothing is created without `--create-dir`.** A kind root that does not exist
+  is an error naming every missing root and the flag that would create it, with
+  nothing moved.
+- **A file already under R is left alone** and reported as
+  `already in the destination`; `--in-place` is exempt (it files into R).
+- **A name already taken at the destination** is refused for that file only and
+  reported on its own `!` line; the rest of the batch runs and the exit code
+  says something was left behind.
+- **`--create-dir`** groups and names as #26 did, then creates the folder under
+  the type folder. `--min` / `--max` / `--by-type` / `--name-source` /
+  `--in-place` require it (clap `requires`): none of them means anything when
+  nothing is created.
+- **Parent creation and undo** ride on #25's journal: every created level is a
+  row, so `undo --batch` removes `R`, `R/T` and `R/T/S` once they are empty.
+- **`--to <base>`** replaces R with one directory (rule 2 applies to it too), and
+  **`--in-place`** replaces R with the scanned directory; the two are mutually
+exclusive. `--in-place` keeps the #26 shape (`<dir>/S`) because the scanned
+  folder is not a type root, so there is no T layer.
 
 ## Decisions
 
-- **The default is a breaking change, so it is a minor release (v0.16.0).** A
-  caller scripting the text report sees absolute destinations now; the opt-in for
-  the old shape is `--in-place`.
-- **`~/Documents` for an undecided kind** rather than a `misc/` bucket in the
-  scan directory: the issue names this explicitly, and a `misc` folder in
-  `~/Documents` would only move the ambiguity.
-- **The destination is resolved by kind, not by extension.** A group is already
-  one kind (`png` and `jpg` land together), so the mapping is
-  `Category -> UserDirKind`; a unit test pins it to
-  `kind_for_extension()` for every kind both tables know.
-- **`--to` wins nowhere and loses nowhere**: it conflicts with `--in-place`
-  instead of silently overriding it.
+- **Rule 1 (match an existing directory under R) is not implemented.** The issue
+  leaves its threshold and search depth open, and the measurement behind it shows
+  why they matter: of 130 files, exactly one matched at score 1.00 while thirty
+  others landed at 0.06-0.35 on folders like
+  `~/Documents/Ambient Context/Days/2026-09-23`. Filing a file into that folder
+  on a 0.2 score is worse than filing it into `~/Documents`. Rules 2-5 are
+  settled and do not depend on the answer, so they ship now and rule 1 lands
+  when the owner picks the line (recorded recommendation: `R`'s direct children
+  only, score >= 0.6, plus an exact-name or same-directory-parent reason).
+- **`~/Documents` for a type the table does not name**, as the issue states. The
+  alternative (leave those files in place with a reason) is recorded as open in
+  #28; if the owner picks it, `default_dir` returns no root for `Data` / `Code` /
+  `Folder` / `Other` and the file is reported instead of filed.
+- **Rule 5 exists so a type name is never a folder.** The measured
+  `Movies/videos` came from a group whose only candidate was the type name;
+  `videos (2)` is the same non-information with a number. In place the type
+  folder is the grouping, so rule 5 does not apply there.
+- **The default output changed**, so this is a minor release (v0.16.0), not a
+  patch: `cluster` no longer creates anything by default.
+
+## Output
+
+Text, one block per destination:
+
+```text
+destination: OS standard folders (no directory is created)
+images -> /Users/me/Pictures (34 files, 25.7 MB)
+1. /Users/me/Desktop/misc/IMG_8478.JPG -> /Users/me/Pictures/IMG_8478.JPG
+  ! refusing to overwrite /Users/me/Pictures/IMG_8479.JPG; nothing was changed
+```
+
+JSON adds `creates_directory`, per group `kind` and `destination_base`, and keeps
+`name` (now `null` when no folder is created), `destination_mode`,
+`destination_base`, `create_directories` and `already_in_destination`.
 
 ## Verification
 
-- `tests/v123_cluster_destination_test.rs` (7 tests): the default mapping for
-every kind, execute and undo across the standard folders, `--in-place` layout and
-  text, a file already under the destination, `--to` with created parents and
-  undo, an excluded base, and the flag conflict.
-- `tests/v122_cluster_test.rs` keeps the #26 rules under `--in-place` where they
-  pin that layout.
-- `bash scripts/quality_check.sh`.
+- `tests/v123_cluster_destination_test.rs` (13 tests): the default creates no
+  directory and files into the standard folders, the existing type folder wins, a
+  missing root names the flag, `--create-dir` builds and `undo` removes, a
+  collision leaves one file, `--to` with and without `--create-dir`, `--in-place`,
+  the `requires` flags, an excluded base, and the flag conflict.
+- `src/cluster/mod.rs` unit tests: rules 4 and 5 with a fixed namer, plus the
+  kind-root table.
+- `tests/v122_cluster_test.rs` keeps the #26 rules under `--create-dir
+  --in-place`.
+

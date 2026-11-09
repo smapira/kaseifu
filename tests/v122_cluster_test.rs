@@ -33,7 +33,7 @@ fn home_of(root: &Path) -> PathBuf {
 fn run_with_env(home: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_kaseifu"));
     command
-        .args(args)
+        .args(cluster_layout(args))
         .current_dir(home)
         .env("HOME", home)
         .env("KASEIFU_KEY_SOURCE", "env")
@@ -51,6 +51,24 @@ fn run_with_env(home: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
 
 fn run(home: &Path, args: &[&str]) -> Output {
     run_with_env(home, args, &[])
+}
+
+/// The arguments with the #26 layout switched on.
+///
+/// Issue #28 made `cluster` create nothing unless `--create-dir` is given, and
+/// `--in-place` is what puts the folders inside the scanned directory. Every
+/// test in this file pins that layout (grouping, naming, `--min`/`--max`,
+/// `undo --batch`), so the two flags belong to the file rather than to each
+/// call.
+fn cluster_layout(args: &[&str]) -> Vec<String> {
+    let mut full: Vec<String> = Vec::with_capacity(args.len() + 2);
+    full.push(args[0].to_string());
+    if args[0] == "cluster" {
+        full.push("--create-dir".to_string());
+        full.push("--in-place".to_string());
+    }
+    full.extend(args[1..].iter().map(|arg| arg.to_string()));
+    full
 }
 
 fn stdout(output: &Output) -> String {
@@ -203,17 +221,12 @@ fn v122_a_pre_existing_directory_is_never_reused() {
     std::fs::create_dir_all(dir.join("images")).expect("images");
     std::fs::write(dir.join("images/own.png"), b"own").expect("own");
 
-    // `--in-place` is the layout where a folder in the scanned directory is a
-    // destination at all (issue #27 moved the default to the OS folders).
+    // `--in-place` (added by `cluster_layout`) is the layout where a folder in
+    // the scanned directory is a destination at all (issue #27 moved the default
+    // to the OS folders; issue #28 stopped creating them there).
     let output = run(
         &home,
-        &[
-            "cluster",
-            &dir.to_string_lossy(),
-            "--in-place",
-            "--format",
-            "json",
-        ],
+        &["cluster", &dir.to_string_lossy(), "--format", "json"],
     );
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let json: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("json");
