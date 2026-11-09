@@ -38,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already sits under its standard folder is listed as
   `already in the destination`. The text report leads with
   `destination: OS standard folders (no directory is created)` and uses
-  `<class>/<extension> -> <absolute folder> (<count> files, <size>)` blocks;
+  `<folder>/<extension> -> <absolute folder> (<count> files, <size>)` blocks
+  (`documents/html` for the html files above);
   `--format json` keeps every existing key and adds `creates_directory`,
   `destination_mode` (`default_dirs` / `to` / `in_place`), `destination_base`,
   per group `name` (`null` when no folder is made), `kind`, `class_folder`,

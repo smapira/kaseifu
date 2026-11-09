@@ -122,7 +122,7 @@ directory into the OS folder for their type and creates nothing: `~/Pictures`
 (images), `~/Documents` (documents), `~/Downloads` (archives), `~/Movies`
 (video), `~/Music` (audio), with `~/Documents` for a type the table does not
 name - and there the extension is the type (`documents/html`, `documents/sh`),
-not a `code` or `misc` bucket. A type is a chain of class then extension, and a
+not a `code` or `misc` bucket. A type is a chain of folder then extension, and a
 run files into the deepest folder of it that already exists
 (`~/Pictures/images/png`, else `~/Pictures/images`, else `~/Pictures`). A
 standard folder that does not exist is an error naming the path and
