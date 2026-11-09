@@ -5,13 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.16.0] - 2026-11-10
 
 > **Breaking for `cluster`.** Up to v0.15.0 a run created `<dir>/<name>/`
 > folders inside the scanned directory; it now files each file into the OS
 > standard folder for its type and creates nothing. Scripts that read the plan
-> or relied on those folders must pass `--create-dir --in-place` (the old shape)
-> or `--create-dir` (named folders under the type chain). The text report, the
+> or relied on those folders must pass `--create-dir --in-place` (the #26 shape)
+> or `--create-dir` (named folders under the type folder). The text report, the
 > destinations and the JSON `groups[].name` (`null` when no folder is made)
 > change with it, and `--min`, `--max`, `--by-type`, `--name-source` and
 > `--in-place` are now refused without `--create-dir`.

@@ -353,7 +353,12 @@ fn w4_s20_version_and_command_surface() {
     let (dir, home) = cli_fixture("s20-version");
     let output = run(&dir, &home, &["--version"]);
     assert!(output.status.success());
-    assert_eq!(stdout_of(&output).trim(), "kaseifu 0.15.0");
+    // The package version is the source of truth, so a release bumps it in one
+    // place instead of also editing this expectation.
+    assert_eq!(
+        stdout_of(&output).trim(),
+        format!("kaseifu {}", env!("CARGO_PKG_VERSION"))
+    );
     assert!(stderr_of(&output).is_empty());
 }
 
