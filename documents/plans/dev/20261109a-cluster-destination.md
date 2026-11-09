@@ -30,7 +30,7 @@ R is the kind root, T the class, E the extension, S a name chosen for the group.
 
 | # | Situation | Destination |
 |---|---|---|
-| 1 | Default, a matching directory under R | not implemented yet (see below) |
+| 1 | Default, a matching directory under R | deferred: future opt-in `--match-existing` |
 | 2 | Default, a type folder already exists | the deepest of `R/T/E`, `R/T`, `R` |
 | 3 | Default, neither | `R` directly - **nothing is created** |
 | 4 | `--create-dir`, a semantic name | `R/T/E/S` |
@@ -69,7 +69,10 @@ R is the kind root, T the class, E the extension, S a name chosen for the group.
   extension, because that is the type - then creates the folder under the type
   folder. `--min` / `--max` / `--by-type` / `--name-source` / `--in-place`
   require it (clap `requires`): none of them means anything when nothing is
-  created.
+  created. `--min` therefore decides only what gets a folder: the default files
+  a group of one, while `--create-dir` leaves a group below the threshold
+  `ungrouped` and in place, so the same folder plans 130 moves by default and
+  62 with the default `--min 2` when most types are one file each.
 - **Parent creation and undo** ride on #25's journal: every created level is a
   row, so `undo --batch` removes `R`, `R/T`, `R/T/E` and `R/T/E/S` once they are
   empty.
@@ -81,22 +84,23 @@ R is the kind root, T the class, E the extension, S a name chosen for the group.
 
 ## Decisions
 
-- **Rule 1 (match an existing directory under R) is not implemented.** The issue
-  leaves its threshold and search depth open, and the measurement behind it shows
-  why they matter: of 130 files, exactly one matched at score 1.00 while thirty
-  others landed at 0.06-0.35 on folders like
-  `~/Documents/Ambient Context/Days/2026-09-23`. Filing a file into that folder
-  on a 0.2 score is worse than filing it into `~/Documents`. Rules 2-5 are
-  settled and do not depend on the answer, so they ship now and rule 1 lands
-  when the owner picks the line (recorded recommendation: `R`'s direct children
-  only, score >= 0.6, plus an exact-name or same-directory-parent reason).
-- **`~/Documents` for a type the table does not name**, with the extension as its
-  type. The owner's decision removed the `code` / `data` / `misc` buckets: a
-  `documents/html` folder says what the files are, and the same structure then
-  applies to the kinds the table does know (`images/png`, `videos/mp4`). Whether
-  those files should be moved at all - or left in place with a reason - is still
-  open in #28; the alternative is `default_dir` returning no root for
-  `Data` / `Code` / `Folder` / `Other`, which reports them instead of filing.
+- **Rule 1 (match an existing directory under R) is not implemented, and is
+  not going into the default.** The issue leaves its threshold and search depth
+  open, and the measurement behind it shows why they matter: of 130 files,
+  exactly one matched at score 1.00 while thirty others landed at 0.06-0.35 on
+  folders like `~/Documents/Ambient Context/Days/2026-09-23`. Filing a file into
+  that folder on a 0.2 score is worse than filing it into `~/Documents`, and one
+  lucky exact match is not evidence that a threshold exists. Rules 2-5 are
+  settled and do not depend on the answer, so they ship now; rule 1 waits for a
+  `--match-existing` opt-in once real match data justifies a line (recorded
+  recommendation: `R`'s direct children only, score >= 0.6, plus an exact-name
+  or same-directory-parent reason). Recorded as
+  `../issues/open/20261109-open-cluster-match-existing.md`.
+- **`~/Documents` for a type the table does not name.** The owner's decision
+  removed the `code` / `data` / `misc` buckets (the first two are still reported
+  as `kind`, which is not the folder), and a kind nothing names has no folder at
+  all: it is filed flat in `~/Documents` while `xls` / `xlsx` stay in the
+  document family with `pdf` / `md` / `numbers`.
 - **Rule 5 exists so a type name is never a folder.** `Movies/videos` and
   `Pictures/images/png/at-screenshot` came from a group whose only candidate was
   the type name; `<type> (2)` is the same non-information with a number. In place

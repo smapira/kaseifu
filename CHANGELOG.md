@@ -26,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Documents/documents/csv`), so the `code`, `data` and `misc` folders are gone.
   A file the table does not name (`psd`, `ttf`, `webloc`, no extension) gets no
   folder at all: it is filed flat in its standard folder (`~/Documents/x.ttf`),
-  and no `misc` bucket or `documents` level is invented for it. What a file *is*
+  and no `misc` bucket or `documents` level is invented for it. `xls` and `xlsx`
+  are documents like the rest of the spreadsheet family, so a workbook is no
+  longer an unknown type. What a file *is*
   stays separate from where it goes: `kind` says `code` for an html file and is
   `null` when nothing names it, `class_folder` says `documents` (and is `null`
   for a kind with no folder). A chain of folder then extension is what a run
@@ -62,7 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   created level still subject to the never-a-destination rule), `--in-place`
   replaces it with the scanned directory, and `--min`, `--max`, `--by-type`,
   `--name-source` and `--in-place` require `--create-dir` because none of them
-  means anything when nothing is created. `undo --batch` removes the levels the
+  means anything when nothing is created. A group below `--min` is reported as
+  `ungrouped` and stays where it is, which is why the same folder files 130
+  files by default and 62 with `--create-dir` when most types are one file
+  each. `undo --batch` removes the levels the
   run created, including a standard folder that did not exist before.
 
 ### Fixed

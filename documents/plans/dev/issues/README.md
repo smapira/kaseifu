@@ -19,6 +19,8 @@ Milestones are tracked in `../milestones/20261015a-backlog-milestones.md`.
 | Issue | Milestone | Next action |
 |---|---|---|
 | [`20261016-open-build-rs-sdk-probe.md`](open/20261016-open-build-rs-sdk-probe.md) | M4 | Harden the `build.rs` SDK probe so a Command Line Tools build degrades with its reason instead of hard-failing. |
+| [`20261109-open-cluster-match-existing.md`](open/20261109-open-cluster-match-existing.md) | M3 | Add rule 1 (an existing directory under `R`) as an opt-in `--match-existing`; the threshold and depth need evidence first, so the default stays as it is. |
+| [`20261109-open-cluster-directory-only-root.md`](open/20261109-open-cluster-directory-only-root.md) | M3 | A root with no direct file but 28 directories fails with `no files to cluster` and reports neither the directories nor the skipped `.DS_Store`; give that case counts and a reason. |
 
 ### Waiting for user or external resource
 

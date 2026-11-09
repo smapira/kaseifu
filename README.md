@@ -322,6 +322,14 @@ splits them by shared name tokens, and files with no shared token fall into
 `ungrouped`). It composes with `--min`/`--max` as usual, and like them it needs
 `--create-dir`.
 
+`--min` and `--max` belong to the creating mode only. Without `--create-dir`
+there is no folder to fill, so every file is filed on its own type - a group of
+one still moves, and nothing is left as `ungrouped`. With `--create-dir` a
+group below `--min` stays where it is and is reported as `ungrouped`, so the
+same folder can file 130 files by default and 62 with `--create-dir` when most
+of the types are one file each. Do not read an `ungrouped` count as "a file
+`cluster` cannot place"; it means "no folder for it in this mode".
+
 `--name-source` decides where the folder names come from. The default is
 `type`: the deterministic name of the file kind (`images`, `documents`,
 `archives`), with no model call, no key and no network. `auto` uses the model

@@ -8,7 +8,7 @@ Purpose: group the remaining plan issues into milestones and make each issue's s
 
 | Status | Count | Directory |
 |---|---:|---|
-| Open | 1 | `../issues/open/` |
+| Open | 3 | `../issues/open/` |
 | Waiting for user/external resource | 7 | `../issues/waiting-user/` |
 | Done | 34 | `../issues/done/` |
 
@@ -60,6 +60,8 @@ Goal: complete workflow affordances and document the exact behavior of multi-ite
 | Done | [`move-create-dir`](../issues/done/20261108-done-move-create-dir.md) | `move --create-dir` creates the destination and missing parents first, `<PATH>...` moves several paths in one batch with a per-path result, and `undo` removes a created directory once it is empty. |
 | Done | [`cluster-command`](../issues/done/20261108-done-cluster-command.md) | `cluster <dir>` groups a flat folder by type and name tokens, lets the model choose each name among deterministic candidates (offline fallback), files the groups as one batch, and `undo --batch` restores the flat layout. |
 | Done | [`cluster-destination`](../issues/done/20261109-done-cluster-destination.md) | `cluster` files each file into the OS standard folder for its type (class then extension) without creating anything, `--create-dir` builds the named folders under the type chain, and `--to` / `--in-place` move the root; the exit code and the report name every file left behind. |
+| Open | [`cluster-match-existing`](../issues/open/20261109-open-cluster-match-existing.md) | Rule 1 (an existing directory under `R`) ships only as an opt-in `--match-existing`, with a threshold and depth that real match data justifies; the default keeps rules 2-5. |
+| Open | [`cluster-directory-only-root`](../issues/open/20261109-open-cluster-directory-only-root.md) | A root that holds only directories reports the directories, the skipped entries and a reason instead of failing with `no files to cluster` alone. |
 | Done | [`keychain-read-timeout`](../issues/done/20261108-done-keychain-read-timeout.md) | A Keychain read that does not answer within 2s is reported as an unavailable key source (with the next step) instead of hanging every command. |
 
 ## M4 - Measurement and release hygiene
